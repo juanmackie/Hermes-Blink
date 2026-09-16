@@ -20,7 +20,7 @@ SKILL_PATH = PLUGIN_DIR / "skills" / "widget" / "SKILL.md"
 
 _TOOLSET = "hermes-widget"
 _SKILL_DESCRIPTION = (
-    "How to author and push v1 Hermes home-screen widget layouts and read the "
+    "How to author and push v2 Hermes home-screen widget layouts and read the "
     "interaction events the widget sends back."
 )
 
@@ -29,6 +29,9 @@ _TOOLS: tuple[tuple[dict[str, Any], Callable[..., str]], ...] = (
     (schemas.WIDGET_LIST, tools.widget_list),
     (schemas.WIDGET_READ_EVENTS, tools.widget_read_events),
     (schemas.WIDGET_MINT_PAIRING_CODE, tools.widget_mint_pairing_code),
+    (schemas.WIDGET_SETUP, tools.widget_setup),
+    (schemas.WIDGET_STATUS, tools.widget_status),
+    (schemas.WIDGET_PAIR, tools.widget_pair),
 )
 
 

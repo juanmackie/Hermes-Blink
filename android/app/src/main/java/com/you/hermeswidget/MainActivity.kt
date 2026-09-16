@@ -5,6 +5,7 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import com.you.hermeswidget.net.Config
+import com.you.hermeswidget.work.RefreshWorker
 
 /**
  * Phase 4 — Setup UX with honest connection states (Phase D).
@@ -24,5 +25,7 @@ class MainActivity : android.app.Activity() {
             val intent = android.content.Intent(this, SettingsActivity::class.java)
             startActivity(intent)
         }
+        // E: unique 15-minute periodic refresh with network constraint
+        try { RefreshWorker.schedulePeriodic(this) } catch (_: Exception) {}
     }
 }

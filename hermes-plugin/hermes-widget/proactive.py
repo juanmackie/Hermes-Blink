@@ -69,7 +69,7 @@ def routine_prompt(widget_id: str = store.DEFAULT_WIDGET_ID) -> str:
         f"Load the widget skill with skill_view('{SKILL_NAME}') first, then decide what the "
         "user would genuinely want to see right now from the context you already have: recent "
         "sessions, memory, and any connected calendar, email, or task sources. "
-        f"Call widget_update with widget_id='{widget_id}' and a complete, schema-valid v1 "
+        f"Call widget_update with widget_id='{widget_id}' and a complete, schema-valid v2 "
         "layout: a short meaningful header, then two to four focused items. Keep it under 100 "
         "nodes, use https:// for any image, and never invent data or filler - a short accurate "
         "summary beats a padded one. This runs unattended, so do not ask the user a question."

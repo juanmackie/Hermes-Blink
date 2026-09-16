@@ -40,7 +40,17 @@ object Config {
     }
 
     fun getToken(context: Context): String? {
-        return SecureStore.token(context) ?: getTokenFromPrefs(context)
+        SecureStore.token(context)?.let { return it }
+        // One-time migration: plaintext -> encrypted, then remove leftover
+        val plaintext = getTokenFromPrefs(context)
+        if (plaintext != null) {
+            val url = getBackendUrl(context) ?: SecureStore.baseUrl(context) ?: ""
+            val deviceId = SecureStore.deviceId(context) ?: ""
+            SecureStore.save(context, url, plaintext, deviceId)
+            prefs(context).edit().remove(KEY_TOKEN).apply()
+            return plaintext
+        }
+        return null
     }
 
     private fun getTokenFromPrefs(context: Context): String? {

@@ -52,6 +52,8 @@ release-*.tar.gz
 release-*.zip
 checksums.txt
 # plugin test scratch
+.pi/
+.pi-subagents/
 hermes-plugin/hermes-widget/_testdata/
 hermes-plugin/hermes-widget/_tmp_accept/
 hermes-plugin/hermes-widget/**/__pycache__/

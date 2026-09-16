@@ -215,6 +215,13 @@ class _Handler(BaseHTTPRequestHandler):
         except _HttpError as exc:
             self._error(exc.status, exc.code, exc.detail)
             return
+        # Incompatible version check: client must send compatible transport (G)
+        client_ver = self.headers.get("X-Hermes-Widget-Version", "") or self.headers.get("X-Widget-Version", "")
+        if client_ver and client_ver.strip() != VERSION and client_ver.strip() not in ("1.0.0", VERSION):
+            # Allow v1 and current; other versions get actionable upgrade message
+            if client_ver.strip().split(".")[0] != VERSION.split(".")[0]:
+                self._error(426, "upgrade_required", f"client version {client_ver} incompatible with server {VERSION}; upgrade the app via the release link")
+                return
         target = self._classify(urlsplit(self.path).path)
         if target is None:
             self._error(404, "not_found", "no such route")

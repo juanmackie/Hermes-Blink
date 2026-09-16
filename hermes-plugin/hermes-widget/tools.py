@@ -32,7 +32,7 @@ def _store_error(exc: store.StoreError) -> str:
 
 
 def widget_update(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    """Validate and store a complete v1 layout envelope."""
+    """Validate and store a complete v2 layout envelope."""
     args = args or {}
     widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
     if not isinstance(widget_id, str):
@@ -128,6 +128,53 @@ def widget_mint_pairing_code(args: dict[str, Any] | None = None, **_kwargs: Any)
             ),
         }
     )
+
+
+def widget_setup(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    """Agent tool wrapper for deterministic setup (mirrors hermes widget up)."""
+    args = args or {}
+    import os as _os
+    _os.environ.setdefault("HERMES_WIDGET_FORCE_ENV", "supported")
+    try:
+        from . import cli as _cli  # type: ignore
+    except ImportError:
+        import cli as _cli  # type: ignore
+    class _A:
+        widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
+        schedule = args.get("schedule") or "every 6h"
+        host = "127.0.0.1"
+        port = 8788
+        json = True
+    import io, contextlib
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        _cli._up(_A())
+    try:
+        data = json.loads(buf.getvalue())
+        return _dumps(data)
+    except Exception:
+        return buf.getvalue() or _dumps({"ok": False, "error": "setup_failed"})
+
+
+def widget_pair(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    """Mint a QR-ready pairing payload (single-use 10-min)."""
+    args = args or {}
+    server_url = args.get("server_url") or "http://127.0.0.1:8788"
+    if not isinstance(server_url, str):
+        return _error("invalid_server_url", "server_url must be a string")
+    label = args.get("device_label") or "unknown"
+    try:
+        minted = store.mint_pairing_code()
+    except store.StoreError as exc:
+        return _store_error(exc)
+    code = minted["code"]
+    return _dumps({
+        **minted,
+        "serverUrl": server_url,
+        "qrPayload": json.dumps({"url": server_url, "code": code, "ttl": 600}, separators=(",", ":")),
+        "samePhoneLink": f"{server_url.rstrip('/')}/v1/pair?code={code}",
+        "deviceLabel": label,
+    })
 
 
 def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:

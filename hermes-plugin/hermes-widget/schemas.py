@@ -78,6 +78,50 @@ WIDGET_READ_EVENTS = {
     },
 }
 
+WIDGET_SETUP = {
+    "name": "widget_setup",
+    "description": (
+        "Deterministic, resumable, idempotent setup for the Hermes widget host: "
+        "verifies environment (Ubuntu 24.04 / WSL2), creates the agent token, "
+        "installs the skill, prepares the brief widget, ensures the systemd "
+        "service, and mints a pairing code. Returns structured progress with "
+        "state needs_user_action|starting|awaiting_pairing|ready|degraded."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "widget_id": {"type": "string", "description": "Widget id, default hermes-brief."},
+            "schedule": {"type": "string", "description": "Cron schedule, default every 6h."},
+        },
+        "required": [],
+    },
+}
+
+WIDGET_STATUS = {
+    "name": "widget_status",
+    "description": (
+        "Report Hermes widget host status: structured state, token/widget presence, "
+        "server listening, routine, devices, and counts. Use before pairing."
+    ),
+    "parameters": {"type": "object", "properties": {}, "required": []},
+}
+
+WIDGET_PAIR = {
+    "name": "widget_pair",
+    "description": (
+        "Mint a single-use 10-minute pairing code with QR payload and same-phone link "
+        "for Android QR pairing. Returns code, expiresAt, QR json, and link."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "server_url": {"type": "string", "description": "Server URL for QR payload, e.g. http://127.0.0.1:8788."},
+            "device_label": {"type": "string", "description": "Human label for the device."},
+        },
+        "required": [],
+    },
+}
+
 WIDGET_MINT_PAIRING_CODE = {
     "name": "widget_mint_pairing_code",
     "description": (

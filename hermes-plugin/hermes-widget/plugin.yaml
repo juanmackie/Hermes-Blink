@@ -9,6 +9,9 @@ provides_tools:
   - widget_list
   - widget_read_events
   - widget_mint_pairing_code
+  - widget_setup
+  - widget_status
+  - widget_pair
 provides_commands:
   - widget
 metadata:

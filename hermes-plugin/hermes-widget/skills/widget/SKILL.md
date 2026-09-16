@@ -1,7 +1,7 @@
 ---
 name: hermes-widget
 description: "Author and push Hermes home-screen widget layouts, and read the interaction events the widget sends back."
-version: 1.0.0
+version: 2.0.0
 author: Hermes Widget contributors
 license: MIT
 metadata:
@@ -20,12 +20,12 @@ widget_update tool, and read back what the user did with widget_read_events.
 - A scheduled widget refresh runs (the prompt asks you to call widget_update).
 - You are reacting to an interaction event the widget sent back.
 
-## The v1 layout contract
+## The v2 layout contract (transport stays /v1/)
 
 Every push is one envelope:
 
     {
-      "version": 1,
+      "version": 2,
       "widgetId": "hermes-brief",
       "title": "Today",
       "ttlSeconds": 1800,
@@ -42,7 +42,7 @@ Node types (v2 reduced contract):
 
 Hard rules the server enforces. A violation is rejected and nothing is stored:
 
-- version must be the integer 1, and root must be a single node with a type.
+- version must be the integer 2 (layout contract v2; transport stays /v1/), and root must be a single node with a type.
 - At most 100 nodes in the whole layout, and at most 64 KB of JSON.
 - image, chart, icon, toggle, calendar month mode, and url/deeplink/open_app actions are removed in v2; do not include them.
 - action.kind is event, refresh, dismiss, or review (v2 reduced set)
@@ -59,7 +59,7 @@ retry the identical payload.
 Call widget_update with widget_id and the complete layout. Example - a morning brief:
 
     {
-      "version": 1,
+      "version": 2,
       "widgetId": "hermes-brief",
       "title": "Good morning",
       "root": {

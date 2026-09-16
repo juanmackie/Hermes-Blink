@@ -361,6 +361,60 @@ def delete_widget(widget_id: str) -> bool:
 # Pairing and devices
 # ---------------------------------------------------------------------------
 
+def prune_expired_pairing_codes() -> int:
+    """Delete expired unconsumed pairing codes. Returns pruned count."""
+    now = int(time.time())
+    with _LOCK:
+        conn = _connect()
+        try:
+            cur = conn.execute(
+                "DELETE FROM pairing_codes WHERE consumed = 0 AND expires_at < ?", (now,)
+            )
+            conn.commit()
+            return int(cur.rowcount or 0)
+        finally:
+            conn.close()
+
+
+def get_valid_pairing_code() -> dict | None:
+    """Return an existing unconsumed unexpired code, or None."""
+    now = int(time.time())
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT code, expires_at FROM pairing_codes "
+                "WHERE consumed = 0 AND expires_at > ? "
+                "ORDER BY expires_at DESC LIMIT 1",
+                (now,),
+            ).fetchone()
+            if row is None:
+                return None
+            return {"code": row["code"], "expiresAt": _iso_from_epoch(int(row["expires_at"]))}
+        finally:
+            conn.close()
+
+
+def get_or_mint_pairing_code(ttl_minutes: int = PAIRING_TTL_MINUTES) -> dict:
+    """Idempotent pairing code: reuse a valid one, otherwise mint."""
+    prune_expired_pairing_codes()
+    existing = get_valid_pairing_code()
+    if existing is not None:
+        return existing
+    return mint_pairing_code(ttl_minutes=ttl_minutes)
+
+
+def pairing_code_count() -> int:
+    """Total pairing codes (valid+expired+consumed) for idempotency checks."""
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute("SELECT COUNT(*) AS c FROM pairing_codes").fetchone()
+            return int(row["c"] if row else 0)
+        finally:
+            conn.close()
+
+
 def mint_pairing_code(ttl_minutes: int = PAIRING_TTL_MINUTES) -> dict:
     alphabet = string.ascii_uppercase + string.digits
     raw = "".join(secrets.choice(alphabet) for _ in range(8))
@@ -486,16 +540,34 @@ def revoke_device(device_id: str) -> bool:
 # ---------------------------------------------------------------------------
 
 def post_event(widget_id: str, device_id: str, event: str, payload: dict | None) -> int:
-    # Phase E: durable event storage with client/item IDs preserved; retry and
-    # coalescing handled by the interaction loop consumer (not this layer).
+    # E: durable, deduplicated tap storage — clientEventId + stable itemId are
+    # preserved; duplicate submissions collapse to one state transition.
     if not isinstance(event, str) or not event or len(event) > 200:
         raise StoreError("event must be a non-empty string of at most 200 characters")
     if payload is not None and not isinstance(payload, dict):
         raise StoreError("event payload must be a JSON object")
+    client_event_id = None
+    if payload is not None:
+        client_event_id = payload.get("clientEventId")
+        if not isinstance(client_event_id, str) or not client_event_id:
+            client_event_id = None
     payload_json = json.dumps(payload, separators=(",", ":")) if payload is not None else None
     with _LOCK:
         conn = _connect()
         try:
+            # Deduplicate on (widget_id, device_id, clientEventId) when present
+            if client_event_id is not None:
+                existing = conn.execute(
+                    "SELECT id, payload FROM events WHERE widget_id = ? AND device_id = ? ORDER BY id DESC LIMIT 50",
+                    (widget_id, device_id),
+                ).fetchall()
+                for row in existing:
+                    try:
+                        prev = json.loads(row["payload"]) if row["payload"] else {}
+                    except Exception:
+                        continue
+                    if isinstance(prev, dict) and prev.get("clientEventId") == client_event_id:
+                        return int(row["id"])
             cur = conn.execute(
                 "INSERT INTO events (widget_id, device_id, event, payload, created_at) "
                 "VALUES (?, ?, ?, ?, ?)",

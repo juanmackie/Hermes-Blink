@@ -105,8 +105,13 @@ class HermesWidget : GlanceAppWidget() {
                     android.util.Log.d("HermesWidget", "loadLive: HTTP 200, cached layout length=${body?.length ?: 0}")
                 }
                 if (code == 200 && body != null) {
-                    Config.setCachedLayout(context, body)
-                    return@withContext parseLayout(body)
+                    // Validate before caching: invalid payloads must not poison last valid cache
+                    val parsed = try { parseLayout(body) } catch (_: Exception) { null }
+                    if (parsed != null) {
+                        Config.setCachedLayout(context, body)
+                        return@withContext parsed
+                    }
+                    // Invalid: do not cache, fall through to try next token / cache
                 }
                 // 401/403 means revoked token; don't try this token again
                 if (code == 401 || code == 403) {

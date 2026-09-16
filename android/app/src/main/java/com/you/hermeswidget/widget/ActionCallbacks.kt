@@ -4,8 +4,6 @@ import android.content.Context
 import androidx.glance.GlanceId
 import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.action.ActionParameters
-import androidx.work.OneTimeWorkRequest
-import androidx.work.WorkManager
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.HermesApi
 import com.you.hermeswidget.net.SecureStore
@@ -23,8 +21,7 @@ object ActionCallbacks {
             val url = Config.getBackendUrl(context) ?: return
             val token = SecureStore.token(context) ?: return
             HermesApi.postEvent(url, widgetId, event, payload ?: "{}", token)
-            val req = OneTimeWorkRequest.Builder(RefreshWorker::class.java).build()
-            WorkManager.getInstance(context).enqueue(req)
+            RefreshWorker.schedulePostTapPoll(context)
         }
     }
 }
