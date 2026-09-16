@@ -1,0 +1,5 @@
+{
+  "version": 2,
+  "widgetId": "hermes-brief",
+  "root": { "type": "column", "children": [{ "type": "calendar", "mode": "month", "events": [{ "title": "X" }] }] }
+}

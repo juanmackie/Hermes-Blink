@@ -1,0 +1,5 @@
+{
+  "version": 2,
+  "widgetId": "hermes-brief",
+  "root": { "type": "column", "children": [{ "type": "button", "label": "Go", "action": { "kind": "url", "url": "https://example.com" } }] }
+}

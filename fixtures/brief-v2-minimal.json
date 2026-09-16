@@ -1,0 +1,12 @@
+{
+  "version": 2,
+  "widgetId": "hermes-brief",
+  "updatedAt": "2026-09-16T07:30:00Z",
+  "root": {
+    "type": "column",
+    "children": [
+      { "type": "text", "value": "Hello", "style": "title" },
+      { "type": "button", "label": "Refresh", "action": { "kind": "refresh" } }
+    ]
+  }
+}

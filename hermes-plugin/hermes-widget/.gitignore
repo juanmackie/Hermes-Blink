@@ -1,0 +1,5 @@
+# Hermes widget plugin local artifacts
+hermes-plugin/hermes-widget/_testdata/
+hermes-plugin/hermes-widget/_tmp_accept/
+hermes-plugin/hermes-widget/**/__pycache__/
+hermes-plugin/hermes-widget/tests/_testdata/

@@ -1,0 +1,19 @@
+# Hermes Widget — Minimal systemd user service (v2 production)
+# Install: cp hermes-widget.service ~/.config/systemd/user/ (or /etc/systemd/user/)
+# Enable: systemctl --user enable hermes-widget
+# Start:  systemctl --user start hermes-widget
+# Status: systemctl --user status hermes-widget
+
+[Unit]
+Description=Hermes Widget server
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m hermes_widget.cli serve --host 127.0.0.1 --port 8788
+Restart=on-failure
+RestartSec=5
+WorkingDirectory=%h/.hermes
+
+[Install]
+WantedBy=default.target

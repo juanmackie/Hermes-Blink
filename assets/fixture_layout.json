@@ -1,0 +1,69 @@
+{
+  "version": 2,
+  "widgetId": "hermes-brief",
+  "title": "Morning Brief",
+  "ttlSeconds": 1800,
+  "accentColor": "#7C3AED",
+  "updatedAt": "2026-09-16T07:30:00Z",
+  "root": {
+    "type": "column",
+    "spacing": 12,
+    "padding": { "top": 16, "bottom": 16, "start": 16, "end": 16 },
+    "children": [
+      { "type": "text", "value": "Good morning", "style": "title", "id": "hdr-1" },
+      { "type": "divider", "thickness": 1, "color": "#e0e0e0" },
+      {
+        "type": "row",
+        "spacing": 16,
+        "children": [
+          { "type": "stat", "label": "Steps", "value": "8,432", "delta": "+12%", "deltaDirection": "up", "id": "stat-steps" },
+          { "type": "stat", "label": "Sleep", "value": "7h 12m", "delta": "-3%", "deltaDirection": "down", "weight": 1, "id": "stat-sleep" }
+        ]
+      },
+      {
+        "type": "calendar",
+        "mode": "agenda",
+        "maxItems": 3,
+        "events": [
+          { "title": "Standup", "start": "2026-09-16T09:30:00Z", "end": "2026-09-16T09:45:00Z" },
+          { "title": "Design review", "start": "2026-09-16T14:00:00Z", "end": "2026-09-16T15:00:00Z", "color": "#7C3AED" }
+        ]
+      },
+      {
+        "type": "box",
+        "children": [
+          { "type": "badge", "text": "New", "color": "#10b981" },
+          { "type": "text", "value": "Layout contract v2", "style": "label" }
+        ]
+      },
+      {
+        "type": "progress",
+        "value": 0.65,
+        "label": "Daily progress",
+        "showPercent": true
+      },
+      {
+        "type": "list",
+        "maxItems": 10,
+        "children": [
+          { "type": "list_item", "id": "item-1", "title": "Review PR #42", "subtitle": "Hermes widget v2", "trailingText": "2h", "action": { "kind": "review", "itemId": "item-1" } },
+          { "type": "divider" },
+          { "type": "list_item", "id": "item-2", "title": "Draft brief", "subtitle": "Tap to dismiss", "action": { "kind": "dismiss", "itemId": "item-2" } }
+        ]
+      },
+      {
+        "type": "button",
+        "label": "Refresh briefing",
+        "style": "tonal",
+        "action": { "kind": "refresh" }
+      },
+      {
+        "type": "button",
+        "label": "Mark reviewed",
+        "action": { "kind": "event", "event": "review_briefing", "payload": { "itemId": "item-1" } }
+      },
+      { "type": "spacer", "size": 8 },
+      { "type": "text", "value": "Updated just now", "style": "caption", "color": "#888888" }
+    ]
+  }
+}

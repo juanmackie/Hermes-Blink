@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Hermes Widget</string>
+    <string name="status_disconnected">Not connected — connect to your Hermes agent widget server</string>
+    <string name="backend_url_hint">Hermes agent URL (e.g. http://100.x.y.z:8788)</string>
+    <string name="agent_token_hint">Agent token (from hermes widget setup)</string>
+    <string name="connect">Connect</string>
+</resources>
