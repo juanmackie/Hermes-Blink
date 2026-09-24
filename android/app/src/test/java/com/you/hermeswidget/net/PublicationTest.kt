@@ -5,6 +5,8 @@ import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
+import java.nio.file.Files
 import java.time.Instant
 
 class PublicationTest {
@@ -109,6 +111,22 @@ class PublicationTest {
 
         assertEquals(PublicationFreshness.EXPIRED, publication.freshness(now))
         assertTrue(publication.isExpired(now))
+    }
+
+    @Test
+    fun ensureDirectorySucceedsWhenTheDirectoryAlreadyExists() {
+        // Regression: writeAsset used mkdirs() directly, which returns false for an
+        // existing directory, so the second and every later asset write threw
+        // "cannot create asset directory" and no image ever rendered again.
+        val root = Files.createTempDirectory("hermes-assets").toFile()
+        try {
+            val nested = File(root, "publication-assets")
+            assertTrue(ensureDirectory(nested))
+            assertTrue(ensureDirectory(nested))
+            assertTrue(nested.isDirectory)
+        } finally {
+            root.deleteRecursively()
+        }
     }
 
     @Test

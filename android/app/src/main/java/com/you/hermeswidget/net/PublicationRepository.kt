@@ -27,6 +27,13 @@ data class RefreshResult(
     val detail: String? = null,
 )
 
+internal fun ensureDirectory(dir: File): Boolean = dir.isDirectory || dir.mkdirs()
+
+/** True when [dir] exists as a directory, creating it only when needed.
+ *
+ * `mkdirs()` alone reports false for a directory that already exists, which made
+ * every asset write after the first fail with "cannot create asset directory".
+ */
 object PublicationRepository {
     suspend fun refresh(context: Context): RefreshResult = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
@@ -211,7 +218,9 @@ object PublicationRepository {
 
     private fun writeAsset(context: Context, assetId: String, bytes: ByteArray) {
         val target = Config.assetFile(context, assetId)
-        check(target.parentFile?.mkdirs() != false) { "cannot create asset directory" }
+        target.parentFile?.let { parent ->
+            check(ensureDirectory(parent)) { "cannot create asset directory" }
+        }
         if (target.isFile && runCatching { sha256(target.readBytes()) }.getOrNull() ==
             sha256(bytes)
         ) {

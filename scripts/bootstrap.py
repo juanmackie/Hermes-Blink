@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import importlib.util
 import json
 import os
 import re
@@ -230,6 +231,25 @@ def health_ok(host: str, port: int) -> bool:
         return False
 
 
+def load_gateway_hook() -> Any:
+    """Import the gateway hook that this installer also copies into the Hermes home.
+
+    The hook owns both duplicate-start protection and platform detachment. On Windows
+    a plain DETACHED_PROCESS child still belongs to the installing shell's job object
+    and dies with it, so starting the server here would produce a widget that stops
+    working as soon as the installing session exits.
+    """
+    source = PLUGIN_SOURCE / "gateway_hook.py"
+    if not source.is_file():
+        raise BootstrapError(f"gateway hook source is missing: {source}")
+    spec = importlib.util.spec_from_file_location("hermes_widget_gateway_hook", source)
+    if spec is None or spec.loader is None:
+        raise BootstrapError(f"could not load gateway hook: {source}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 def start_server(home: Path, hermes: Path, host: str, port: int) -> dict[str, Any]:
     if port_open(host, port):
         if not health_ok(host, port):
@@ -238,34 +258,32 @@ def start_server(home: Path, hermes: Path, host: str, port: int) -> dict[str, An
     widget_dir = home / "widget"
     widget_dir.mkdir(parents=True, exist_ok=True)
     log_path = widget_dir / "server.log"
-    with log_path.open("ab") as log:
-        kwargs: dict[str, Any] = {
-            "cwd": home,
-            "env": {**os.environ, "HERMES_HOME": str(home)},
-            "stdin": subprocess.DEVNULL,
-            "stdout": log,
-            "stderr": subprocess.STDOUT,
-            "close_fds": True,
-        }
-        if os.name == "posix":
-            kwargs["start_new_session"] = True
-        elif os.name == "nt":
-            kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
-        process = subprocess.Popen(
-            [str(hermes), "widget", "serve", "--host", host, "--port", str(port)],
-            **kwargs,
-        )
-    deadline = time.monotonic() + 8
+
+    previous_home = os.environ.get("HERMES_HOME")
+    os.environ["HERMES_HOME"] = str(home)
+    try:
+        load_gateway_hook().handle("gateway:startup")
+    finally:
+        if previous_home is None:
+            os.environ.pop("HERMES_HOME", None)
+        else:
+            os.environ["HERMES_HOME"] = previous_home
+
+    deadline = time.monotonic() + 12
     while time.monotonic() < deadline:
         if health_ok(host, port):
-            (widget_dir / "server-process.json").write_text(
-                json.dumps({"pid": process.pid, "host": host, "port": port}) + "\n",
-                encoding="utf-8",
-            )
-            return {"state": "started", "pid": process.pid, "host": host, "port": port}
-        if process.poll() is not None:
-            break
+            pid: int | None = None
+            try:
+                record = json.loads(
+                    (widget_dir / "server-process.json").read_text(encoding="utf-8")
+                )
+                value = record.get("pid") if isinstance(record, dict) else None
+                pid = value if isinstance(value, int) else None
+            except (OSError, ValueError, TypeError):
+                pid = None
+            return {"state": "started", "pid": pid, "host": host, "port": port}
         time.sleep(0.1)
+
     detail = ""
     with contextlib.suppress(OSError):
         detail = log_path.read_text(encoding="utf-8", errors="replace")[-2000:]
