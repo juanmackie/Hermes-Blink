@@ -1,6 +1,7 @@
 package com.you.hermeswidget.work
 
 import android.content.Context
+import android.util.Log
 import androidx.glance.appwidget.updateAll
 import androidx.work.Constraints
 import androidx.work.CoroutineWorker
@@ -26,6 +27,9 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     override suspend fun doWork(): Result {
         val result = runCatching { PublicationRepository.refresh(applicationContext) }
             .getOrElse { error ->
+                // Without this the failure is invisible: the widget just stays stale and the
+                // worker retries forever with the cause only in a swallowed exception.
+                Log.w(TAG, "publication refresh threw; reporting offline and retrying", error)
                 Config.setConnectionState(
                     applicationContext,
                     ConnectionState.OFFLINE,
@@ -33,6 +37,13 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 )
                 return Result.retry()
             }
+
+        if (result.outcome.retry || result.outcome == RefreshOutcome.REVOKED) {
+            Log.w(
+                TAG,
+                "publication refresh failed: outcome=${result.outcome} detail=${result.detail}",
+            )
+        }
 
         if (result.outcome == RefreshOutcome.EMPTY) refreshLegacyLayout()
         HermesWidget().updateAll(applicationContext)
@@ -57,6 +68,7 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     }
 
     companion object {
+        private const val TAG = "HermesWidget"
         private const val PERIODIC_NAME = "hermes-refresh-periodic"
         private const val POST_TAP_NAME = "hermes-refresh-post-tap"
         const val IMMEDIATE_NAME = "hermes-refresh-immediate"

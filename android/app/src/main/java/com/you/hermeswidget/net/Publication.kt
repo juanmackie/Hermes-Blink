@@ -11,6 +11,11 @@ private const val MAX_RASTER_BYTES = 5 * 1024 * 1024
 private const val MAX_RASTER_PIXELS = 16_000_000
 private const val MAX_RASTER_DIMENSION = 16_384
 
+// Must match the server's immutable asset id contract (store.asset_path:
+// "asset_" + secrets.token_hex(12)). Config.assetFile also uses the id as a file
+// name, so this is a path-safety check, not just a format rule.
+internal val ASSET_ID_PATTERN = Regex("asset_[0-9a-f]{24}")
+
 data class Publication(
     val version: Int,
     val widgetId: String,
@@ -83,7 +88,7 @@ data class Publication(
                 )
                 "image" -> PublicationContent.Image(
                     assetId = contentJson.requiredString("assetId").also {
-                        require(it.matches(Regex("[a-f0-9]{64}"))) { "invalid asset id" }
+                        require(ASSET_ID_PATTERN.matches(it)) { "invalid asset id" }
                     },
                     mediaType = contentJson.requiredString("mediaType").also {
                         require(it in setOf("image/png", "image/jpeg", "image/webp", "image/svg+xml")) {

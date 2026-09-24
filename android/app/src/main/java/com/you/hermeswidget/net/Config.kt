@@ -122,7 +122,7 @@ object Config {
     }
 
     fun assetFile(context: Context, assetId: String): File {
-        require(assetId.matches(Regex("[a-f0-9]{64}"))) { "invalid asset id" }
+        require(ASSET_ID_PATTERN.matches(assetId)) { "invalid asset id" }
         return File(File(context.filesDir, "publication-assets"), assetId)
     }
 

@@ -33,7 +33,7 @@ class PublicationTest {
                 content = JSONObject()
                     .put("type", "image")
                     .put("mediaType", "image/svg+xml")
-                    .put("assetId", "a".repeat(64))
+                    .put("assetId", VALID_ASSET_ID)
                     .put("width", 640)
                     .put("height", 480)
                     .put("bytes", 128)
@@ -42,7 +42,7 @@ class PublicationTest {
         )
 
         assertEquals(PublicationContent.Image(
-            assetId = "a".repeat(64),
+            assetId = VALID_ASSET_ID,
             mediaType = "image/svg+xml",
             width = 640,
             height = 480,
@@ -52,15 +52,36 @@ class PublicationTest {
     }
 
     @Test
+    fun assetIdMustMatchTheServerContractNotTheDigest() {
+        // Regression: the asset id is "asset_" + 24 hex (store.asset_path), not a
+        // 64-char sha256. Rejecting the server's real ids made every image and SVG
+        // publication fail to render on the device with "invalid asset id".
+        val serverShaped = envelope(
+            kind = "image",
+            content = imageContent(VALID_ASSET_ID),
+        )
+        assertEquals(
+            VALID_ASSET_ID,
+            (Publication.parse(serverShaped).content as PublicationContent.Image).assetId,
+        )
+
+        for (bad in listOf("a".repeat(64), "asset_" + "A".repeat(24), "asset_1234", "sha256_" + "a".repeat(24))) {
+            assertThrows { Publication.parse(envelope(kind = "image", content = imageContent(bad))) }
+        }
+    }
+
+    private fun imageContent(assetId: String) = JSONObject()
+        .put("type", "image")
+        .put("mediaType", "image/png")
+        .put("assetId", assetId)
+        .put("width", 10)
+        .put("height", 10)
+        .put("bytes", 10)
+        .put("sha256", "b".repeat(64))
+
+    @Test
     fun rejectsMalformedOrUnboundedImageMetadata() {
-        val badAsset = JSONObject()
-            .put("type", "image")
-            .put("mediaType", "image/png")
-            .put("assetId", "not-a-sha")
-            .put("width", 10)
-            .put("height", 10)
-            .put("bytes", 10)
-            .put("sha256", "b".repeat(64))
+        val badAsset = imageContent("not-an-asset-id")
 
         assertThrows {
             Publication.parse(envelope(kind = "image", content = badAsset))
@@ -125,5 +146,9 @@ class PublicationTest {
             throw AssertionError("expected validation failure")
         } catch (_: IllegalArgumentException) {
         }
+    }
+
+    private companion object {
+        const val VALID_ASSET_ID = "asset_c4ec402d1f20c8df4755b3b5"
     }
 }
