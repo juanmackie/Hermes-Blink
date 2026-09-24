@@ -6,11 +6,16 @@ an otherwise healthy agent turn. All persistence goes through store.*.
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import logging
 from typing import Any
 
-from . import store
+try:  # normal path: imported as part of the hermes-widget plugin package
+    from . import store
+except ImportError:  # pragma: no cover - direct import from tests/scripts
+    import store  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +36,21 @@ def _store_error(exc: store.StoreError) -> str:
     return _error(exc.code, str(exc))
 
 
+def _coerce_layout(raw: Any) -> dict[str, Any] | str:
+    """Accept the object or a JSON string of it. Returns a message string when unusable."""
+    if isinstance(raw, str):
+        # The model sometimes serializes the object; accept either shape.
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError) as exc:
+            return f"layout is not valid JSON: {exc}"
+    if raw is None:
+        return "layout is required"
+    if not isinstance(raw, dict):
+        return "layout must be a JSON object"
+    return raw
+
+
 def widget_update(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     """Validate and store a complete v2 layout envelope."""
     args = args or {}
@@ -38,15 +58,9 @@ def widget_update(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     if not isinstance(widget_id, str):
         return _error("invalid_layout", "widget_id must be a string")
 
-    layout = args.get("layout")
+    layout = _coerce_layout(args.get("layout"))
     if isinstance(layout, str):
-        # The model sometimes serializes the object; accept either shape.
-        try:
-            layout = json.loads(layout)
-        except (TypeError, ValueError) as exc:
-            return _error("invalid_layout", f"layout is not valid JSON: {exc}")
-    if layout is None:
-        return _error("invalid_layout", "layout is required")
+        return _error("invalid_layout", layout)
 
     try:
         result = store.put_widget(widget_id, layout)
@@ -63,6 +77,24 @@ def widget_update(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             "next": "The widget will pick this up on its next poll; use widget_read_events to see taps.",
         }
     )
+
+
+def widget_validate(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    """Dry-run a layout: validate, count, warn. Never stores and never rate-limits."""
+    args = args or {}
+    widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
+    if not isinstance(widget_id, str):
+        return _error("invalid_layout", "widget_id must be a string")
+
+    layout = _coerce_layout(args.get("layout"))
+    if isinstance(layout, str):  # _coerce_layout returns an error message string
+        return _error("invalid_layout", layout)
+
+    try:
+        report = store.inspect_widget(widget_id, layout)
+    except store.StoreError as exc:
+        return _store_error(exc)
+    return _dumps(report)
 
 
 def widget_list(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
@@ -99,7 +131,11 @@ def widget_read_events(args: dict[str, Any] | None = None, **_kwargs: Any) -> st
 
 
 def widget_mint_pairing_code(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    """Mint a short-lived pairing code and tell the model what to do next."""
+    """Mint a short-lived pairing code, and a QR payload when a server URL is given.
+
+    One tool for one job: [server_url] only decides whether the caller also gets the
+    QR string and the same-phone link for Android's QR scanner. It never changes the code.
+    """
     args = args or {}
     label = args.get("device_label") or "unknown"
     if not isinstance(label, str):
@@ -112,29 +148,80 @@ def widget_mint_pairing_code(args: dict[str, Any] | None = None, **_kwargs: Any)
             return _error("invalid_ttl", "ttl_minutes must be an integer")
         ttl = raw_ttl
 
+    server_url = args.get("server_url")
+    if server_url is not None and not isinstance(server_url, str):
+        return _error("invalid_server_url", "server_url must be a string")
+
     try:
         minted = store.mint_pairing_code(ttl_minutes=ttl)
     except store.StoreError as exc:
         return _store_error(exc)
 
+    payload: dict[str, Any] = {
+        **minted,
+        "deviceLabel": label,
+        "expiresInMinutes": ttl,
+        "next": (
+            f"On the device ({label}) open the Hermes widget, choose Pair, "
+            f"and enter {minted.get('code', '')} before it expires."
+        ),
+    }
+    if server_url:
+        payload["serverUrl"] = server_url
+        payload["qrPayload"] = json.dumps(
+            {"url": server_url, "code": minted.get("code", ""), "ttl": ttl * 60},
+            separators=(",", ":"),
+        )
+        payload["samePhoneLink"] = f"{server_url.rstrip('/')}/v1/pair?code={minted.get('code', '')}"
+    return _dumps(payload)
+
+
+def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    """Publish one validated text/SVG/raster revision without claiming delivery."""
+    args = args or {}
+    widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
+    if not isinstance(widget_id, str):
+        return _error("invalid_publication", "widget_id must be a string")
+    file_path = args.get("file_path")
+    if file_path is None:
+        file_path = args.get("image_path", args.get("path"))
+    expires_at = args.get("expires_at", args.get("expiresAt"))
+    ttl_seconds = args.get("ttl_seconds", args.get("ttlSeconds"))
+    try:
+        result = store.put_publication(
+            widget_id,
+            title=args.get("title"),
+            summary=args.get("summary"),
+            text=args.get("text"),
+            svg=args.get("svg"),
+            file_path=file_path,
+            expires_at=expires_at,
+            ttl_seconds=ttl_seconds,
+        )
+    except store.StoreError as exc:
+        return _store_error(exc)
     return _dumps(
         {
-            **minted,
-            "deviceLabel": label,
-            "expiresInMinutes": ttl,
+            "ok": True,
+            **result,
+            "delivery": "pending_periodic_fetch",
+            "visibility": "not_claimed",
             "next": (
-                f"On the device ({label}) open the Hermes widget, choose Pair, "
-                f"and enter {minted.get('code', '')} before it expires."
+                "The revision is stored. The phone will fetch it on its next poll; "
+                "use widget_status to distinguish downloaded from render_submitted."
             ),
         }
     )
 
 
 def widget_setup(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    """Agent tool wrapper for deterministic setup (mirrors hermes widget up)."""
+    """Agent tool wrapper for deterministic setup (mirrors hermes widget up).
+
+    Does NOT force HERMES_WIDGET_FORCE_ENV: an unsupported host must come back as the
+    structured needs_user_action payload cli._up already produces, not be talked past a
+    guard by the tool that is supposed to be reporting the truth.
+    """
     args = args or {}
-    import os as _os
-    _os.environ.setdefault("HERMES_WIDGET_FORCE_ENV", "supported")
     try:
         from . import cli as _cli  # type: ignore
     except ImportError:
@@ -145,7 +232,6 @@ def widget_setup(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
         host = "127.0.0.1"
         port = 8788
         json = True
-    import io, contextlib
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         _cli._up(_A())
@@ -153,42 +239,37 @@ def widget_setup(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
         data = json.loads(buf.getvalue())
         return _dumps(data)
     except Exception:
-        return buf.getvalue() or _dumps({"ok": False, "error": "setup_failed"})
-
-
-def widget_pair(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    """Mint a QR-ready pairing payload (single-use 10-min)."""
-    args = args or {}
-    server_url = args.get("server_url") or "http://127.0.0.1:8788"
-    if not isinstance(server_url, str):
-        return _error("invalid_server_url", "server_url must be a string")
-    label = args.get("device_label") or "unknown"
-    try:
-        minted = store.mint_pairing_code()
-    except store.StoreError as exc:
-        return _store_error(exc)
-    code = minted["code"]
-    return _dumps({
-        **minted,
-        "serverUrl": server_url,
-        "qrPayload": json.dumps({"url": server_url, "code": code, "ttl": 600}, separators=(",", ":")),
-        "samePhoneLink": f"{server_url.rstrip('/')}/v1/pair?code={code}",
-        "deviceLabel": label,
-    })
+        output = buf.getvalue()
+        if output:
+            return output
+        return _dumps({"ok": False, "error": "setup_failed"})
 
 
 def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    """Summarize widget/device state for the slash command and diagnostics."""
+    """Summarize host, publication, and per-device delivery state honestly."""
+    args = args or {}
+    widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
+    if not isinstance(widget_id, str):
+        return _error("invalid_widget_id", "widget_id must be a string")
     try:
         widgets = store.list_widgets()
         devices = store.list_devices()
+        publication = store.publication_status(widget_id)
     except store.StoreError as exc:
         return _store_error(exc)
 
+    delivery_state = "empty"
+    if publication.get("publication"):
+        delivery_state = "not_downloaded"
+        if any(item.get("state") == "render_submitted" for item in publication.get("delivery", [])):
+            delivery_state = "render_submitted"
+        elif any(item.get("state") == "downloaded" for item in publication.get("delivery", [])):
+            delivery_state = "downloaded"
     return _dumps(
         {
             "ok": True,
             "defaultWidgetId": store.DEFAULT_WIDGET_ID,
+            "widgetId": widget_id,
             "widgets": widgets,
             "deviceCount": len(devices),
             "devices": [
@@ -200,6 +281,11 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
                 }
                 for d in devices
             ],
+            "publication": publication.get("publication"),
+            "publicationState": publication.get("state"),
+            "delivery": publication.get("delivery", []),
+            "deliveryState": delivery_state,
+            "capabilities": publication.get("capabilities"),
             "dataDir": str(store.data_dir()),
         }
     )

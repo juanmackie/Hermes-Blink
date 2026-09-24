@@ -1,0 +1,27 @@
+{
+  "version": 2,
+  "widgetId": "hermes-brief",
+  "title": "Agenda",
+  "ttlSeconds": 1800,
+  "updatedAt": "2026-09-16T07:30:00Z",
+  "root": {
+    "type": "column",
+    "spacing": 8,
+    "padding": { "top": 12, "bottom": 12, "start": 12, "end": 12 },
+    "children": [
+      { "type": "text", "value": "Today", "style": "title" },
+      {
+        "type": "calendar",
+        "mode": "agenda",
+        "maxItems": 3,
+        "events": [
+          { "title": "Standup", "start": "2026-09-16T09:30:00Z", "end": "2026-09-16T09:45:00Z" },
+          { "title": "Design review", "start": "2026-09-16T14:00:00Z", "color": "#30D158" },
+          { "title": "1:1 with Ana", "start": "2026-09-16T16:30:00Z" }
+        ]
+      },
+      { "type": "spacer", "size": 4 },
+      { "type": "button", "label": "Refresh agenda", "style": "tonal", "action": { "kind": "refresh" } }
+    ]
+  }
+}

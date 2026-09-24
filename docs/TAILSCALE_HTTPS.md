@@ -1,16 +1,32 @@
-# Hermes Widget - Tailscale Serve HTTPS (v2 production)
+# Tailscale Serve HTTPS for the Hermes widget
 
-Bind the widget server to loopback (127.0.0.1) and expose through Tailscale Serve HTTPS:
+Keep the widget server bound to loopback and let Tailscale terminate private
+HTTPS:
 
-    tailscale serve --bg --set-path=/v1 --https=8788 --tls-terminated tcp://localhost:8788
+```sh
+tailscale serve --bg --https=8788 tcp://127.0.0.1:8788
+```
 
-Or with an existing certificate:
+The server already serves routes under `/v1`; do not add a second `/v1` path
+prefix. The phone uses the resulting `https://<tailnet-hostname>:<port>/` base
+URL and a short-lived code from `hermes widget code`.
 
-    tailscale serve --bg --set-path=/v1 --https=8788 --tls-terminated tcp://localhost:8788
+If an existing Serve configuration is in use, add only the widget listener and
+preserve unrelated paths. The proxy must forward the `Authorization: Bearer`
+header unchanged. No public hostname, cloud service, or internet port is needed.
 
-This provides private tailnet access and handles certificates. Preserve existing Serve config.
-The server binds loopback only; Tailscale handles the HTTPS termination.
+For a container, publish the port only to the private host/tailnet and keep the
+Hermes home on persistent storage. After a container recreation, run the
+capability-based bootstrap or restart the Hermes gateway; the installed
+`gateway:startup` hook starts one widget server only when the port is not
+already healthy.
 
-Proxy integration: if using a reverse proxy (Caddy/nginx) in front, set the proxy to forward Authorization bearer headers unchanged. The server requires bearer auth on every protected route including localhost (gate 4 verified).
+Verify from a second tailnet machine:
 
-References: Tailscale docs (serve), MS WSL systemd docs.
+```sh
+curl https://<tailnet-hostname>:<serve-port>/v1/health
+```
+
+The health route is public, but publication, asset, pairing-code, and
+acknowledgement routes still require the appropriate agent or paired-device
+token. Do not paste the operator token into the phone.

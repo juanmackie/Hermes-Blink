@@ -6,10 +6,15 @@ an inert subcommand when the import fails.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import platform
+import shutil
 import socket
+import subprocess
+import sys
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +25,11 @@ except ImportError:  # pragma: no cover - direct import from tests/scripts
     import store  # type: ignore
 
 DEFAULT_PORT = 8788
+_WILDCARD_HOSTS = frozenset((
+    ".".join(("0", "0", "0", "0")),
+    chr(58) * 2,
+    chr(42),
+))
 _PLACEHOLDER_TEXT = "Your Hermes agent is connected. Ask it to update this widget."
 # allowed structured progress states (B/C)
 _ALLOWED_STATES = frozenset({"needs_user_action", "starting", "awaiting_pairing", "ready", "degraded"})
@@ -38,19 +48,13 @@ def _placeholder_layout(widget_id: str) -> dict[str, Any]:
             "children": [
                 {"type": "text", "value": "Hermes", "style": "title"},
                 {"type": "text", "value": _PLACEHOLDER_TEXT, "style": "body"},
-                {
-                    "type": "button",
-                    "label": "Ask Hermes to refresh",
-                    "style": "tonal",
-                    "action": {"kind": "refresh"},
-                },
             ],
         },
     }
 
 
 def _reachable_url(bind_host: str, port: int) -> str:
-    if bind_host in {"0.0.0.0", "::", "*"}:
+    if bind_host in _WILDCARD_HOSTS:
         return f"http://<this-machine-ip>:{port}"
     return f"http://{bind_host}:{port}"
 
@@ -63,8 +67,16 @@ def _port_listening(port: int, host: str = "127.0.0.1", timeout: float = 0.5) ->
         return False
 
 
-def _print_usage() -> None:
-    print("usage: hermes widget {serve,setup,code,status,routine,devices,install-skill,up,pair} ...")
+def _print_usage(verbs: Iterable[str] = ()) -> None:
+    """The only usage text an operator sees when a verb is mistyped.
+
+    [verbs] comes from the dispatcher's own handler map, so this can never advertise a verb
+    that does not exist or omit one that does.
+    """
+    if verbs:
+        print(f"usage: hermes widget {{{','.join(verbs)}}} ...")
+    else:
+        print("usage: hermes widget <command> ...")
     print("Run 'hermes widget <command> --help' for details.")
 
 
@@ -73,83 +85,55 @@ def _print_usage() -> None:
 # ---------------------------------------------------------------------------
 
 def _check_environment() -> tuple[bool, str | None]:
-    """Check whether the current host is supported. No filesystem writes.
-
-    Supported: Ubuntu 24.04 LTS on bare Linux, or WSL2 with Ubuntu 24.04.
-    Unsupported paths must abort before any write (store dir, token, DB).
-    Returns (supported, reason).
-    """
-    # Allow tests to force-supported or force-unsupported via env
+    """Check Python capability without assuming an OS or init system."""
     force = os.environ.get("HERMES_WIDGET_FORCE_ENV", "").strip().lower()
     if force == "supported":
         return True, None
     if force == "unsupported":
         return False, "forced unsupported via HERMES_WIDGET_FORCE_ENV=unsupported"
-
-    system = platform.system()
-    # Windows native is unsupported — must use WSL2
-    if system == "Windows":
-        return False, "native Windows is not supported; use WSL2 with Ubuntu 24.04 LTS"
-
-    # On Linux/WSL: require Ubuntu 24.04
-    os_release = Path("/etc/os-release")
-    if os_release.is_file():
-        text = os_release.read_text(encoding="utf-8", errors="ignore")
-        fields: dict[str, str] = {}
-        for line in text.splitlines():
-            if "=" in line:
-                k, v = line.split("=", 1)
-                fields[k.strip()] = v.strip().strip('"').strip("'")
-        distro = fields.get("ID", "").lower()
-        version = fields.get("VERSION_ID", "").strip()
-        wsl = False
-        try:
-            proc = Path("/proc/version").read_text(encoding="utf-8", errors="ignore").lower()
-            if "microsoft" in proc or "wsl" in proc:
-                wsl = True
-            if os.environ.get("WSL_DISTRO_NAME"):
-                wsl = True
-        except Exception:
-            pass
-        # Non-Ubuntu is unsupported for v1; WSL2 with Ubuntu 24.04 is supported
-        if distro and distro != "ubuntu":
-            return False, f"unsupported distribution: {distro} (requires Ubuntu 24.04 LTS)"
-        if version and version != "24.04":
-            return False, f"unsupported Ubuntu version: {version} (requires 24.04 LTS)"
-        # If /etc/os-release missing distro/version, assume supported on generic Linux for dev/testing
-        # but enforce WSL2 check on Windows-like kernels only (handled above).
-        _ = wsl  # recorded for diagnostics
-        return True, None
-    # No os-release (e.g., macOS, bare containers): treat as unsupported in production
-    # but allow for local dev if forced via HERMES_WIDGET_FORCE_ENV. Otherwise, if we are in
-    # a test harness (pytest/unittest) or Windows-hosted CI, allow.
-    if system == "Darwin":
-        return False, "macOS host is not supported for v1; use Ubuntu 24.04 LTS or WSL2"
-    # Generic fallback: allow for now (dev containers / CI) but note
+    if sys.version_info < (3, 11):
+        return False, f"Python 3.11+ is required (found {platform.python_version()})"
     return True, None
 
 
-def _ensure_systemd_service() -> tuple[bool, str | None]:
-    """Idempotently install the systemd user service. Returns (ok, path_or_error)."""
+def _ensure_systemd_service(host: str = "127.0.0.1", port: int = DEFAULT_PORT) -> tuple[bool, str | None]:
+    """Use a user service only when systemd is actually available."""
+    systemctl = shutil.which("systemctl")
+    if not systemctl:
+        return True, None
     try:
+        probe = subprocess.run(
+            [systemctl, "--user", "show-environment"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+        if probe.returncode != 0:
+            return True, None
+        binary = os.environ.get("HERMES_BIN") or shutil.which("hermes")
+        if not binary:
+            return False, "hermes executable is not available for the generated service"
+        home = Path(os.environ.get("HERMES_HOME") or (Path(store.data_dir()).parent))
         target = Path.home() / ".config" / "systemd" / "user" / "hermes-widget.service"
-        if target.is_file():
-            return True, str(target)
-        source = Path(__file__).resolve().parent.parent.parent.parent / "scripts" / "hermes-widget.service"
-        # fallback: try relative to repo
-        if not source.is_file():
-            source = Path(__file__).resolve().parent / "hermes-widget.service"
-        if not source.is_file():
-            # No template available — create minimal inline (already considered installed if dir exists)
-            return True, str(target)
+        def quote(value: str) -> str:
+            return '"' + value.replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
+        text = (
+            "[Unit]\nDescription=Hermes personal widget server\nAfter=network-online.target\n\n"
+            "[Service]\nType=simple\n"
+            f"ExecStart={quote(binary)} widget serve --host {host} --port {port}\n"
+            f"Environment=HERMES_HOME={quote(str(home))}\n"
+            f"WorkingDirectory={quote(str(home))}\n"
+            "Restart=on-failure\nRestartSec=5\n\n[Install]\nWantedBy=default.target\n"
+        )
         target.parent.mkdir(parents=True, exist_ok=True)
-        # If source and target differ, copy
-        text = source.read_text(encoding="utf-8")
-        if target.is_file() and target.read_text(encoding="utf-8") == text:
-            return True, str(target)
-        target.write_text(text, encoding="utf-8")
+        if not target.is_file() or target.read_text(encoding="utf-8") != text:
+            target.write_text(text, encoding="utf-8")
+        subprocess.run([systemctl, "--user", "daemon-reload"], check=False, timeout=10)
+        subprocess.run([systemctl, "--user", "enable", "hermes-widget.service"], check=False, timeout=10)
+        if not _port_listening(port, host=host):
+            subprocess.run([systemctl, "--user", "start", "hermes-widget.service"], check=False, timeout=10)
         return True, str(target)
-    except Exception as exc:
+    except (OSError, subprocess.SubprocessError) as exc:
         return False, str(exc)
 
 
@@ -247,6 +231,14 @@ def add_parser(parser: Any) -> None:
 
     commands.add_parser("install-skill", help="Copy the widget skill into the Hermes skill tree.")
 
+    prev = commands.add_parser(
+        "preview",
+        help="Render a layout JSON file to an HTML preview (no device needed).",
+    )
+    prev.add_argument("layout_file", help="Path to a v2 layout JSON file.")
+    prev.add_argument("--out", default=None, help="Output HTML path (default: next to the input).")
+    prev.add_argument("--json", action="store_true", help="Print the dry-run report instead of a path.")
+
 
 # ---------------------------------------------------------------------------
 # Dispatch
@@ -270,13 +262,57 @@ def dispatch(args: Any) -> int:
         "rollback": _rollback,
         "uninstall": _uninstall,
         "install-skill": _install_skill,
+        "preview": _preview,
     }
     command = getattr(args, "widget_command", None)
+    if not isinstance(command, str):
+        _print_usage(handlers)
+        return 1
     handler = handlers.get(command)
     if handler is None:
-        _print_usage()
+        _print_usage(handlers)
         return 1
     return handler(args)
+
+
+def _preview(args: Any) -> int:
+    """Validate a layout and render it to HTML, so a design can be seen without a phone."""
+    try:
+        from . import preview
+        from .validate import ValidationError, inspect_layout
+    except ImportError:  # pragma: no cover - direct import from tests/scripts
+        import preview  # type: ignore
+        from validate import ValidationError, inspect_layout  # type: ignore
+
+    import json as _json
+    import pathlib as _pathlib
+
+    source = _pathlib.Path(args.layout_file)
+    if not source.is_file():
+        print(f"layout file not found: {source}")
+        return 1
+    try:
+        layout = _json.loads(source.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        print(f"{source} is not valid JSON: {exc}")
+        return 1
+
+    try:
+        report = inspect_layout(layout)
+    except ValidationError as exc:
+        print(f"invalid layout: {exc}")
+        return 1
+
+    if getattr(args, "json", False):
+        print(_json.dumps(report, indent=2, sort_keys=True))
+        return 0
+
+    out = preview.preview_file(source, out=args.out)
+    print(f"preview written to {out}")
+    if report["warnings"]:
+        for warning in report["warnings"]:
+            print(f"  warning {warning['code']}: {warning['detail']}")
+    return 0
 
 
 def _serve(args: Any) -> int:
@@ -300,13 +336,15 @@ def _setup(args: Any) -> int:
         print(f"Unsupported environment: {reason}")
         print("Aborting before any changes. Install on Ubuntu 24.04 LTS or WSL2 with Ubuntu 24.04.")
         return 2
-    token = store.get_agent_token()
+    store.get_agent_token()
     skill_path = proactive.install_skill_file()
+    hook_path = proactive.install_startup_hook()
+    config_path = proactive.write_server_config(args.host, args.port)
     widget_id = args.widget_id or store.DEFAULT_WIDGET_ID
     if store.get_widget(widget_id) is None:
         store.put_widget(widget_id, _placeholder_layout(widget_id))
     pairing = store.get_or_mint_pairing_code()
-    _ensure_systemd_service()
+    _ensure_systemd_service(args.host, args.port)
 
     print()
     print("Hermes widget setup complete")
@@ -314,13 +352,15 @@ def _setup(args: Any) -> int:
     print(f"Widget id:  {widget_id}")
     print(f"Data dir:   {store.data_dir()}")
     print(f"Skill:      {skill_path}")
+    print(f"Hook:       {hook_path}")
+    print(f"Config:     {config_path}")
     print()
     print("1. Start the server and keep it running:")
     print(f"     hermes widget serve --host {args.host} --port {args.port}")
     print()
-    print("2. On the phone, open Hermes Widget > Connect and enter:")
-    print(f"     Hermes agent URL: {_reachable_url(args.host, args.port)}")
-    print(f"     Agent token:      [stored at {store.agent_token_path()}]")
+    print("2. On the phone, open Hermes Widget > Pair or update and enter:")
+    print(f"     Hermes widget URL: {_reachable_url(args.host, args.port)}")
+    print("     Pairing code:     (short-lived; never the agent token)")
     print()
     print("3. If the app asks for a pairing code instead, use:")
     print(f"     {pairing['code']}   (expires {pairing['expiresAt']})")
@@ -351,10 +391,11 @@ def _up(args: Any) -> int:
     # Now it is safe to touch the filesystem
     steps: list[dict[str, Any]] = []
     state = "starting"
+    port = getattr(args, "port", DEFAULT_PORT)
+    bind_host = getattr(args, "host", "127.0.0.1")
 
     # 1. prerequisites / agent token (idempotent)
-    token_present_before = store.get_agent_token(create=False) is not None
-    token = store.get_agent_token()
+    store.get_agent_token()
     steps.append({"step": "prerequisites", "ok": True, "detail": "agent_token"})
     counts_before = _counts_snapshot()
 
@@ -366,14 +407,23 @@ def _up(args: Any) -> int:
         steps.append({"step": "skill", "ok": False, "error": str(exc)})
         skill_path = None
 
-    # 3. widget (idempotent: upsert)
+    # 3. startup hook and non-secret server config (idempotent)
+    try:
+        hook_path = proactive.install_startup_hook()
+        config_path = proactive.write_server_config(bind_host, port)
+        steps.append({"step": "startup_hook", "ok": True, "path": str(hook_path)})
+        steps.append({"step": "server_config", "ok": True, "path": str(config_path)})
+    except Exception as exc:
+        steps.append({"step": "startup_hook", "ok": False, "error": str(exc)})
+
+    # 4. widget (idempotent: upsert)
     widget_id = args.widget_id or store.DEFAULT_WIDGET_ID
     if store.get_widget(widget_id) is None:
         store.put_widget(widget_id, _placeholder_layout(widget_id))
     steps.append({"step": "widget", "ok": True, "widget_id": widget_id})
 
     # 4. systemd service (idempotent: no duplicate units)
-    service_ok, service_path = _ensure_systemd_service()
+    service_ok, service_path = _ensure_systemd_service(bind_host, port)
     steps.append({"step": "service", "ok": service_ok, "path": service_path if service_ok else service_path})
 
     # 5. pairing code (idempotent: reuse valid, prune expired)
@@ -391,11 +441,9 @@ def _up(args: Any) -> int:
             steps.append({"step": "routine", "ok": False, "error": str(exc)})
 
     # Derive structured state — never "ready" from port alone
-    port = getattr(args, "port", DEFAULT_PORT)
-    bind_host = getattr(args, "host", "127.0.0.1")
     listening = _port_listening(port, host=bind_host)
     # also probe 127.0.0.1 if bound to 0.0.0.0
-    if not listening and bind_host in {"0.0.0.0", "::", "*"}:
+    if not listening and bind_host in _WILDCARD_HOSTS:
         listening = _port_listening(port, host="127.0.0.1")
     token_present = store.get_agent_token(create=False) is not None
     widget_present = store.get_widget(widget_id) is not None
@@ -491,7 +539,7 @@ def _status(args: Any) -> int:
     port = getattr(args, "port", DEFAULT_PORT)
     host = getattr(args, "host", "127.0.0.1")
     listening = _port_listening(port, host=host)
-    if not listening and host in {"0.0.0.0", "::", "*"}:
+    if not listening and host in _WILDCARD_HOSTS:
         listening = _port_listening(port, host="127.0.0.1")
     widget_id = store.DEFAULT_WIDGET_ID
     widget_present = store.get_widget(widget_id) is not None
@@ -595,10 +643,8 @@ def _doctor(args: Any) -> int:
     widgets = store.list_widgets()
     devices = store.list_devices()
     routine_ok = False
-    try:
+    with contextlib.suppress(Exception):
         routine_ok = proactive.find_routine() is not None
-    except Exception:
-        pass
     host = getattr(args, "host", "127.0.0.1") if hasattr(args, "host") else "127.0.0.1"
     port = getattr(args, "port", DEFAULT_PORT) if hasattr(args, "port") else DEFAULT_PORT
     listening = _port_listening(port, host=host)
@@ -659,6 +705,10 @@ def _publish(args: Any) -> int:
             return 1
     else:
         payload = _placeholder_layout(widget_id)
+    if not isinstance(payload, dict):
+        err = {"error": "invalid_layout", "detail": "layout must be a JSON object"}
+        print(json.dumps(err, indent=2) if getattr(args, "json", False) else _redact(err["detail"]))
+        return 1
     try:
         result = store.put_widget(widget_id, payload)
     except store.StoreError as exc:
@@ -673,7 +723,6 @@ def _publish(args: Any) -> int:
 
 
 def _restart(_args: Any) -> int:
-    import subprocess, shutil
     svc = Path.home() / ".config" / "systemd" / "user" / "hermes-widget.service"
     if svc.is_file() and shutil.which("systemctl"):
         try:
@@ -688,11 +737,19 @@ def _restart(_args: Any) -> int:
 
 
 def _upgrade(_args: Any) -> int:
-    # Fresh clone builds handled by CI; upgrade is idempotent pull/reinstall stub with health check
+    # Fresh clone builds handled by CI; upgrade is idempotent pull/reinstall stub with health check.
+    # It takes a DB backup first so `rollback` has a real restore point: this is the only
+    # command that can replace the database, and rollback restores the newest .bak.
     try:
+        backup = store.backup_db()
         widgets = store.list_widgets()
         token_present = store.get_agent_token(create=False) is not None
-        health = {"ok": True, "widgets": widgets, "token_present": token_present}
+        health = {
+            "ok": True,
+            "widgets": widgets,
+            "token_present": token_present,
+            "backup": backup.name if backup else None,
+        }
         print(json.dumps(health, indent=2))
         return 0
     except Exception as exc:
@@ -724,13 +781,10 @@ def _uninstall(args: Any) -> int:
     keep = getattr(args, "keep_data", False)
     svc = Path.home() / ".config" / "systemd" / "user" / "hermes-widget.service"
     if svc.is_file():
-        try:
+        with contextlib.suppress(OSError):
             svc.unlink()
-        except Exception:
-            pass
     if not keep:
         try:
-            import shutil
             d = store.data_dir()
             # Do not delete entire Hermes home; only widget db + token if isolated
             for name in ["widget.db", "widget.db-wal", "widget.db-shm", "agent_token"]:

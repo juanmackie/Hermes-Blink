@@ -1,0 +1,129 @@
+package com.you.hermeswidget.net
+
+import com.you.hermeswidget.widget.WidgetDimensions
+import org.json.JSONObject
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
+import org.junit.Test
+import java.time.Instant
+
+class PublicationTest {
+    @Test
+    fun parsesTextPublicationAndDoesNotInventVisibility() {
+        val publication = Publication.parse(
+            envelope(
+                content = JSONObject()
+                    .put("type", "text")
+                    .put("mediaType", "text/plain; charset=utf-8")
+                    .put("text", "A useful update"),
+            )
+        )
+
+        assertEquals(PublicationContent.Text("A useful update"), publication.content)
+        assertEquals("A short accessible summary", publication.summary)
+        val now = Instant.parse("2026-01-02T00:05:00Z").toEpochMilli()
+        assertEquals(PublicationFreshness.FRESH, publication.freshness(now))
+    }
+
+    @Test
+    fun acceptsSvgAssetAndUsesItsReportedDimensions() {
+        val publication = Publication.parse(
+            envelope(
+                kind = "image",
+                content = JSONObject()
+                    .put("type", "image")
+                    .put("mediaType", "image/svg+xml")
+                    .put("assetId", "a".repeat(64))
+                    .put("width", 640)
+                    .put("height", 480)
+                    .put("bytes", 128)
+                    .put("sha256", "b".repeat(64)),
+            )
+        )
+
+        assertEquals(PublicationContent.Image(
+            assetId = "a".repeat(64),
+            mediaType = "image/svg+xml",
+            width = 640,
+            height = 480,
+            bytes = 128,
+            sha256 = "b".repeat(64),
+        ), publication.content)
+    }
+
+    @Test
+    fun rejectsMalformedOrUnboundedImageMetadata() {
+        val badAsset = JSONObject()
+            .put("type", "image")
+            .put("mediaType", "image/png")
+            .put("assetId", "not-a-sha")
+            .put("width", 10)
+            .put("height", 10)
+            .put("bytes", 10)
+            .put("sha256", "b".repeat(64))
+
+        assertThrows {
+            Publication.parse(envelope(kind = "image", content = badAsset))
+        }
+        assertThrows {
+            Publication.parse(
+                envelope(
+                    kind = "image",
+                    content = JSONObject(badAsset.toString())
+                        .put("width", 16_385),
+                )
+            )
+        }
+    }
+
+    @Test
+    fun expiryWinsOverFreshness() {
+        val now = Instant.parse("2026-01-02T00:00:00Z").toEpochMilli()
+        val publication = Publication.parse(
+            envelope(
+                publishedAt = "2026-01-01T23:00:00Z",
+                expiresAt = "2026-01-01T23:30:00Z",
+            )
+        )
+
+        assertEquals(PublicationFreshness.EXPIRED, publication.freshness(now))
+        assertTrue(publication.isExpired(now))
+    }
+
+    @Test
+    fun widgetDimensionsAreConvertedToPixelsAndStayPositive() {
+        assertEquals(Pair(360, 220), WidgetDimensions.fromDp(180, 110, 2f))
+        assertEquals(Pair(1, 1), WidgetDimensions.fromDp(0, 0, 1f))
+    }
+
+    private fun envelope(
+        kind: String = "text",
+        content: JSONObject = JSONObject()
+            .put("type", "text")
+            .put("mediaType", "text/plain; charset=utf-8")
+            .put("text", "hello"),
+        publishedAt: String = "2026-01-02T00:00:00Z",
+        expiresAt: String? = null,
+    ): String {
+        val root = JSONObject()
+            .put("version", 1)
+            .put("widgetId", "hermes-brief")
+            .put("publicationId", "pub_test")
+            .put("revision", 1)
+            .put("kind", kind)
+            .put("title", "A title")
+            .put("summary", "A short accessible summary")
+            .put("publishedAt", publishedAt)
+            .put("content", content)
+        if (expiresAt != null) root.put("expiresAt", expiresAt)
+        return root.toString()
+    }
+
+    private fun assertThrows(block: () -> Unit) {
+        try {
+            block()
+            throw AssertionError("expected validation failure")
+        } catch (_: IllegalArgumentException) {
+        }
+    }
+}

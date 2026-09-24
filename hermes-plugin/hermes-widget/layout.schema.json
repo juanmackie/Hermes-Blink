@@ -69,10 +69,6 @@
             "end":    { "type": "integer", "minimum": 0 }
           }
         },
-        "visibleIf": {
-          "type": "object",
-          "description": "FUTURE: device-side conditional rendering not yet implemented."
-        },
         "alignment": {
           "type": "string",
           "enum": ["start", "center", "end", "fill"]
@@ -91,7 +87,6 @@
         "id": { "type": "string" },
         "weight": { "type": "number" },
         "padding": { "$ref": "#/definitions/padding" },
-        "visibleIf": { "type": "object" },
         "alignment": { "type": "string" }
       }
     },
@@ -103,6 +98,44 @@
         "start":  { "type": "integer", "minimum": 0 },
         "end":    { "type": "integer", "minimum": 0 }
       }
+    },
+    "hexColor": {
+      "type": "string",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "description": "3- or 6-digit hex only. An 8-digit alpha hex is ignored by the device rather than failing, but the push is rejected here."
+    },
+    "typography": {
+      "type": "object",
+      "description": "The closed `style` scale. Typo.kt, SKILL.md and scripts/widget-preview.py all read these numbers; scripts/check-contract-parity.py fails if any of them disagree.",
+      "properties": {
+        "title":   { "sizeSp": 18, "weight": "bold",   "color": "#000000" },
+        "body":    { "sizeSp": 14, "weight": "normal", "color": "#000000" },
+        "label":   { "sizeSp": 12, "weight": "medium", "color": "#000000" },
+        "caption": { "sizeSp": 11, "weight": "normal", "color": "#8E8E93" }
+      },
+      "additionalProperties": false
+    },
+    "palette": {
+      "type": "object",
+      "description": "Semantic colours shared by the device (Typo.kt), the renderer default and the offline preview. Not a per-node setting; node `color` fields override them.",
+      "properties": {
+        "primary":   { "const": "#000000" },
+        "secondary": { "const": "#8E8E93" },
+        "success":   { "const": "#34C759" },
+        "danger":    { "const": "#FF3B30" },
+        "hairline":  { "const": "#E5E5EA" },
+        "accent":    { "const": "#7C3AED" }
+      },
+      "additionalProperties": false
+    },
+    "spacing": {
+      "type": "object",
+      "description": "The rhythm the preview and the reference layouts follow (dp).",
+      "properties": {
+        "containerSpacing": { "const": 8 },
+        "rootPadding": { "const": 12 }
+      },
+      "additionalProperties": false
     },
     "nodeSpecifics": {
       "oneOf": [
@@ -177,7 +210,7 @@
                 "enum": ["title", "body", "label", "caption"]
               },
               "maxLines": { "type": "integer", "minimum": 1, "maximum": 50 },
-              "color": { "type": "string" },
+              "color": { "$ref": "#/definitions/hexColor" },
               "alignment": { "type": "string" }
             },
             "required": ["value"]
@@ -188,7 +221,7 @@
           "then": {
             "properties": {
               "thickness": { "type": "integer", "minimum": 1, "maximum": 16, "default": 1 },
-              "color": { "type": "string" }
+              "color": { "$ref": "#/definitions/hexColor" }
             }
           }
         },
@@ -206,7 +239,7 @@
           "then": {
             "properties": {
               "text": { "type": "string", "minLength": 1, "maxLength": 50 },
-              "color": { "type": "string" }
+              "color": { "$ref": "#/definitions/hexColor" }
             },
             "required": ["text"]
           }
@@ -225,7 +258,7 @@
                     "title": { "type": "string", "minLength": 1, "maxLength": 200 },
                     "start": { "type": "string", "format": "date-time" },
                     "end": { "type": "string", "format": "date-time" },
-                    "color": { "type": "string" }
+                    "color": { "$ref": "#/definitions/hexColor" }
                   }
                 },
                 "maxItems": 50
@@ -246,7 +279,10 @@
                 "type": "string",
                 "enum": ["up", "down", "flat"]
               },
-              "weight": { "type": "number", "minimum": 0 }
+              "color": {
+                "allOf": [{ "$ref": "#/definitions/hexColor" }],
+                "description": "Overrides the hero value ink; the label stays secondary."
+              }
             },
             "required": ["label", "value"]
           }
@@ -257,8 +293,7 @@
             "properties": {
               "value": { "type": "number", "minimum": 0, "maximum": 1 },
               "label": { "type": "string", "maxLength": 50 },
-              "showPercent": { "type": "boolean" },
-              "max": { "type": "number", "minimum": 1 }
+              "showPercent": { "type": "boolean" }
             },
             "required": ["value"]
           }
@@ -281,10 +316,8 @@
           "if": { "properties": { "type": { "const": "list_item" } } },
           "then": {
             "properties": {
-              "id": { "type": "string", "maxLength": 128 },
               "title": { "type": "string", "minLength": 1, "maxLength": 200 },
               "subtitle": { "type": "string", "maxLength": 200 },
-              "leadingIcon": { "type": "string", "maxLength": 50 },
               "trailingText": { "type": "string", "maxLength": 50 },
               "action": { "$ref": "#/definitions/action" }
             },

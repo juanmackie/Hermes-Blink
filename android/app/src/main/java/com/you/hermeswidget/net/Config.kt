@@ -2,6 +2,7 @@ package com.you.hermeswidget.net
 
 import android.content.Context
 import android.content.SharedPreferences
+import java.io.File
 
 object Config {
     private const val PREFS_NAME = "hermes_config"
@@ -9,6 +10,12 @@ object Config {
     private const val KEY_WIDGET_ID = "widget_id"
     private const val KEY_TOKEN = "token"
     private const val KEY_LAYOUT_JSON = "layout_json"
+    private const val KEY_PUBLICATION_JSON = "publication_json"
+    private const val KEY_PUBLICATION_ETAG = "publication_etag"
+    private const val KEY_ASSET_ETAG = "asset_etag"
+    private const val KEY_ASSET_ID = "asset_id"
+    private const val KEY_CONNECTION_STATE = "connection_state"
+    private const val KEY_LAST_CHECKED_AT = "last_checked_at"
 
     private fun prefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -73,5 +80,66 @@ object Config {
     fun getCachedLayout(context: Context): String? {
         val json = prefs(context).getString(KEY_LAYOUT_JSON, null)
         return json?.takeIf { it.isNotEmpty() }
+    }
+
+    fun setCachedPublication(
+        context: Context,
+        json: String,
+        publicationEtag: String?,
+        assetId: String?,
+        assetEtag: String?,
+    ): Boolean {
+        val editor = prefs(context).edit()
+            .putString(KEY_PUBLICATION_JSON, json)
+            .putString(KEY_PUBLICATION_ETAG, publicationEtag)
+            .putString(KEY_ASSET_ID, assetId)
+            .putString(KEY_ASSET_ETAG, assetEtag)
+        return editor.commit()
+    }
+
+    fun getCachedPublication(context: Context): String? {
+        return prefs(context).getString(KEY_PUBLICATION_JSON, null)
+            ?.takeIf { it.isNotEmpty() }
+    }
+
+    fun getPublicationEtag(context: Context): String? {
+        return prefs(context).getString(KEY_PUBLICATION_ETAG, null)
+            ?.takeIf { it.isNotEmpty() }
+    }
+
+    fun getAssetEtag(context: Context, assetId: String): String? {
+        if (prefs(context).getString(KEY_ASSET_ID, null) != assetId) return null
+        return prefs(context).getString(KEY_ASSET_ETAG, null)?.takeIf { it.isNotEmpty() }
+    }
+
+    fun clearCachedPublication(context: Context): Boolean {
+        return prefs(context).edit()
+            .remove(KEY_PUBLICATION_JSON)
+            .remove(KEY_PUBLICATION_ETAG)
+            .remove(KEY_ASSET_ID)
+            .remove(KEY_ASSET_ETAG)
+            .commit()
+    }
+
+    fun assetFile(context: Context, assetId: String): File {
+        require(assetId.matches(Regex("[a-f0-9]{64}"))) { "invalid asset id" }
+        return File(File(context.filesDir, "publication-assets"), assetId)
+    }
+
+    fun setConnectionState(context: Context, state: ConnectionState, checkedAt: Long) {
+        prefs(context).edit()
+            .putString(KEY_CONNECTION_STATE, state.name)
+            .putLong(KEY_LAST_CHECKED_AT, checkedAt)
+            .apply()
+    }
+
+    fun getConnectionState(context: Context): ConnectionState {
+        val stored = prefs(context).getString(KEY_CONNECTION_STATE, null)
+        return stored?.let { runCatching { ConnectionState.valueOf(it) }.getOrNull() }
+            ?: if (SecureStore.token(context).isNullOrEmpty()) ConnectionState.UNPAIRED else ConnectionState.OFFLINE
+    }
+
+    fun getLastCheckedAt(context: Context): Long? {
+        return prefs(context).getLong(KEY_LAST_CHECKED_AT, 0L).takeIf { it > 0L }
     }
 }

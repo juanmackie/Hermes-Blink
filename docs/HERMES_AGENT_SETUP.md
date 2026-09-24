@@ -19,44 +19,38 @@ operator walkthrough.
 
 The pieces, in one picture:
 
-    your computer / VPS
-      Hermes agent  -> writes layouts -> ~/.hermes/widget/widget.db
-      hermes widget serve  -> reads widget.db, answers HTTP on port 8788
+    your computer / VPS / TrueNAS container
+      Hermes agent -> writes publication/layout revisions
+                    -> <detected Hermes home>/widget/widget.db + assets/
+      hermes widget serve -> authenticated HTTP on loopback port 8788
               ^
-              | Tailscale or LAN (HTTP is fine inside Tailscale; use HTTPS otherwise)
+              | Tailscale Serve HTTPS (or a private HTTPS reverse proxy)
               v
-      your phone: Hermes Widget app -> enters URL + agent token -> shows the widget
+      phone app -> private URL + short-lived pairing code -> device token
 
 The default widget id everywhere is `hermes-brief` (the widget code and the plugin both use it),
 so you normally do not have to choose an id.
 
 ---
 
-## 1. Install the plugin
+## 1. Install the plugin and persistent integration
 
-The plugin is the folder `hermes-plugin/hermes-widget` in this repository.
+From the repository checkout, use the capability-based bootstrap:
 
-**Windows (PowerShell):**
+    bash scripts/bootstrap-linux.sh --json
+    bash scripts/bootstrap-linux.sh --json       # safe second run
 
-    Copy-Item -Recurse hermes-plugin\hermes-widget "$env:USERPROFILE\.hermes\plugins\hermes-widget"
-    hermes plugins enable hermes-widget
+It detects the actual Hermes executable, version, profile, persistent home, and
+available plugin/gateway/cron capabilities. It installs the plugin and skill,
+one `gateway:startup` launcher, and the idempotent six-hour publication routine.
+It uses a generated systemd user unit only when a systemd user manager exists;
+otherwise it starts one detached server and the gateway hook restores it after a
+container or host restart. Set `HERMES_BIN` only if `hermes` is not on `PATH`.
 
-**macOS / Linux:**
-
-    cp -r hermes-plugin/hermes-widget ~/.hermes/plugins/hermes-widget
-    hermes plugins enable hermes-widget
-
-Once the plugin is published to a git URL you will instead run:
-
-    hermes plugins install <git-url-of-hermes-widget>
-    hermes plugins enable hermes-widget
-
-If you cloned this repository on Linux/macOS, `scripts/install-hermes-widget.ps1` (Windows) does
-the copy for you.
-
-Confirm the plugin loaded:
+Confirm the plugin loaded and create the host database/token:
 
     hermes widget status
+    hermes widget setup
 
 ---
 
@@ -73,89 +67,66 @@ and, by default, the database at:
 
     <your Hermes home>/widget/widget.db
 
-Keep `agent_token` secret. It is the credential that lets the agent push layouts. The phone gets
-a different, per-device token during pairing, so you never type this one into a widget by hand
-except in the app's **Settings** screen below.
+Keep `agent_token` secret. It is the operator credential that lets Hermes publish. The phone
+uses only a short-lived pairing code and a separate per-device token; never enter the agent
+token in the Android app.
 
 You can also supply the token with the environment variable `HERMES_WIDGET_AGENT_TOKEN` if you
 prefer not to keep a file.
 
 ---
 
-## 3. Start the widget server
+## 3. Start and persist the widget server
 
-    hermes widget serve --host 0.0.0.0 --port 8788
+The bootstrap starts one server only when the port is not already healthy. For
+manual diagnostics:
 
-- `--host 0.0.0.0` listens on every network interface so your phone can reach it. If you only
-  ever use Tailscale, you can bind the Tailscale address instead (safer).
-- `--port 8788` is the default; keep it unless it is taken.
+    hermes widget serve --host 127.0.0.1 --port 8788
 
-Leave this process running. If you close the terminal, the widget stops updating. Use your OS
-service manager, a scheduled task, or `tmux`/`screen` if you want it always on.
-
-### TLS (optional)
-
-Traffic inside Tailscale is already encrypted, so plain HTTP is acceptable there. If you expose
-the port to a LAN or the internet, terminate TLS:
-
-    hermes widget serve --host 0.0.0.0 --port 8788 --certfile cert.pem --keyfile key.pem
-
-You can also put a reverse proxy (Caddy, nginx) in front and use `https://`.
+The default loopback bind is intentional. Expose it through Tailscale Serve or
+a private HTTPS reverse proxy rather than binding every interface. A systemd
+user unit is generated only when `systemctl --user` is available; Docker and
+TrueNAS SCALE installations use the generated `gateway:startup` hook instead.
+Both paths preserve the same `<Hermes home>/widget/` data and do not duplicate
+the process.
 
 ---
 
 ## 4. Make sure the phone can reach the server
 
-**Tailscale (recommended):**
+**Tailscale Serve HTTPS (recommended):**
 
-    tailscale ip -4
+    tailscale serve --bg --https=8788 tcp://127.0.0.1:8788
 
-This prints an address like `100.x.y.z`. Use that in the app URL. If you bound `--host 0.0.0.0`,
-Tailscale reachability is usually automatic. Otherwise bind the `100.x.y.z` address explicitly.
+This terminates private HTTPS on the tailnet and forwards unchanged bearer
+headers to the loopback server. Preserve any existing Serve paths. Do not add a
+second `/v1` path prefix: the server routes already include `/v1`.
 
-**Same Wi-Fi / LAN:**
+**Same private LAN:** expose `8788` only on the private interface and use
+`https://` at the proxy. Do not publish the raw port to the public internet.
 
-    # Windows
-    ipconfig
+Quick check from another machine on the tailnet:
 
-    # macOS / Linux
-    ipconfig getifaddr en0     # macOS
-    hostname -I                # Linux
-
-Use the computer's LAN IP, e.g. `http://192.168.1.20:8788`.
-
-**Firewall:** allow inbound TCP on port 8788 for the tailnet interface or your LAN. On Windows,
-the first run of `hermes widget serve` normally raises a firewall prompt — click **Allow**.
-
-Quick check from the phone's network (or any second machine):
-
-    curl http://100.x.y.z:8788/v1/health
+    curl https://<your-tailscale-hostname>:<serve-port>/v1/health
 
 You should get `{"status":"ok",...}`. Health needs no token. If this hangs, it is a firewall or
 wrong-IP problem, not the app.
 
 ---
 
-## 5. Enter the URL and agent token on the phone
+## 5. Pair the phone without the operator token
 
-1. Open the **Hermes Widget** app and tap **Connect**.
-2. **Hermes agent URL** — enter the full base URL including scheme and port, e.g.
-   `http://100.x.y.z:8788`. It must start with `http://` or `https://`.
-3. **Agent token** — paste the contents of the `agent_token` file from step 2.
-4. Tap **Connect**.
+1. On the Hermes host, create a short-lived code:
 
-The app calls `/v1/health`, then automatically mints a short-lived pairing code and pairs itself
-with the server. On success it stores a **device token** (encrypted on the phone) and the base
-URL. You do not need to type a pairing code during this automatic flow.
+       hermes widget code
 
-### Manual pairing (alternative)
+2. Open the **Hermes Widget** app and tap **Pair or update**.
+3. Enter the private HTTPS widget-server URL.
+4. Enter the short-lived code and tap **Pair phone**.
 
-If you would rather pair from the server side, or you are given a code:
-
-    hermes widget code
-
-This prints a code such as `ABCD-1234`. Open the widget's pairing screen and enter it. Pairing
-returns a per-device token; only its hash is stored on the server.
+The app exchanges the code for a per-device token, stores that token in
+encrypted Android storage, and never asks for `agent_token`. Pairing codes
+expire and can be used only once. Re-pair after revoking or replacing a phone.
 
 You can see paired phones, their labels and last-seen times with:
 
@@ -177,21 +148,25 @@ A revoked device gets `401 unauthorized` on its next request; re-pair it to rest
 4. When the configuration screen appears it reads the widget list from your server. The default
    id `hermes-brief` is used automatically; finish the screen to place the widget.
 
-If the widget shows *"Connect to your Hermes agent"*, the phone has no working URL/token yet —
-redo step 5. The app falls back to a bundled sample layout only when nothing is cached.
+If the widget shows **Pair this phone**, the phone has no device credential yet—repeat
+step 5. The app never substitutes a sample publication for a missing or failed
+server response. A previously successful publication remains available
+offline with an explicit offline state; an expired publication is not shown.
 
 ---
 
 ## 7. Keep it fresh in the background
 
-The widget refreshes when the app/worker polls and whenever the agent pushes a new layout. To have
-the **agent** rebuild the widget on a schedule (news, calendar, tasks — whatever the skill authors),
-install a Hermes cron job:
+The phone polls periodically (nominally every 15 minutes), on app open, and after a
+manual refresh. The bootstrap installs one idempotent Hermes routine every six
+hours:
 
     hermes widget routine --schedule "every 6h" --widget-id hermes-brief
 
-That runs the agent with the bundled hermes-widget skill and pushes an updated layout each time.
-Common schedules: `"every 1h"`, `"every 6h"`, or a cron expression like `"0 7 * * *"` for 07:00 daily.
+The routine uses `widget_publish` only when context contains a genuinely useful
+supported update. If nothing useful changed it does nothing, leaving the
+current publication untouched. `widget_status` distinguishes host storage,
+device download, and render submission; none claims user visibility.
 
 Remove it later with:
 
@@ -201,25 +176,47 @@ Check the overall picture any time with:
 
     hermes widget status
 
+### Author a layout yourself, without a phone
+
+The agent authors layouts from the bundled **hermes-widget** skill, which carries the type scale,
+the colour rule, the spacing rhythm, and the widget sizes, plus four reference layouts in
+`fixtures/golden/`. Two commands make that loop safe and visible:
+
+    hermes widget preview fixtures/golden/large-brief.json
+    # -> fixtures/golden/large-brief.preview.html — every widget shape, with the widget
+    #    bounds outlined so you can see where Android would clip it
+
+The agent tool `widget_validate` runs the same checks without drawing anything. It reports the
+node count, byte size, text styles used, and any design warnings — and **stores nothing**, so
+iterating never replaces a working widget or spends a push from the 30-per-hour limit. Ask the
+agent to validate before it pushes.
+
+The preview is an approximation of Android, not a simulator — the phone stays authoritative. The
+full rules are in `SCHEMA.md`; the design guidance the agent follows is
+`hermes-plugin/hermes-widget/skills/widget/SKILL.md`.
+
 ---
 
 ## 8. Troubleshooting
 
-**The app says Failed (HTTP 401) or the widget shows nothing after working once.**
-The device token is wrong, expired, or revoked. Check `hermes widget devices`; if the device is
-missing or revoked, re-run the Connect flow in the app (step 5) or `hermes widget code` + manual
-pairing. A 401 on the *agent* token means the token you pasted does not match
-`agent_token` on the server — re-copy it (no quotes, no trailing spaces).
+**The app says pairing expired or HTTP 401.**
+The device token was revoked or the persistent Hermes home changed. Run
+`hermes widget code`, pair again, and revoke the old device. The phone never
+needs the operator token; a host-only 401 on publishing is diagnosed with
+`hermes widget doctor`, not by sending `agent_token` to the phone.
 
-**Failed (HTTP 404) / "unknown widget".**
-The server is reachable but has no layout stored under that id. Push one from the agent (ask it to
-update the widget, or run `hermes widget routine`), and confirm the id is `hermes-brief`.
-`hermes widget status` lists the widget ids the server knows.
+**No publication yet / HTTP 404.**
+The server is reachable but has no publication under `hermes-brief`. Ask the
+agent to `widget_publish`, or run the routine when useful context exists.
+`hermes widget status` distinguishes an empty server from a device download or
+render gap.
 
 **Cannot connect at all / health check hangs.**
 - Wrong IP: re-check `tailscale ip -4` or your LAN IP; Tailscale addresses are `100.x.y.z`.
 - Firewall: allow TCP 8788 inbound (Windows Defender Firewall → Inbound Rules).
-- Server not running or bound to the wrong interface: restart with `--host 0.0.0.0`.
+- Server not running or the gateway hook did not restore it: run
+  `bash scripts/bootstrap-linux.sh --json`, then inspect
+  `<Hermes home>/widget/server.log`; keep loopback and proxy with Tailscale Serve.
 - Phone on a different network than the server and not on the tailnet.
 - If you used `https://`, the certificate must be valid for the hostname you typed; a self-signed
   cert will fail. Use HTTP inside Tailscale, or a proxy with a real certificate.
@@ -239,9 +236,11 @@ Stop the server, delete `<Hermes home>/widget/widget.db`, then repeat `hermes wi
 | Item | Location | Secret? |
 | --- | --- | --- |
 | Agent token | `<Hermes home>/widget/agent_token` | Yes |
-| Widget database (layouts, devices, events) | `<Hermes home>/widget/widget.db` | Contains token hashes only |
-| Device tokens | Phone secure storage; only sha256 on the server | Yes |
-| Layout JSON pushed by the agent | `widget.db` | No |
+| Widget database (publications/layouts, device hashes, events) | `<Hermes home>/widget/widget.db` | Contains token hashes only |
+| Immutable publication assets | `<Hermes home>/widget/assets/` | App-private content; treat as private |
+| Device tokens | Phone encrypted storage; only sha256 on the server | Yes |
+| Publication/layout JSON | `widget.db` | Treat as private content |
+| Gateway startup hook | `<Hermes home>/hooks/hermes-widget-startup/` | No secret; persist for restart recovery |
 
 Never share the agent token or paste it into a chat/bug report. To rotate it, stop the server,
 delete `agent_token`, run `hermes widget setup` again, and update the app's token (re-pair the

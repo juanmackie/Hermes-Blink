@@ -7,9 +7,11 @@ with it (a plugin that raises during load is disabled wholesale).
 """
 from __future__ import annotations
 
+import contextlib
 import logging
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from . import schemas, tools
 
@@ -20,18 +22,19 @@ SKILL_PATH = PLUGIN_DIR / "skills" / "widget" / "SKILL.md"
 
 _TOOLSET = "hermes-widget"
 _SKILL_DESCRIPTION = (
-    "How to author and push v2 Hermes home-screen widget layouts and read the "
-    "interaction events the widget sends back."
+    "How to publish accessible text, safe static SVG, or validated local raster "
+    "visuals to the personal Hermes widget and inspect delivery status."
 )
 
 _TOOLS: tuple[tuple[dict[str, Any], Callable[..., str]], ...] = (
     (schemas.WIDGET_UPDATE, tools.widget_update),
+    (schemas.WIDGET_VALIDATE, tools.widget_validate),
     (schemas.WIDGET_LIST, tools.widget_list),
     (schemas.WIDGET_READ_EVENTS, tools.widget_read_events),
     (schemas.WIDGET_MINT_PAIRING_CODE, tools.widget_mint_pairing_code),
     (schemas.WIDGET_SETUP, tools.widget_setup),
+    (schemas.WIDGET_PUBLISH, tools.widget_publish),
     (schemas.WIDGET_STATUS, tools.widget_status),
-    (schemas.WIDGET_PAIR, tools.widget_pair),
 )
 
 
@@ -41,6 +44,29 @@ def register(ctx: Any) -> None:
     _register_slash_command(ctx)
     _register_cli_command(ctx)
     _register_skill(ctx)
+    _register_context_reminder(ctx)
+
+
+def _register_context_reminder(ctx: Any) -> None:
+    """Make the one-way publishing surface discoverable during ordinary turns."""
+    register_hook = getattr(ctx, "register_hook", None)
+    if register_hook is None:
+        return
+    try:
+        register_hook("pre_llm_call", _availability_reminder)
+    except Exception:  # noqa: BLE001
+        logger.warning("hermes-widget: failed to register availability reminder", exc_info=True)
+
+
+def _availability_reminder(**_kwargs: Any) -> dict[str, str]:
+    return {
+        "context": (
+            "Hermes widget publishing is available. When a useful user-facing update exists, "
+            "call widget_publish with a title, required summary, and exactly one text, safe "
+            "static SVG, or bounded local raster source; otherwise do nothing. Publishing "
+            "stores a revision and does not prove phone delivery or user visibility."
+        )
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -134,14 +160,12 @@ def _resolve_cli_hooks() -> tuple[Callable[..., Any], Callable[..., Any]]:
 
 def _cli_add_parser_fallback(parser: Any, *_args: Any, **_kwargs: Any) -> None:
     """No-op parser setup so ``hermes widget`` still resolves."""
-    try:
+    with contextlib.suppress(Exception):
         parser.add_argument(
             "--status",
             action="store_true",
             help="Print widget status (fallback when the widget CLI module is unavailable).",
         )
-    except Exception:  # noqa: BLE001
-        pass
 
 
 def _cli_dispatch_fallback(args: Any = None, *_rest: Any, **_kwargs: Any) -> int:

@@ -33,9 +33,6 @@ _DELTA_DIRECTIONS = frozenset({"up", "down", "flat"})
 
 _CONTAINER_CAP = {"column": 100, "row": 20, "box": 100, "list": 100}
 
-# v1 types/fields that v2 drops — used by migration to strip/replace.
-_REMOVED_NODE_TYPES = frozenset({"chart", "image", "icon", "toggle"})
-_REMOVED_ACTION_KINDS = frozenset({"url", "open_app"})
 
 
 class ValidationError(ValueError):
@@ -80,6 +77,19 @@ def _check_int(node: dict, key: str, *, lo: int, hi: int, where: str,
         _fail(f"{where}: '{key}' must be an integer")
     if value < lo or value > hi:
         _fail(f"{where}: '{key}' must be between {lo} and {hi}")
+
+
+def _check_hex(node: dict, key: str, *, where: str) -> None:
+    """Colour fields take a 3- or 6-digit hex only, same rule as 'accentColor'.
+
+    The device ignores an 8-digit alpha hex rather than failing to paint, but shipping one
+    is a design mistake the author should hear about at push time.
+    """
+    if key not in node:
+        return
+    value = node[key]
+    if not isinstance(value, str) or not _HEX.match(value):
+        _fail(f"{where}: '{key}' must be a hex colour like #7C3AED (3 or 6 digits)")
 
 
 def _check_action(action: Any, where: str) -> None:
@@ -155,13 +165,16 @@ def _check_node(node: Any, where: str, counter: list) -> None:
             _fail(f"{label}: 'style' must be one of {sorted(_TEXT_STYLES)}")
         if "maxLines" in node:
             _check_int(node, "maxLines", lo=1, hi=50, where=label)
+        _check_hex(node, "color", where=label)
     elif node_type == "divider":
         if "thickness" in node:
             _check_int(node, "thickness", lo=1, hi=16, where=label)
+        _check_hex(node, "color", where=label)
     elif node_type == "spacer":
         _check_int(node, "size", lo=1, hi=256, where=label, required=True)
     elif node_type == "badge":
         _check_str(node, "text", max_len=50, min_len=1, where=label, required=True)
+        _check_hex(node, "color", where=label)
     elif node_type == "calendar":
         events = node.get("events")
         if not isinstance(events, list):
@@ -173,6 +186,7 @@ def _check_node(node: Any, where: str, counter: list) -> None:
                 _fail(f"{label}.events[{index}]: must be an object")
             _check_str(event, "title", max_len=200, min_len=1,
                        where=f"{label}.events[{index}]", required=True)
+            _check_hex(event, "color", where=f"{label}.events[{index}]")
         if "mode" in node and node["mode"] != "agenda":
             _fail(f"{label}: 'mode' must be 'agenda' (month removed in v2)")
         if "maxItems" in node:
@@ -183,6 +197,7 @@ def _check_node(node: Any, where: str, counter: list) -> None:
         _check_str(node, "delta", max_len=20, where=label)
         if "deltaDirection" in node and node["deltaDirection"] not in _DELTA_DIRECTIONS:
             _fail(f"{label}: 'deltaDirection' must be one of {sorted(_DELTA_DIRECTIONS)}")
+        _check_hex(node, "color", where=label)
     elif node_type == "progress":
         value = node.get("value")
         if not _is_number(value) or value < 0 or value > 1:
@@ -199,7 +214,6 @@ def _check_node(node: Any, where: str, counter: list) -> None:
     elif node_type == "list_item":
         _check_str(node, "title", max_len=200, min_len=1, where=label, required=True)
         _check_str(node, "subtitle", max_len=200, where=label)
-        _check_str(node, "leadingIcon", max_len=50, where=label)
         _check_str(node, "trailingText", max_len=50, where=label)
         if "action" in node:
             _check_action(node["action"], label)
@@ -236,146 +250,70 @@ def validate_layout(layout: Any) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Migration: v1 -> v2
+# Dry run: validate and describe a layout without storing it
 # ---------------------------------------------------------------------------
 
-def _needs_refresh_node(reason: str = "unsupported content removed") -> dict:
-    return {
-        "type": "text",
-        "value": "Content updated — pull to refresh for the latest brief.",
-        "style": "caption",
-    }
+MIN_ROOT_PADDING = 12
+_TEXT_STYLE_WARN_COUNT = 3
+_NODE_WARN_COUNT = 80
 
 
-def _migrate_node(node: Any) -> dict | None:
-    """Convert a single v1 node to v2. Returns None if the node should be dropped."""
+def _inspect_node(node: Any, stats: dict) -> None:
     if not isinstance(node, dict):
-        return None
-    t = node.get("type")
-    # Drop removed types entirely; caller will insert refresh-needed placeholder if needed
-    if t in _REMOVED_NODE_TYPES:
-        return None
-    # Calendar: only agenda mode survives
-    if t == "calendar" and node.get("mode") == "month":
-        return None
-    # Containers: recurse into children, drop unsupported children
-    if t in CONTAINER_TYPES:
-        children = node.get("children", [])
-        if not isinstance(children, list):
-            return None
-        kept: list[dict] = []
-        dropped = 0
-        for child in children:
-            migrated = _migrate_node(child)
-            if migrated is not None:
-                kept.append(migrated)
-            else:
-                dropped += 1
-        if not kept:
-            # If all children were dropped and container was non-empty, keep a refresh placeholder
-            if dropped > 0:
-                return _needs_refresh_node()
-            return None
-        out = {k: v for k, v in node.items() if k not in ("children",)}
-        # Strip calendar month field if present
-        if out.get("mode") == "month":
-            out.pop("mode", None)
-        # Strip removed action kinds from container-level action if any
-        if "action" in out and isinstance(out["action"], dict):
-            if out["action"].get("kind") in _REMOVED_ACTION_KINDS:
-                out.pop("action")
-        out["children"] = kept
-        if dropped > 0 and t != "list":
-            # Surface that something was removed
-            pass
-        return out
-    # Leaf: strip url/open_app actions
-    if "action" in node and isinstance(node["action"], dict):
-        if node["action"].get("kind") in _REMOVED_ACTION_KINDS:
-            out = dict(node)
-            out.pop("action")
-            return out
-    # Strip removed fields that are harmless but no longer in schema
-    out = {k: v for k, v in node.items() if k not in ("chartType", "series", "labels", "stateKey", "height", "showAxis", "url", "contentDescription", "cornerRadius", "name", "tint", "value")}
-    # Re-add fields that are valid for retained types
-    for keep in ("id", "value", "label", "text", "title", "subtitle", "leadingIcon", "trailingText",
-                 "style", "maxLines", "color", "thickness", "size", "events", "mode", "maxItems",
-                 "delta", "deltaDirection", "weight", "spacing", "alignment", "padding", "action",
-                 "showPercent", "accentColor"):
-        if keep in node and keep not in out:
-            out[keep] = node[keep]
-    # Fix calendar mode
-    if out.get("type") == "calendar" and out.get("mode") == "month":
-        out["mode"] = "agenda"
-    # Ensure required fields for retained types
-    if t == "text" and "value" not in out:
-        # image/icon/chart had no value — replace with placeholder
-        return _needs_refresh_node()
-    if t == "badge" and "text" not in out:
-        return None
-    return out
+        return
+    stats["nodes"] += 1
+    if node.get("type") == "text":
+        # The effective step, not the declared one: an omitted style renders as body.
+        stats["styles"].add(node.get("style") or "body")
+    for child in node.get("children") or []:
+        _inspect_node(child, stats)
 
 
-def migrate_layout(layout: dict) -> tuple[dict, bool]:
-    """Convert a v1 envelope to v2. Returns (migrated_layout, had_removed_content).
+def inspect_layout(layout: Any) -> dict:
+    """Validate a layout and describe it without storing anything.
 
-    Supported legacy content (text, stat, calendar-agenda, etc.) is kept.
-    Unsupported sections (chart/image/icon/toggle/month/deeplink) are replaced
-    with an explicit refresh-needed state. Caller should back up before calling
-    and regenerate the brief if had_removed_content is True.
+    Raises ValidationError for exactly the reasons widget_update would, so an agent can
+    check a layout before spending one of its pushes. The warnings are advisory: the
+    renderer copes, the design does not.
     """
-    if not isinstance(layout, dict):
-        raise ValidationError("layout must be a JSON object")
-    version = layout.get("version")
-    if version == LAYOUT_VERSION:
-        return layout, False
-    if version != 1:
-        raise ValidationError(f"cannot migrate layout version {version!r} to {LAYOUT_VERSION}")
+    validate_layout(layout)
 
-    had_removed = False
-    # Check top-level for removed content before migration
-    raw = json.dumps(layout)
-    for marker in ('"chart"', '"image"', '"icon"', '"toggle"', '"month"', '"open_app"', '"deeplink"', '"chartType"'):
-        if marker in raw:
-            had_removed = True
-            break
+    stats: dict = {"nodes": 0, "styles": set()}
+    _inspect_node(layout["root"], stats)
+    payload = json.dumps(layout, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
-    migrated: dict[str, Any] = {}
-    for k, v in layout.items():
-        if k == "version":
-            migrated["version"] = LAYOUT_VERSION
-        elif k == "root":
-            new_root = _migrate_node(v)
-            if new_root is None:
-                migrated["root"] = {
-                    "type": "column",
-                    "children": [_needs_refresh_node()],
-                }
-                had_removed = True
-            else:
-                migrated["root"] = new_root
-                # If any child was dropped, mark had_removed
-                if json.dumps(new_root) != json.dumps(v):
-                    # conservative: if shape changed, assume removed content
-                    had_removed = True
-        else:
-            migrated[k] = v
+    warnings: list[dict[str, str]] = []
+    padding = layout["root"].get("padding")
+    if isinstance(padding, dict):
+        thin = {edge: padding.get(edge, 0) for edge in ("top", "bottom", "start", "end")
+                if padding.get(edge, 0) < MIN_ROOT_PADDING}
+        if thin:
+            warnings.append({
+                "code": "ROOT_PADDING_LOW",
+                "detail": (
+                    f"root padding is thin on {thin} - {MIN_ROOT_PADDING} on every edge keeps "
+                    "content clear of the widget border"
+                ),
+            })
+    if len(stats["styles"]) > _TEXT_STYLE_WARN_COUNT:
+        warnings.append({
+            "code": "TOO_MANY_TEXT_STYLES",
+            "detail": (
+                f"{len(stats['styles'])} text styles used {sorted(stats['styles'])} - "
+                f"pick at most {_TEXT_STYLE_WARN_COUNT}"
+            ),
+        })
+    if stats["nodes"] > _NODE_WARN_COUNT:
+        warnings.append({
+            "code": "NEAR_NODE_CAP",
+            "detail": f"{stats['nodes']} nodes of the {MAX_NODES} allowed - trim before adding more",
+        })
 
-    # Validate the result; if it fails, fall back to explicit refresh-needed state
-    try:
-        validate_layout(migrated)
-    except ValidationError:
-        migrated = {
-            "version": LAYOUT_VERSION,
-            "widgetId": layout.get("widgetId", "hermes-brief"),
-            "title": layout.get("title", "Brief"),
-            "root": {
-                "type": "column",
-                "children": [_needs_refresh_node()],
-            },
-        }
-        if "updatedAt" in layout:
-            migrated["updatedAt"] = layout["updatedAt"]
-        had_removed = True
-
-    return migrated, had_removed
+    return {
+        "ok": True,
+        "nodeCount": stats["nodes"],
+        "bytes": len(payload),
+        "maxBytes": MAX_LAYOUT_BYTES,
+        "textStyles": sorted(stats["styles"]),
+        "warnings": warnings,
+    }

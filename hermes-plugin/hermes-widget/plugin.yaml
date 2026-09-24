@@ -1,17 +1,21 @@
 name: hermes-widget
-version: 2.0.0
-description: "Hermes home-screen widget v2: brief-focused layouts (column/row/box/list/text/badge/stat/progress/calendar-agenda/button/list_item), private HTTPS, QR pairing, 6-hour brief."
+version: 3.0.0
+description: >-
+  Hermes personal visual channel: accessible text, safe static SVG, validated
+  local raster media, legacy v2 layouts, private authenticated delivery, and
+  periodic refresh.
 author: Hermes Widget contributors
 kind: standalone
 entrypoint: __init__.py
 provides_tools:
   - widget_update
+  - widget_validate
   - widget_list
   - widget_read_events
   - widget_mint_pairing_code
   - widget_setup
+  - widget_publish
   - widget_status
-  - widget_pair
 provides_commands:
   - widget
 metadata:

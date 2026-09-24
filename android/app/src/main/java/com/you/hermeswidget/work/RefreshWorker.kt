@@ -1,63 +1,104 @@
 package com.you.hermeswidget.work
 
 import android.content.Context
-import androidx.work.*
+import androidx.glance.appwidget.updateAll
+import androidx.work.Constraints
+import androidx.work.CoroutineWorker
+import androidx.work.ExistingPeriodicWorkPolicy
+import androidx.work.ExistingWorkPolicy
+import androidx.work.NetworkType
+import androidx.work.OneTimeWorkRequestBuilder
+import androidx.work.PeriodicWorkRequestBuilder
+import androidx.work.WorkManager
+import androidx.work.WorkerParameters
 import com.you.hermeswidget.net.Config
+import com.you.hermeswidget.net.ConnectionState
 import com.you.hermeswidget.net.HermesApi
+import com.you.hermeswidget.net.PublicationRepository
+import com.you.hermeswidget.net.RefreshOutcome
+import com.you.hermeswidget.net.SecureStore
+import com.you.hermeswidget.widget.HermesWidget
 import com.you.hermeswidget.widget.LayoutParser
+import com.you.hermeswidget.widget.WidgetDimensions
 import java.util.concurrent.TimeUnit
 
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
-        val url = Config.getBackendUrl(applicationContext) ?: return Result.success()
-        val widgetId = Config.getWidgetId(applicationContext)
-        val secureToken = com.you.hermeswidget.net.SecureStore.token(applicationContext)
-        val configToken = Config.getToken(applicationContext)
-        val tokensToTry = listOfNotNull(secureToken, configToken)
-                .filter { it.isNotEmpty() }
-                .distinct()
-        for (token in tokensToTry) {
-            val (code, fetchedBody) = HermesApi.fetchWidget(url, widgetId, token)
-            if (code == 200 && fetchedBody != null) {
-                // Refresh completes only after a newer valid layout is stored — invalid cannot poison cache
-                val parsed = try { LayoutParser.parse(fetchedBody) } catch (_: Exception) { null }
-                if (parsed != null) {
-                    Config.setCachedLayout(applicationContext, fetchedBody)
-                    break
-                }
+        val result = runCatching { PublicationRepository.refresh(applicationContext) }
+            .getOrElse { error ->
+                Config.setConnectionState(
+                    applicationContext,
+                    ConnectionState.OFFLINE,
+                    System.currentTimeMillis(),
+                )
+                return Result.retry()
             }
-            if (code == 401 || code == 403) break
+
+        if (result.outcome == RefreshOutcome.EMPTY) refreshLegacyLayout()
+        HermesWidget().updateAll(applicationContext)
+
+        if (result.outcome == RefreshOutcome.UPDATED ||
+            result.outcome == RefreshOutcome.NOT_MODIFIED
+        ) {
+            val (width, height) = WidgetDimensions.fromContext(applicationContext)
+            PublicationRepository.acknowledgeRenderSubmitted(applicationContext, width, height)
         }
-        try {
-            val manager = android.appwidget.AppWidgetManager.getInstance(applicationContext)
-            val ids = manager.getAppWidgetIds(android.content.ComponentName(applicationContext, com.you.hermeswidget.widget.HermesWidgetReceiver::class.java))
-            com.you.hermeswidget.widget.HermesWidgetReceiver().onUpdate(applicationContext, manager, ids)
-        } catch (_: Exception) {
-        }
-        return Result.success()
+        return if (result.outcome.retry) Result.retry() else Result.success()
+    }
+
+    private suspend fun refreshLegacyLayout() {
+        val baseUrl = SecureStore.baseUrl(applicationContext) ?: Config.getBackendUrl(applicationContext)
+        val token = SecureStore.token(applicationContext)
+        if (baseUrl.isNullOrBlank() || token.isNullOrBlank()) return
+        val (code, body) = HermesApi.fetchWidget(baseUrl, Config.getWidgetId(applicationContext), token)
+        if (code != 200 || body == null) return
+        runCatching { LayoutParser.parse(body) }
+            .onSuccess { Config.setCachedLayout(applicationContext, body) }
     }
 
     companion object {
         private const val PERIODIC_NAME = "hermes-refresh-periodic"
         private const val POST_TAP_NAME = "hermes-refresh-post-tap"
+        const val IMMEDIATE_NAME = "hermes-refresh-immediate"
+
+        private val networkConstraint = Constraints.Builder()
+            .setRequiredNetworkType(NetworkType.CONNECTED)
+            .build()
 
         fun schedulePeriodic(context: Context) {
-            val req = PeriodicWorkRequestBuilder<RefreshWorker>(15, TimeUnit.MINUTES)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+            val request = PeriodicWorkRequestBuilder<RefreshWorker>(15, TimeUnit.MINUTES)
+                .setConstraints(networkConstraint)
+                .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
                 .build()
             WorkManager.getInstance(context).enqueueUniquePeriodicWork(
-                PERIODIC_NAME, ExistingPeriodicWorkPolicy.UPDATE, req
+                PERIODIC_NAME,
+                ExistingPeriodicWorkPolicy.UPDATE,
+                request,
+            )
+        }
+
+        fun enqueueNow(context: Context) {
+            val request = OneTimeWorkRequestBuilder<RefreshWorker>()
+                .setConstraints(networkConstraint)
+                .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
+                .build()
+            WorkManager.getInstance(context).enqueueUniqueWork(
+                IMMEDIATE_NAME,
+                ExistingWorkPolicy.REPLACE,
+                request,
             )
         }
 
         fun schedulePostTapPoll(context: Context) {
-            // Bounded 2-minute post-tap completion check
-            val req = OneTimeWorkRequestBuilder<RefreshWorker>()
+            val request = OneTimeWorkRequestBuilder<RefreshWorker>()
                 .setInitialDelay(2, TimeUnit.MINUTES)
-                .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .setConstraints(networkConstraint)
+                .setBackoffCriteria(androidx.work.BackoffPolicy.EXPONENTIAL, 15, TimeUnit.MINUTES)
                 .build()
             WorkManager.getInstance(context).enqueueUniqueWork(
-                POST_TAP_NAME, ExistingWorkPolicy.REPLACE, req
+                POST_TAP_NAME,
+                ExistingWorkPolicy.REPLACE,
+                request,
             )
         }
     }

@@ -17,6 +17,7 @@ Requirements for verification:
 Evidence to collect:
 - System logs (`systemctl --user status hermes-widget`) showing restarts and no failures
 - Android app activity showing widget updates and no connection errors after restarts
-- Event log (`hermes widget events`) showing tap events and refresh completions
+- Event log (the `widget_read_events` agent tool, or `GET /v1/events` with the agent token)
+  showing tap events and refresh completions. There is no `hermes widget events` CLI verb.
 - Widget display showing updated brief content after each 6-hour cycle
 - Network change events handled gracefully (offline → stale → reconnect)

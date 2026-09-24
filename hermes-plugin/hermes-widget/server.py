@@ -18,6 +18,7 @@ import json
 import logging
 import ssl
 from datetime import datetime, timezone
+from email.utils import format_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
@@ -28,7 +29,8 @@ except ImportError:  # pragma: no cover - direct import from tests/scripts
     import store  # type: ignore
 
 VERSION = "1.0.0"
-MAX_BODY_BYTES = 128 * 1024  # request bodies are read up to 128 KiB, never more
+MAX_BODY_BYTES = 384 * 1024  # bounded JSON; inline SVG is capped separately at 256 KiB
+MAX_OVERSIZED_DRAIN_BYTES = 8 * 1024 * 1024
 MAX_CONCURRENT = 20  # bounded concurrency for private HTTPS (Phase C)
 REQUEST_TIMEOUT = 30  # request deadline in seconds (Phase C)
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
@@ -73,6 +75,16 @@ def _map_store_error(exc: store.StoreError) -> _HttpError:
         # wording comes from validate.py, so match on "byte" rather than "cap".
         status = 413 if "byte" in message.lower() else 400
         return _HttpError(status, exc.code, message)
+    if isinstance(exc, store.PublicationTooLarge):
+        return _HttpError(413, exc.code, message)
+    if isinstance(exc, store.RenderNotReady):
+        return _HttpError(409, exc.code, message)
+    if isinstance(exc, store.AssetNotFound):
+        return _HttpError(404, exc.code, message)
+    if isinstance(exc, store.AssetUnavailable):
+        return _HttpError(503, exc.code, message)
+    if isinstance(exc, store.PublicationError):
+        return _HttpError(400, exc.code, message)
     if isinstance(exc, store.RateLimitError):
         return _HttpError(429, exc.code, message)
     if isinstance(exc, store.PairingError):
@@ -104,11 +116,35 @@ class _Handler(BaseHTTPRequestHandler):
             self.wfile.write(body)
 
     def _error(self, status: int, code: str, detail: str = "") -> None:
-        self._json(status, {"error": code, "detail": detail or code})
+        retry = {"Retry-After": "5"} if status in {429, 503} else None
+        self._json(status, {"error": code, "detail": detail or code}, retry)
 
-    def log_message(self, fmt: str, *args: Any) -> None:
-        # fmt covers status/request-line only; headers (and tokens) never reach here.
-        _log.info("%s - %s", self.address_string(), fmt % args)
+    def _not_modified(self, etag: str) -> None:
+        self.send_response(304)
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "private, no-cache")
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def _etag_matches(self, etag: str) -> bool:
+        raw = self.headers.get("If-None-Match", "") or ""
+        candidates = {item.strip() for item in raw.split(",") if item.strip()}
+        if "*" in candidates:
+            return True
+        return etag in candidates or any(item.removeprefix("W/") == etag for item in candidates)
+
+    def _last_modified(self, timestamp: str | None) -> str | None:
+        if not timestamp:
+            return None
+        try:
+            parsed = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+        return format_datetime(parsed.astimezone(timezone.utc), usegmt=True)
+
+    def log_message(self, format: str, *args: Any) -> None:
+        # format covers status/request-line only; headers (and tokens) never reach here.
+        _log.info("%s - %s", self.address_string(), format % args)
 
     # -- request helpers ----------------------------------------------------
 
@@ -129,13 +165,21 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         try:
             length = int(raw_length)
-        except (TypeError, ValueError):
-            raise _HttpError(400, "bad_request", "invalid Content-Length header")
+        except (TypeError, ValueError) as exc:
+            raise _HttpError(400, "bad_request", "invalid Content-Length header") from exc
         if length < 0:
             raise _HttpError(400, "bad_request", "invalid Content-Length header")
         if length > MAX_BODY_BYTES:
-            # An oversized body cannot be drained safely; close instead so the
-            # leftover bytes can never be read as a pipelined request.
+            # Drain a bounded, modest oversized request so the client receives
+            # the 413 instead of an aborted connection. Very large claims are
+            # closed immediately rather than allowing unbounded resource use.
+            if length <= MAX_OVERSIZED_DRAIN_BYTES:
+                remaining = length
+                while remaining > 0:
+                    chunk = self.rfile.read(min(64 * 1024, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
             self.close_connection = True
             raise _HttpError(
                 413, "payload_too_large",
@@ -151,7 +195,7 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             return json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-            raise _HttpError(400, "invalid_json", f"request body is not valid JSON: {exc}")
+            raise _HttpError(400, "invalid_json", f"request body is not valid JSON: {exc}") from exc
 
     def _authorize(self, *, allow_device: bool) -> tuple[str, str | None]:
         """Return (role, device_id). Raises 401 unless the caller is authorised.
@@ -179,6 +223,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _classify(self, path: str) -> tuple[str, str | None] | None:
         if path == "/v1/health":
             return "health", None
+        if path == "/v1/capabilities":
+            return "capabilities", None
         if path == "/v1/pairing-codes":
             return "pairing-codes", None
         if path == "/v1/pair":
@@ -187,9 +233,18 @@ class _Handler(BaseHTTPRequestHandler):
             return "widgets", None
         if path == "/v1/events":
             return "events", None
+        if path.startswith("/v1/assets/"):
+            asset_id = path[len("/v1/assets/"):]
+            if asset_id and "/" not in asset_id:
+                return "asset", unquote(asset_id)
+            return None
         prefix = "/v1/widgets/"
         if path.startswith(prefix):
             rest = path[len(prefix):]
+            if rest.endswith("/publication/ack") and rest[: -len("/publication/ack")]:
+                return "publication-ack", unquote(rest[: -len("/publication/ack")])
+            if rest.endswith("/publication") and rest[: -len("/publication")]:
+                return "publication", unquote(rest[: -len("/publication")])
             if rest.endswith("/events") and rest[: -len("/events")]:
                 return "widget-events", unquote(rest[: -len("/events")])
             if rest and "/" not in rest:
@@ -198,10 +253,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     _ALLOWED: dict[str, tuple[str, ...]] = {
         "health": ("GET",),
+        "capabilities": ("GET",),
         "pairing-codes": ("POST",),
         "pair": ("POST",),
         "widgets": ("GET",),
         "events": ("GET",),
+        "asset": ("GET", "HEAD"),
+        "publication": ("GET", "POST", "PUT"),
+        "publication-ack": ("POST",),
         "widget": ("GET", "PUT"),
         "widget-events": ("POST",),
     }
@@ -217,11 +276,15 @@ class _Handler(BaseHTTPRequestHandler):
             return
         # Incompatible version check: client must send compatible transport (G)
         client_ver = self.headers.get("X-Hermes-Widget-Version", "") or self.headers.get("X-Widget-Version", "")
-        if client_ver and client_ver.strip() != VERSION and client_ver.strip() not in ("1.0.0", VERSION):
-            # Allow v1 and current; other versions get actionable upgrade message
-            if client_ver.strip().split(".")[0] != VERSION.split(".")[0]:
-                self._error(426, "upgrade_required", f"client version {client_ver} incompatible with server {VERSION}; upgrade the app via the release link")
-                return
+        if (
+            client_ver
+            and client_ver.strip() != VERSION
+            and client_ver.strip() not in ("1.0.0", VERSION)
+            and client_ver.strip().split(".")[0] != VERSION.split(".")[0]
+        ):
+            # Allow v1 and current; other versions get actionable upgrade message.
+            self._error(426, "upgrade_required", f"client version {client_ver} incompatible with server {VERSION}; upgrade the app via the release link")
+            return
         target = self._classify(urlsplit(self.path).path)
         if target is None:
             self._error(404, "not_found", "no such route")
@@ -276,6 +339,115 @@ class _Handler(BaseHTTPRequestHandler):
             },
         )
 
+    def _capabilities(self, _widget_id: str | None) -> None:
+        self._authorize(allow_device=True)
+        self._json(200, store.publication_capabilities())
+
+    def _publication(self, widget_id: str | None) -> None:
+        if widget_id is None:
+            raise _HttpError(404, "not_found", "widget id is required")
+        if self.command in {"POST", "PUT"}:
+            self._authorize(allow_device=False)
+            body = self._read_json_body()
+            if not isinstance(body, dict):
+                raise _HttpError(400, "invalid_publication", "publication must be a JSON object")
+            title = body.get("title")
+            summary = body.get("summary")
+            if not isinstance(title, str) or not isinstance(summary, str):
+                raise _HttpError(400, "invalid_publication", "title and summary are required strings")
+            file_path = body.get("file_path", body.get("image_path", body.get("path")))
+            result = store.put_publication(
+                widget_id,
+                title=title,
+                summary=summary,
+                text=body.get("text"),
+                svg=body.get("svg"),
+                file_path=file_path,
+                expires_at=body.get("expires_at"),
+                ttl_seconds=body.get("ttl_seconds"),
+            )
+            self._json(200, result)
+            return
+
+        role, device_id = self._authorize(allow_device=True)
+        publication = store.get_publication(widget_id)
+        if publication is None:
+            self._error(404, "unknown_publication", f"no publication for widget {widget_id!r}")
+            return
+        revision = publication.get("revision")
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            raise _HttpError(503, "publication_unavailable", "stored publication revision is invalid")
+        if role == "device" and device_id:
+            store.record_publication_fetch(
+                widget_id,
+                device_id,
+                revision,
+                downloaded=publication.get("kind") == "text",
+            )
+        etag = f'\"{publication["publicationId"]}\"'
+        if self._etag_matches(etag):
+            self._not_modified(etag)
+            return
+        extra = {"ETag": etag, "Cache-Control": "private, no-cache"}
+        last_modified = self._last_modified(publication.get("publishedAt"))
+        if last_modified:
+            extra["Last-Modified"] = last_modified
+        self._json(200, publication, extra)
+
+    def _publication_ack(self, widget_id: str | None) -> None:
+        if widget_id is None:
+            raise _HttpError(404, "not_found", "widget id is required")
+        role, device_id = self._authorize(allow_device=True)
+        if role != "device" or not device_id:
+            raise _HttpError(403, "device_required", "render acknowledgement requires a paired device token")
+        body = self._read_json_body()
+        if not isinstance(body, dict):
+            raise _HttpError(400, "invalid_render_ack", "render acknowledgement must be an object")
+        if body.get("status") != "render_submitted":
+            raise _HttpError(400, "invalid_render_ack", "status must be render_submitted")
+        revision = body.get("revision")
+        width = body.get("renderedWidth", body.get("width"))
+        height = body.get("renderedHeight", body.get("height"))
+        if isinstance(revision, bool) or not isinstance(revision, int):
+            raise _HttpError(400, "invalid_render_ack", "revision must be an integer")
+        if isinstance(width, bool) or isinstance(height, bool) or not isinstance(width, int) or not isinstance(height, int):
+            raise _HttpError(400, "invalid_render_ack", "rendered dimensions must be integers")
+        result = store.acknowledge_publication_render(widget_id, device_id, revision, width, height)
+        self._json(200, result)
+
+    def _asset(self, asset_id: str | None) -> None:
+        role, device_id = self._authorize(allow_device=True)
+        if asset_id is None:
+            raise _HttpError(404, "not_found", "asset id is required")
+        metadata = store.get_asset(asset_id)
+        etag = f'\"{metadata["sha256"]}\"'
+        if self._etag_matches(etag):
+            self._not_modified(etag)
+            return
+        metadata, data = store.read_asset(asset_id)
+        if role == "device" and device_id:
+            publication = store.publication_for_asset(asset_id)
+            if publication is not None:
+                revision = publication.get("revision")
+                if isinstance(revision, bool) or not isinstance(revision, int):
+                    raise _HttpError(503, "publication_unavailable", "stored publication revision is invalid")
+                store.record_asset_download(
+                    publication["widgetId"],
+                    device_id,
+                    revision,
+                    asset_id,
+                )
+        self.send_response(200)
+        self.send_header("Content-Type", metadata["mediaType"])
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("ETag", etag)
+        self.send_header("Cache-Control", "private, max-age=31536000, immutable")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Content-Disposition", "inline")
+        self.end_headers()
+        if self.command != "HEAD":
+            self.wfile.write(data)
+
     def _pairing_codes(self, _widget_id: str | None) -> None:
         self._authorize(allow_device=False)
         self._json(200, store.mint_pairing_code())
@@ -301,6 +473,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _widget(self, widget_id: str | None) -> None:
         self._authorize(allow_device=True)
+        if widget_id is None:
+            raise _HttpError(404, "not_found", "widget id is required")
         if self.command == "PUT":
             self._authorize(allow_device=False)
             layout = self._read_json_body()
@@ -316,6 +490,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _widget_events(self, widget_id: str | None) -> None:
         _role, device_id = self._authorize(allow_device=True)
+        if widget_id is None:
+            raise _HttpError(404, "not_found", "widget id is required")
         body = self._read_json_body()
         if not isinstance(body, dict):
             raise _HttpError(400, "bad_request", "body must be a JSON object")

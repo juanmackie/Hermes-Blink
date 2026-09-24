@@ -1,60 +1,103 @@
 # hermes-widget (Hermes Agent plugin)
 
-Connect a Hermes agent to the Hermes home-screen widget. The agent authors and pushes
-server-driven layouts; the widget renders them and sends interaction events back. Nothing
-talks to a developer-hosted backend - the endpoint runs inside YOUR Hermes installation.
+Connect a Hermes agent to one personal Android home-screen widget. The agent can
+publish accessible text, safe static SVG, or a validated local raster image; the legacy
+v2 layout flow remains available. Nothing talks to a developer-hosted backend: the
+endpoint and immutable assets live inside the user's Hermes home.
 
 ## What it registers
 
-- Tools: widget_update, widget_list, widget_read_events, widget_mint_pairing_code
+- Tools: widget_publish, widget_status, widget_update, widget_validate (dry run), widget_list, widget_read_events, widget_mint_pairing_code, widget_setup
 - Slash command: /widget (status)
-- CLI: hermes widget serve | setup | code | status | routine | devices | install-skill
-- Bundled skill: hermes-widget:widget (layout authoring + proactive refresh)
-- A dependency-free HTTP server (stdlib only) started with "hermes widget serve"
+- CLI: hermes widget serve | setup | code | status | routine | devices | install-skill | preview
+- Bundled skill: hermes-widget:widget (layout authoring, design tokens, proactive refresh)
+- A private HTTP server started with `hermes widget serve`; secure SVG parsing uses the pinned `defusedxml` dependency in `requirements.txt`
 
 ## Architecture
 
     Hermes agent turn (chat / cron / heartbeat)
-        -> widget_update tool
-        -> ~/.hermes/widget/widget.db  (layouts + devices + events)
-        <- hermes widget serve  (HTTP, bearer auth)
-        <- Android widget (GET layout, POST events)
+        -> widget_publish -> immutable asset + atomic publication revision
+        -> widget_update  -> legacy v2 layout (unchanged)
+        -> ~/.hermes/widget/widget.db + assets/
+        <- hermes widget serve (HTTP, short-lived pairing/device bearer auth)
+        <- Android widget (conditional publication GET, asset GET, render ack)
 
 The agent process and the server share one SQLite file, so a cron job or a chat turn can update
 the widget while the phone polls. Device tokens are stored only as sha256 hashes.
 
 ## Install
 
-    # from a checkout
-    copy hermes-plugin\hermes-widget to %USERPROFILE%\.hermes\plugins\hermes-widget
-    hermes plugins enable hermes-widget
-    hermes widget setup
+Use the capability-based bootstrap from the repository root:
 
-Or use scripts/install-hermes-widget.ps1 from the repository root.
+    bash scripts/bootstrap-linux.sh --json
+    bash scripts/bootstrap-linux.sh --json       # idempotent second run
+
+It detects the actual Hermes executable/version/profile/home, installs the plugin,
+skill, gateway startup hook, and one six-hour routine, then starts one healthy
+server. Use `--restart-gateway` to reload the agent after installation, or
+`--skip-start` for install-only operations. `scripts/install-service.sh` remains
+as a compatibility wrapper.
 
 ## Run
 
-    hermes widget serve --host 0.0.0.0 --port 8788
-    # TLS (optional; Tailscale already encrypts transport):
-    hermes widget serve --host 0.0.0.0 --port 8788 --certfile cert.pem --keyfile key.pem
+    hermes widget serve --host 127.0.0.1 --port 8788
+
+The loopback default is intentional; put Tailscale Serve or a private HTTPS
+reverse proxy in front of it. The diagnostic command remains available even when
+the generated systemd user unit is unavailable (as in many TrueNAS containers).
 
 ## Background refreshes
 
     hermes widget routine --schedule "every 6h" --widget-id hermes-brief
 
-This installs a Hermes cron job that runs the agent with the hermes-widget skill and pushes a
-fresh layout. Manage or remove it with "hermes widget routine --remove".
+This installs one Hermes cron job that runs the agent with the hermes-widget skill
+and calls `widget_publish` only when there is a genuinely useful supported update.
+It leaves the current publication unchanged when nothing useful changed and never
+fabricates data or a visual. Manage or remove it with
+`hermes widget routine --remove`.
 
 ## Security
 
 - Two bearer credentials: an agent token (operator/agent) and per-device tokens.
 - Only token hashes are persisted; tokens are compared in constant time.
-- Layouts are validated before storage: 64 KB cap, 100-node cap, https-only images,
-  hermes:// deeplinks, closed action set, closed node set.
-- Push rate limit: 30 per widget per hour.
-- Prefer binding to a Tailscale interface rather than a public address.
+- Publication input is validated before storage: required accessible summary, 32 KiB text,
+  256 KiB SVG, 5 MiB raster, 16-megapixel decoded cap, PNG/JPEG/WebP magic checks, and a
+  closed static SVG subset. Scripts, external resources, DOCTYPE/entity declarations,
+  unsupported elements, and malformed media are rejected without replacing the prior display.
+- Visual bytes are immutable content-addressed files. A publication revision changes only
+  after its asset and metadata commit together. Device fetch and render acknowledgement
+  are tracked separately; neither is reported as user visibility.
+- Layouts retain their 64 KiB / 100-node closed contract. Push rate limit: 30 per widget
+  per hour across layout and publication writes.
+- Bind the server to loopback and use private Tailscale Serve HTTPS; never expose
+  the raw port publicly. The Android phone pairs with a short-lived code and never
+  receives the operator token.
+
+## Publication API
+
+- `GET /v1/widgets/<id>/publication` returns the current revision with an ETag; devices
+  receive `304` when unchanged. Text marks a complete download at metadata fetch; images
+  mark it only after the immutable asset is fetched.
+- `GET /v1/assets/<id>` serves the validated immutable visual. Assets are device-authenticated,
+  immutable-cacheable, integrity checked, and never interpreted as active content.
+- `POST /v1/widgets/<id>/publication` is agent-authenticated and accepts text or inline SVG;
+  `widget_publish` additionally accepts a bounded local raster path on the host.
+- `POST /v1/widgets/<id>/publication/ack` records only `render_submitted` plus the usable
+  widget dimensions. It is not a claim that the user saw or understood the publication.
+- `GET /v1/capabilities` reports the active format and size limits to authenticated clients.
+- `widget_status` reports host state (`published`, `expired`, or `empty`) separately from
+  each device's `not_downloaded`, `downloaded`, or `render_submitted` state.
 
 ## Contract
 
-See ../../docs/CONNECTION.md (architecture + REST + frozen interfaces) and
-../../docs/SCHEMA.md (layout v1). The HTTP contract is also kept as layout.schema.json here.
+- `publication.py` defines the visual input and static SVG subset.
+- `../../docs/SCHEMA.md` — the **layout** contract (v2): node registry, typography scale,
+  colour rule, caps.
+- `layout.schema.json` — the same contract as the machine-readable registry. `validate.py`,
+  `LayoutParser.kt`, `Typo.kt`, `skills/widget/SKILL.md` and `docs/` all mirror it;
+  `../../scripts/check-contract-parity.py` fails the build when any of them drift.
+- `../../docs/CONNECTION.md` — architecture, the REST transport (`/v1/`, still v1), auth model,
+  and the frozen module interfaces.
+- `skills/widget/SKILL.md` — what the agent is taught: which fields render, the type scale, the
+  spacing rhythm, the widget sizes, and the reference layouts in `../../fixtures/golden/`.
+- `preview.py` — `hermes widget preview <layout.json>` renders a layout to HTML without a device.

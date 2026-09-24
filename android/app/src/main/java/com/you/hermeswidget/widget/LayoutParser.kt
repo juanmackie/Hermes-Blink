@@ -91,7 +91,6 @@ object LayoutParser {
             text = obj.optString("text", "").takeIf { it.isNotEmpty() },
             title = obj.optString("title", "").takeIf { it.isNotEmpty() },
             subtitle = obj.optString("subtitle", "").takeIf { it.isNotEmpty() },
-            leadingIcon = obj.optString("leadingIcon", "").takeIf { it.isNotEmpty() },
             trailingText = obj.optString("trailingText", "").takeIf { it.isNotEmpty() },
             style = obj.optString("style", "").takeIf { it.isNotEmpty() },
             color = obj.optString("color", "").takeIf { it.isNotEmpty() },
@@ -107,6 +106,15 @@ object LayoutParser {
             showPercent = if (obj.has("showPercent")) obj.optBoolean("showPercent", false) else null,
             events = events,
             mode = obj.optString("mode", "").takeIf { it.isNotEmpty() },
+            alignment = obj.optString("alignment", "").takeIf { it.isNotEmpty() },
+            padding = obj.optJSONObject("padding")?.let { p ->
+                Padding(
+                    top = p.optInt("top", -1).takeIf { it >= 0 },
+                    bottom = p.optInt("bottom", -1).takeIf { it >= 0 },
+                    start = p.optInt("start", -1).takeIf { it >= 0 },
+                    end = p.optInt("end", -1).takeIf { it >= 0 }
+                )
+            },
             action = action,
             children = obj.optJSONArray("children")?.let { arr ->
                 (0 until arr.length()).mapNotNull { i -> arr.optJSONObject(i)?.let { parseNode(it) } }

@@ -21,6 +21,7 @@
 
         <activity android:name=".SettingsActivity" android:exported="true" />
         <activity android:name=".config.PairingActivity" android:exported="true" />
+        <activity android:name=".PublicationActivity" android:exported="false" />
 
         <activity android:name=".config.WidgetConfigActivity" android:exported="true">
             <intent-filter>

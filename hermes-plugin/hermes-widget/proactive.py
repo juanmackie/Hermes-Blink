@@ -10,8 +10,11 @@ running Hermes process (unit tests, the Android build, a bare Python shell).
 """
 from __future__ import annotations
 
+import contextlib
+import json
 import logging
 import os
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +31,19 @@ SKILL_NAME = "hermes-widget"
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 BUNDLED_SKILL = PLUGIN_DIR / "skills" / "widget" / "SKILL.md"
+BUNDLED_HOOK = PLUGIN_DIR / "gateway_hook.py"
+HOOK_NAME = "hermes-widget-startup"
+
+
+def _atomic_text(path: Path, text: str, mode: int = 0o600) -> Path:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.is_file() or path.read_text(encoding="utf-8") != text:
+        temporary = path.with_name(path.name + ".tmp")
+        temporary.write_text(text, encoding="utf-8")
+        os.replace(temporary, path)
+        with contextlib.suppress(OSError):
+            os.chmod(path, mode)
+    return path
 
 
 def _hermes_home() -> Path:
@@ -35,7 +51,10 @@ def _hermes_home() -> Path:
         from hermes_constants import get_hermes_home
         return Path(get_hermes_home())
     except Exception:
-        return Path(os.environ.get("HERMES_HOME") or (Path.home() / ".hermes"))
+        configured_home = os.environ.get("HERMES_HOME")
+        if configured_home:
+            return Path(configured_home)
+        return Path.home() / ".hermes"
 
 
 def skill_target_path() -> Path:
@@ -54,11 +73,33 @@ def install_skill_file() -> Path:
     if not BUNDLED_SKILL.is_file():
         raise FileNotFoundError(f"bundled skill missing at {BUNDLED_SKILL}")
     target = skill_target_path()
-    text = BUNDLED_SKILL.read_text(encoding="utf-8")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    if not target.is_file() or target.read_text(encoding="utf-8") != text:
-        target.write_text(text, encoding="utf-8")
-        logger.info("hermes-widget: installed skill at %s", target)
+    _atomic_text(target, BUNDLED_SKILL.read_text(encoding="utf-8"))
+    logger.info("hermes-widget: installed skill at %s", target)
+    return target
+
+
+def install_startup_hook() -> Path:
+    """Install one idempotent gateway:startup hook for the widget server."""
+    if not BUNDLED_HOOK.is_file():
+        raise FileNotFoundError(f"bundled gateway hook missing at {BUNDLED_HOOK}")
+    target = _hermes_home() / "hooks" / HOOK_NAME
+    manifest = (
+        "name: hermes-widget-startup\n"
+        "description: Start the personal Hermes widget server once on gateway startup.\n"
+        "events: [gateway:startup]\n"
+    )
+    _atomic_text(target / "HOOK.yaml", manifest)
+    _atomic_text(target / "handler.py", BUNDLED_HOOK.read_text(encoding="utf-8"))
+    return target
+
+
+def write_server_config(host: str = "127.0.0.1", port: int = 8788) -> Path:
+    """Write the non-secret runtime config consumed by the startup hook."""
+    home = _hermes_home()
+    binary = os.environ.get("HERMES_BIN") or shutil.which("hermes") or "hermes"
+    target = home / "widget" / "server.json"
+    value = {"hermesBin": binary, "home": str(home), "host": host, "port": port}
+    _atomic_text(target, json.dumps(value, indent=2, sort_keys=True) + "\n")
     return target
 
 
@@ -66,13 +107,15 @@ def routine_prompt(widget_id: str = store.DEFAULT_WIDGET_ID) -> str:
     """The unattended prompt that makes the agent rebuild the widget."""
     return (
         "Refresh the user's home-screen Hermes widget. "
-        f"Load the widget skill with skill_view('{SKILL_NAME}') first, then decide what the "
-        "user would genuinely want to see right now from the context you already have: recent "
-        "sessions, memory, and any connected calendar, email, or task sources. "
-        f"Call widget_update with widget_id='{widget_id}' and a complete, schema-valid v2 "
-        "layout: a short meaningful header, then two to four focused items. Keep it under 100 "
-        "nodes, use https:// for any image, and never invent data or filler - a short accurate "
-        "summary beats a padded one. This runs unattended, so do not ask the user a question."
+        f"Load the widget skill with skill_view('{SKILL_NAME}') first, then decide whether "
+        "the context already contains a genuinely useful update for the user right now: "
+        "recent sessions, memory, or a connected calendar, email, or task source. "
+        "If and only if there is a useful, supported update, call widget_publish with "
+        f"widget_id='{widget_id}', a truthful title and summary, and exactly one of text, "
+        "safe static SVG, or a bounded local PNG/JPEG/WebP path. Never invent data or filler, "
+        "never republish an identical revision, and do nothing when nothing useful changed. "
+        "A successful publish means the host stored a revision, not that the phone rendered "
+        "or the user noticed it. This runs unattended, so do not ask the user a question."
     )
 
 
@@ -113,9 +156,14 @@ def install_routine(
         "skills": [SKILL_NAME],
         "deliver": "local",
     }
-    existing = find_routine(name)
+    existing_jobs = [
+        job for job in jobs.list_jobs() if job.get("name") == name
+    ]
+    existing = existing_jobs[0] if existing_jobs else None
     if existing is not None:
         updated = jobs.update_job(existing["id"], updates)
+        for duplicate in existing_jobs[1:]:
+            jobs.remove_job(duplicate["id"])
         return updated or existing
     return jobs.create_job(
         prompt=prompt,
@@ -129,7 +177,8 @@ def install_routine(
 def remove_routine(name: str = ROUTINE_NAME) -> bool:
     """Remove the refresh job. False when none was installed."""
     jobs = _cron_jobs()
-    existing = find_routine(name)
-    if existing is None:
-        return False
-    return bool(jobs.remove_job(existing["id"]))
+    existing_jobs = [job for job in jobs.list_jobs() if job.get("name") == name]
+    removed = False
+    for job in existing_jobs:
+        removed = bool(jobs.remove_job(job["id"])) or removed
+    return removed
