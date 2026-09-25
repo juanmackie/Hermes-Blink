@@ -1,0 +1,25 @@
+name: hermes-widget
+version: 3.0.0
+description: >-
+  Hermes personal visual channel: accessible text, safe static SVG, validated
+  local raster media, legacy v2 layouts, private authenticated delivery, and
+  periodic refresh.
+author: Hermes Widget contributors
+kind: standalone
+entrypoint: __init__.py
+provides_tools:
+  - widget_update
+  - widget_validate
+  - widget_list
+  - widget_read_events
+  - widget_mint_pairing_code
+  - widget_setup
+  - widget_publish
+  - widget_status
+provides_commands:
+  - widget
+metadata:
+  transport: http
+  default_port: 8788
+  transport_version: v1
+  layout_contract: v2

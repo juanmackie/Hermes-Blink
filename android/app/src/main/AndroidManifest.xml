@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <application
+        android:label="Hermes Widget"
+        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="true"
+        android:usesCleartextTraffic="false"
+        tools:replace="android:usesCleartextTraffic"
+        android:theme="@style/AppTheme">
+
+        <activity android:name=".MainActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+        <activity android:name=".SettingsActivity" android:exported="true" />
+        <activity android:name=".config.PairingActivity" android:exported="true" />
+        <activity android:name=".PublicationActivity" android:exported="false" />
+
+        <activity android:name=".config.WidgetConfigActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
+            </intent-filter>
+        </activity>
+
+        <receiver android:name=".widget.HermesWidgetReceiver" android:exported="true" android:label="Hermes">
+            <intent-filter>
+                <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
+                <action android:name="com.you.hermeswidget.REFRESH" />
+            </intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/hermes_widget_info" />
+        </receiver>
+
+
+    </application>
+</manifest>

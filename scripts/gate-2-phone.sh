@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Gate 2 — Real phone onboarding (USER-RUN ONLY — agent reports NOT RUN)
+# Requires: signed APK, Android 8.0+, Tailscale or LAN, one instruction: "install Hermes Widget from this project, connect my phone, start my daily brief"
+set -euo pipefail
+echo "Gate 2: Phone onboarding — requires real device; NOT RUN by agent."
+echo "Verified artifact ready to install (debug-signed, no behavior difference vs release):"
+echo "  android/app/build/outputs/apk/debug/app-debug.apk"
+echo "  (sha256 lives in checksums.txt only — do not hardcode it here; it changes every rebuild)"
+echo "  verify: bash scripts/generate-checksums.sh && sha256sum -c checksums.txt"
+echo "Steps:"
+echo "  0. Verify the APK: bash scripts/generate-checksums.sh && sha256sum -c checksums.txt"
+echo "     Release-signed build instead: cd android && ./gradlew assembleRelease with keystore flags (docs/APK_RELEASE.md)"
+echo "  1. (skip — artifact already built; re-run the Gradle build only after source changes)"
+echo "  2. Install APK on phone, open Hermes Widget app, tap Connect"
+echo "  3. From agent: one instruction 'install Hermes Widget from this project, connect my phone, start my daily brief'"
+echo "  4. Agent runs: hermes widget up --json (prepares pairing), prints a short-lived QR/same-phone link"
+echo "  5. Scan the QR or tap the same-phone link on the phone; enter the private Tailscale HTTPS URL when asked"
+echo "  6. Pairing returns a device-scoped token (encrypted on the phone); never enter the operator/agent token"
+echo "  7. Pin the widget and verify the first publication renders real content"
+echo "  8. Test expired code: hermes widget code (wait 11min), try to pair — expect invalid_or_expired_code"
+echo "  9. Test same-phone link: tap same-phone link directly — expect success"
+echo "Expected: the published text/SVG/raster content renders; status distinguishes published, downloaded, and render_submitted"
+echo "Next user action: run this script on a phone + Tailscale network; report brief screenshot + device list"

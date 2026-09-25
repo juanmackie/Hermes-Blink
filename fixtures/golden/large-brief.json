@@ -1,0 +1,36 @@
+{
+  "version": 2,
+  "widgetId": "hermes-brief",
+  "title": "Morning Brief",
+  "ttlSeconds": 21600,
+  "accentColor": "#7C3AED",
+  "updatedAt": "2026-09-16T07:30:00Z",
+  "root": {
+    "type": "column",
+    "spacing": 12,
+    "padding": { "top": 16, "bottom": 16, "start": 16, "end": 16 },
+    "children": [
+      { "type": "text", "value": "Good morning", "style": "title" },
+      { "type": "text", "value": "Two things need you today", "style": "caption" },
+      {
+        "type": "row",
+        "spacing": 16,
+        "children": [
+          { "type": "stat", "label": "Next", "value": "09:30", "id": "stat-next" },
+          { "type": "stat", "label": "Open loops", "value": "3", "delta": "-2", "deltaDirection": "down", "weight": 1, "id": "stat-loops" }
+        ]
+      },
+      { "type": "divider", "thickness": 1 },
+      {
+        "type": "list",
+        "maxItems": 3,
+        "children": [
+          { "type": "list_item", "id": "item-1", "title": "Reply to Ana", "subtitle": "Draft is ready", "trailingText": "2h", "action": { "kind": "review", "itemId": "item-1" } },
+          { "type": "list_item", "id": "item-2", "title": "Approve deploy", "subtitle": "Widget v2.1", "action": { "kind": "dismiss", "itemId": "item-2" } }
+        ]
+      },
+      { "type": "spacer", "size": 8 },
+      { "type": "text", "value": "Updated 1h ago", "style": "caption" }
+    ]
+  }
+}

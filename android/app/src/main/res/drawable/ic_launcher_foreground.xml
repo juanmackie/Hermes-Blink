@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Simple "H" monogram -->
+    <path
+        android:fillColor="#C6A0F6"
+        android:pathData="M36,30 L44,30 L44,50 L64,50 L64,30 L72,30 L72,78 L64,78 L64,57 L44,57 L44,78 L36,78 Z" />
+</vector>

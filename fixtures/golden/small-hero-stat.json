@@ -1,0 +1,18 @@
+{
+  "version": 2,
+  "widgetId": "hermes-brief",
+  "title": "Focus",
+  "ttlSeconds": 3600,
+  "accentColor": "#0A84FF",
+  "updatedAt": "2026-09-16T07:30:00Z",
+  "root": {
+    "type": "column",
+    "spacing": 8,
+    "padding": { "top": 12, "bottom": 12, "start": 12, "end": 12 },
+    "children": [
+      { "type": "text", "value": "Next meeting", "style": "caption" },
+      { "type": "stat", "label": "Standup", "value": "09:30", "id": "hero" },
+      { "type": "text", "value": "in 40 min", "style": "caption" }
+    ]
+  }
+}

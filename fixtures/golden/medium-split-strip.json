@@ -1,0 +1,48 @@
+{
+  "version": 2,
+  "widgetId": "hermes-brief",
+  "title": "Today",
+  "ttlSeconds": 1800,
+  "accentColor": "#30D158",
+  "updatedAt": "2026-09-16T07:30:00Z",
+  "root": {
+    "type": "column",
+    "spacing": 8,
+    "padding": { "top": 12, "bottom": 12, "start": 12, "end": 12 },
+    "children": [
+      {
+        "type": "row",
+        "spacing": 12,
+        "children": [
+          {
+            "type": "column",
+            "spacing": 4,
+            "weight": 1,
+            "children": [
+              { "type": "text", "value": "Steps", "style": "caption" },
+              { "type": "text", "value": "8,432", "style": "title" },
+              { "type": "text", "value": "goal 10,000", "style": "caption" }
+            ]
+          },
+          {
+            "type": "column",
+            "spacing": 4,
+            "alignment": "end",
+            "weight": 1,
+            "children": [
+              { "type": "text", "value": "Sleep", "style": "caption", "alignment": "end" },
+              { "type": "text", "value": "7h 12m", "style": "title", "alignment": "end" }
+            ]
+          }
+        ]
+      },
+      { "type": "divider", "thickness": 1, "color": "#E5E5EA" },
+      {
+        "type": "progress",
+        "value": 0.84,
+        "label": "Daily activity",
+        "showPercent": true
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+# Reference unit template. Do not copy this file verbatim.
+# scripts/bootstrap.py generates a unit using the detected Hermes executable,
+# persistent Hermes home, host, and port when a systemd user manager is available.
+#
+# Equivalent generated fields:
+#   ExecStart=<detected-hermes> widget serve --host 127.0.0.1 --port 8788
+#   Environment=HERMES_HOME=<detected-home>
+#   WorkingDirectory=<detected-home>
+
+[Unit]
+Description=Hermes personal widget server
+After=network-online.target
+
+[Service]
+Type=simple
+ExecStart=@HERMES_BIN@ widget serve --host 127.0.0.1 --port 8788
+Environment=HERMES_HOME=@HERMES_HOME@
+WorkingDirectory=@HERMES_HOME@
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

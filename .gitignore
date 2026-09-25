@@ -1,0 +1,65 @@
+# Hermes Widget v2 — ignored runtime and build artifacts
+# Databases, tokens, logs, caches, and APK outputs are never committed or released.
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+*.db.bak.*
+agent_token
+device_token.txt
+widget.db
+hermes.db
+*.keystore
+*.jks
+*.p8
+*.log
+*.tmp
+.tmp/
+.tmp-wc/
+nul
+
+probe*.png
+shot-*.png
+__pycache__/
+.pytest_cache/
+*.pyc
+*.pyo
+.mypy_cache/
+.ruff_cache/
+node_modules/
+.gradle/
+build/
+android/build/
+android/.gradle/
+android/.kotlin/
+android/app/build/
+android/app/release/
+android/local.properties
+android/signing.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+release-*.tar.gz
+release-*.zip
+checksums.txt
+# plugin test scratch
+*.preview.html
+.pi/
+.pi-subagents/
+hermes-plugin/hermes-widget/_testdata/
+hermes-plugin/hermes-widget/_tmp_accept/
+hermes-plugin/hermes-widget/**/__pycache__/
+hermes-plugin/hermes-widget/tests/_testdata/
+backend/data/*.db
+# Local nested checkout; do not include it in the public repository.
+Hermes Blink/

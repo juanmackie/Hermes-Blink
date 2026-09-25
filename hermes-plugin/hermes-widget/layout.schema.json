@@ -1,0 +1,362 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://hermes-widget/docs/layout.schema.json",
+  "title": "Hermes Widget Layout",
+  "description": "v2 contract (reduced). Keep: column,row,box,list,text,divider,spacer,badge,stat,progress,calendar(agenda),button,list_item. Removed: chart,image,icon,toggle,calendar-month,url/deeplink actions. Transport stays /v1/*; layout version is 2. 64KB/100-node caps.",
+  "type": "object",
+  "required": ["version", "widgetId", "root"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "const": 2,
+      "description": "Layout contract version (2). Mismatch → device shows upgrade prompt."
+    },
+    "widgetId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "description": "Stable identifier for this widget instance."
+    },
+    "updatedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "ISO-8601 timestamp of last layout push."
+    },
+    "title": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "Optional widget title."
+    },
+    "ttlSeconds": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 86400,
+      "description": "Cache lifetime hint."
+    },
+    "accentColor": {
+      "type": "string",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "description": "Optional theme accent color (hex only)."
+    },
+    "root": {
+      "$ref": "#/definitions/node",
+      "description": "Root node (exactly one)."
+    }
+  },
+  "additionalProperties": false,
+  "definitions": {
+    "node": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "column", "row", "box", "list",
+            "text", "divider", "spacer", "badge",
+            "calendar", "stat", "progress",
+            "button", "list_item"
+          ]
+        },
+        "id": { "type": "string", "maxLength": 128 },
+        "weight": { "type": "number", "minimum": 0 },
+        "padding": {
+          "type": "object",
+          "properties": {
+            "top":    { "type": "integer", "minimum": 0 },
+            "bottom": { "type": "integer", "minimum": 0 },
+            "start":  { "type": "integer", "minimum": 0 },
+            "end":    { "type": "integer", "minimum": 0 }
+          }
+        },
+        "alignment": {
+          "type": "string",
+          "enum": ["start", "center", "end", "fill"]
+        }
+      },
+      "allOf": [
+        { "$ref": "#/definitions/nodeBase" },
+        { "$ref": "#/definitions/nodeSpecifics" }
+      ]
+    },
+    "nodeBase": {
+      "type": "object",
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string" },
+        "id": { "type": "string" },
+        "weight": { "type": "number" },
+        "padding": { "$ref": "#/definitions/padding" },
+        "alignment": { "type": "string" }
+      }
+    },
+    "padding": {
+      "type": "object",
+      "properties": {
+        "top":    { "type": "integer", "minimum": 0 },
+        "bottom": { "type": "integer", "minimum": 0 },
+        "start":  { "type": "integer", "minimum": 0 },
+        "end":    { "type": "integer", "minimum": 0 }
+      }
+    },
+    "hexColor": {
+      "type": "string",
+      "pattern": "^#([0-9A-Fa-f]{3}|[0-9A-Fa-f]{6})$",
+      "description": "3- or 6-digit hex only. An 8-digit alpha hex is ignored by the device rather than failing, but the push is rejected here."
+    },
+    "typography": {
+      "type": "object",
+      "description": "The closed `style` scale. Typo.kt, SKILL.md and scripts/widget-preview.py all read these numbers; scripts/check-contract-parity.py fails if any of them disagree.",
+      "properties": {
+        "title":   { "sizeSp": 18, "weight": "bold",   "color": "#000000" },
+        "body":    { "sizeSp": 14, "weight": "normal", "color": "#000000" },
+        "label":   { "sizeSp": 12, "weight": "medium", "color": "#000000" },
+        "caption": { "sizeSp": 11, "weight": "normal", "color": "#8E8E93" }
+      },
+      "additionalProperties": false
+    },
+    "palette": {
+      "type": "object",
+      "description": "Semantic colours shared by the device (Typo.kt), the renderer default and the offline preview. Not a per-node setting; node `color` fields override them.",
+      "properties": {
+        "primary":   { "const": "#000000" },
+        "secondary": { "const": "#8E8E93" },
+        "success":   { "const": "#34C759" },
+        "danger":    { "const": "#FF3B30" },
+        "hairline":  { "const": "#E5E5EA" },
+        "accent":    { "const": "#7C3AED" }
+      },
+      "additionalProperties": false
+    },
+    "spacing": {
+      "type": "object",
+      "description": "The rhythm the preview and the reference layouts follow (dp).",
+      "properties": {
+        "containerSpacing": { "const": 8 },
+        "rootPadding": { "const": 12 }
+      },
+      "additionalProperties": false
+    },
+    "nodeSpecifics": {
+      "oneOf": [
+        {
+          "if": { "properties": { "type": { "const": "column" } } },
+          "then": {
+            "properties": {
+              "children": {
+                "type": "array",
+                "items": { "$ref": "#/definitions/node" },
+                "minItems": 1,
+                "maxItems": 100
+              },
+              "spacing": { "type": "integer", "minimum": 0, "maximum": 64 },
+              "alignment": { "type": "string" }
+            },
+            "required": ["children"]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "row" } } },
+          "then": {
+            "properties": {
+              "children": {
+                "type": "array",
+                "items": { "$ref": "#/definitions/node" },
+                "minItems": 1,
+                "maxItems": 20
+              },
+              "spacing": { "type": "integer", "minimum": 0, "maximum": 64 },
+              "alignment": { "type": "string" }
+            },
+            "required": ["children"]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "box" } } },
+          "then": {
+            "properties": {
+              "children": {
+                "type": "array",
+                "items": { "$ref": "#/definitions/node" },
+                "minItems": 1,
+                "maxItems": 100
+              },
+              "alignment": { "type": "string" }
+            },
+            "required": ["children"]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "list" } } },
+          "then": {
+            "properties": {
+              "children": {
+                "type": "array",
+                "items": { "$ref": "#/definitions/node" },
+                "maxItems": 100
+              },
+              "maxItems": { "type": "integer", "minimum": 1, "maximum": 50 }
+            },
+            "required": ["children"]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "text" } } },
+          "then": {
+            "properties": {
+              "value": { "type": "string", "minLength": 1, "maxLength": 500 },
+              "style": {
+                "type": "string",
+                "enum": ["title", "body", "label", "caption"]
+              },
+              "maxLines": { "type": "integer", "minimum": 1, "maximum": 50 },
+              "color": { "$ref": "#/definitions/hexColor" },
+              "alignment": { "type": "string" }
+            },
+            "required": ["value"]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "divider" } } },
+          "then": {
+            "properties": {
+              "thickness": { "type": "integer", "minimum": 1, "maximum": 16, "default": 1 },
+              "color": { "$ref": "#/definitions/hexColor" }
+            }
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "spacer" } } },
+          "then": {
+            "properties": {
+              "size": { "type": "integer", "minimum": 1, "maximum": 256 }
+            },
+            "required": ["size"]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "badge" } } },
+          "then": {
+            "properties": {
+              "text": { "type": "string", "minLength": 1, "maxLength": 50 },
+              "color": { "$ref": "#/definitions/hexColor" }
+            },
+            "required": ["text"]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "calendar" } } },
+          "then": {
+            "properties": {
+              "mode": { "type": "string", "enum": ["agenda"] },
+              "events": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["title"],
+                  "properties": {
+                    "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+                    "start": { "type": "string", "format": "date-time" },
+                    "end": { "type": "string", "format": "date-time" },
+                    "color": { "$ref": "#/definitions/hexColor" }
+                  }
+                },
+                "maxItems": 50
+              },
+              "maxItems": { "type": "integer", "minimum": 1, "maximum": 50 }
+            },
+            "required": ["events"]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "stat" } } },
+          "then": {
+            "properties": {
+              "label": { "type": "string", "maxLength": 50 },
+              "value": { "type": "string", "minLength": 1, "maxLength": 50 },
+              "delta": { "type": "string", "maxLength": 20 },
+              "deltaDirection": {
+                "type": "string",
+                "enum": ["up", "down", "flat"]
+              },
+              "color": {
+                "allOf": [{ "$ref": "#/definitions/hexColor" }],
+                "description": "Overrides the hero value ink; the label stays secondary."
+              }
+            },
+            "required": ["label", "value"]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "progress" } } },
+          "then": {
+            "properties": {
+              "value": { "type": "number", "minimum": 0, "maximum": 1 },
+              "label": { "type": "string", "maxLength": 50 },
+              "showPercent": { "type": "boolean" }
+            },
+            "required": ["value"]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "button" } } },
+          "then": {
+            "properties": {
+              "label": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "style": {
+                "type": "string",
+                "enum": ["filled", "tonal", "outlined"]
+              },
+              "action": { "$ref": "#/definitions/action" }
+            },
+            "required": ["label"]
+          }
+        },
+        {
+          "if": { "properties": { "type": { "const": "list_item" } } },
+          "then": {
+            "properties": {
+              "title": { "type": "string", "minLength": 1, "maxLength": 200 },
+              "subtitle": { "type": "string", "maxLength": 200 },
+              "trailingText": { "type": "string", "maxLength": 50 },
+              "action": { "$ref": "#/definitions/action" }
+            },
+            "required": ["title"]
+          }
+        }
+      ]
+    },
+    "action": {
+      "type": "object",
+      "required": ["kind"],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": ["event", "refresh", "dismiss", "review"]
+        },
+        "event": { "type": "string", "maxLength": 200 },
+        "payload": { "type": "object" },
+        "itemId": { "type": "string", "maxLength": 128 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "kind": { "const": "event" } } },
+          "then": { "required": ["event"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "refresh" } } },
+          "then": { }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "dismiss" } } },
+          "then": { "required": ["itemId"] }
+        },
+        {
+          "if": { "properties": { "kind": { "const": "review" } } },
+          "then": { "required": ["itemId"] }
+        }
+      ],
+      "additionalProperties": false
+    }
+  }
+}

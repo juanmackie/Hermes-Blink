@@ -1,0 +1,9 @@
+<resources>
+    <string name="app_name">Hermes Widget</string>
+    <string name="status_disconnected">Not connected — connect to your Hermes agent widget server</string>
+    <string name="backend_url_hint">Private Hermes URL (e.g. https://hermes.example.ts.net)</string>
+    <string name="pairing_instructions">Enter your private Hermes widget address and the short-lived pairing code created by `hermes widget code`. The phone never needs the operator token.</string>
+    <string name="pairing_code_hint">Pairing code (ABCD-1234)</string>
+    <string name="pair_device">Pair phone</string>
+    <string name="connect">Pair or update</string>
+</resources>

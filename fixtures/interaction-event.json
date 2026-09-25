@@ -1,0 +1,8 @@
+{
+  "widgetId": "hermes-brief",
+  "deviceId": "test-device-123",
+  "event": "dismiss",
+  "payload": { "itemId": "item-2" },
+  "clientEventId": "evt-9f3a-001",
+  "createdAt": "2026-09-16T07:35:00Z"
+}
