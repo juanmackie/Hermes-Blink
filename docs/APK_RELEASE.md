@@ -12,8 +12,8 @@ The debug APK was rebuilt and tested on 2026-09-25 with JDK 21:
 | Field | Value |
 | --- | --- |
 | Artifact | `android/app/build/outputs/apk/debug/app-debug.apk` |
-| Size | 7,093,127 bytes |
-| SHA-256 | `27856713ed871754f19cde157bf946780bd441713a5cbeed98135956431aa768` |
+| Size | 7,559,283 bytes |
+| SHA-256 | `7ceac6b95fd6117553b42ded384f87b6b732dbc7adbd47eafe26911035d60527` |
 | Package | `com.you.hermeswidget` |
 | Version | `0.1.0` (`versionCode=1`) |
 | SDK range | minSdk 26, targetSdk 35 |
@@ -37,6 +37,42 @@ PY
 
 The release task intentionally fails when signing values are incomplete rather than leaving an
 unsigned artifact that could be mistaken for the personal release.
+
+## Build without Android Studio
+
+A headless host only needs Temurin JDK 21 and the Android command-line tools:
+
+```sh
+SDK="$HOME/android-sdk"
+mkdir -p "$SDK/cmdline-tools"
+curl -fsSL -o /tmp/cmdline-tools.zip \
+  https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+# `unzip` may be missing on minimal hosts; Python's zipfile works.
+SDK="$SDK" python - <<'PY'
+import glob, os, stat, zipfile
+sdk = os.environ["SDK"]
+with zipfile.ZipFile("/tmp/cmdline-tools.zip") as archive:
+    archive.extractall(f"{sdk}/cmdline-tools")
+# zipfile drops exec bits; without this sdkmanager silently fails to run.
+for path in glob.glob(f"{sdk}/cmdline-tools/**/bin/*", recursive=True):
+    os.chmod(path, os.stat(path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+PY
+mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest" 2>/dev/null || true
+chmod +x "$SDK/cmdline-tools/latest/bin/"*
+yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
+  "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+export ANDROID_SDK_ROOT="$SDK" ANDROID_HOME="$SDK"
+cd android && ./gradlew testDebugUnitTest lintDebug assembleDebug
+```
+
+On a constrained container (for example `pids.max=256`), Gradle's default parallelism can
+exhaust the process limit and `:app:testDebugUnitTest` dies with `OutOfMemoryError: unable to
+create native thread` while `assembleDebug` succeeds. Serialise and cap the heap:
+
+```sh
+./gradlew testDebugUnitTest lintDebug assembleDebug \
+  --max-workers=1 -Dorg.gradle.jvmargs=-Xmx1536m
+```
 
 ## Build the personal release
 

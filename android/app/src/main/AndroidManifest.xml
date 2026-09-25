@@ -20,7 +20,14 @@
         </activity>
 
         <activity android:name=".SettingsActivity" android:exported="true" />
-        <activity android:name=".config.PairingActivity" android:exported="true" />
+        <activity android:name=".config.PairingActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="hermeswidget" android:host="pair" />
+            </intent-filter>
+        </activity>
         <activity android:name=".PublicationActivity" android:exported="false" />
 
         <activity android:name=".config.WidgetConfigActivity" android:exported="true">

@@ -188,6 +188,65 @@ cannot show real font metrics. The device stays authoritative.
 - `spacing`: 0–64; `divider.thickness`: 1–16 (default 1); `spacer.size`: 1–256 (required).
 - `action.payload`: an object; `action.itemId` ≤128 chars.
 
+## Publication channel (separate store)
+
+`/v1/widgets/<id>/publication` is a different store from `/v1/widgets/<id>` (the v2
+layout). Publishing to one does not update the other. `GET /v1/widgets/<id>` echoes a
+`publication: {revision, publishedAt, kind, state}` pointer so a raw API consumer can see
+the current publication instead of concluding a publish was lost. `hermes widget status`
+and `widget_status` report both channels.
+
+Every revision is retained in `publication_revisions`. A revision replaced before a device
+fetched it is marked `superseded` and appears in that device's `skippedRevisions`, so
+"waiting" and "lost" are different states. Each publication requires `title` and `summary`
+and exactly one of `text`, inline `svg`, or a local PNG/JPEG/WebP `file_path`.
+
+### Freshness vs expiry
+
+| Field | Channel | Meaning |
+| --- | --- | --- |
+| `ttlSeconds` (≤86400) | v2 layout | Device-side stale banner; the last good layout keeps rendering. |
+| `expiresAt` / `ttl_seconds` (≤31536000) | publication | Server-side expiry; an expired revision is not delivered. |
+| `maxAgeSeconds` (≤31536000) | publication | Freshness window since `publishedAt`. Once exceeded the server answers `410 publication_stale` and `status` reports `stale`, so content is dropped rather than rendered late. |
+
+`capabilities.layoutMaxTtlSeconds` and `capabilities.publicationMaxTtlSeconds` expose the two
+ceilings explicitly; they are intentionally different windows, not a bug.
+
+### Render surface and fit
+
+The most recent render acknowledgement supplies `render.lastRendered` (`width`, `height`) and
+`render.recommendedAspectRatio`; before the first acknowledgement both are `null`. Images and
+SVG are drawn with `ContentScale.Fit`: letterboxed inside the widget bounds, never cropped or
+stretched. Size visual content near the reported aspect ratio.
+
+### SVG allowlist
+
+`capabilities.svg.allowedElements` and `allowedAttributes` are the exact permitted sets.
+Anything else is **rejected** with an error naming the element or attribute, never silently
+dropped; `ignoredAttributes` is currently empty. Rejected constructs include `script`,
+`foreignObject`, `image`, `use`, `animate`, `style`, `DOCTYPE`/`ENTITY`, `http(s)`/`ftp`
+URLs, and event-handler attributes. `text` is allowed; only generic `font-family` values
+(`sans-serif`, `serif`, `monospace`) are guaranteed on device.
+
+### Events and polling
+
+The event vocabulary is `refresh`, `dismiss`, `review`, `event` (a caller-named event with its
+own `payload`). Emission points:
+
+- `refresh` — tapping the publication fetches now; also a v2 `button` with `kind=refresh`.
+- `dismiss` / `event` — v2 button actions.
+- `review` — opening the publication zoom view.
+
+The phone polls on a `PeriodicWorkRequest` of 15 minutes (`capabilities.pollIntervalSeconds`
+= 900), on app open, and after a tap. Android WorkManager batches and defers work, so the
+observed gap between revisions can be longer than nominal; `status` exposes `lastPollAt`,
+`lastFetchedRevision`, and `skippedRevisions` per device so waiting and lost are distinct.
+
+Push nudge (opt-in, not shipped): for sub-poll delivery of time-sensitive revisions, an
+operator can add an FCM data message on publish. That requires a Firebase project and
+`google-services.json`, so the server ships no Firebase dependency by default; the
+tap-to-refresh and `maxAgeSeconds` paths above are the dependency-free mitigations.
+
 ## Forward compatibility
 
 Unknown node types are rejected in validation (server) and skipped by the renderer (device).

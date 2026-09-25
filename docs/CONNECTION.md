@@ -70,6 +70,12 @@ The Android client already speaks this contract. Do not change paths.
          -> 200 {"deviceId":"...","token":"dvc_...","widgets":["hermes-brief"]}
          -> 400 {"error":"invalid_or_expired_code"}
 
+    PATCH /v1/device
+         Auth: paired DEVICE token only (a device may rename itself).
+         Body: {"label":"Kitchen tablet"}
+         -> 200 {"deviceId":"...","label":"Kitchen tablet"}
+         -> 403 for an agent/operator token; 400 for an empty or missing label
+
     GET  /v1/widgets
          Auth: DEVICE or AGENT token.
          -> 200 {"widgets":["hermes-brief", ...]}
@@ -83,10 +89,11 @@ The Android client already speaks this contract. Do not change paths.
          -> 200 <publication envelope, ETag, Cache-Control: private, no-cache>
          -> 304 when If-None-Match matches the current publication revision
          -> 404 {"error":"unknown_publication"}
+         -> 410 {"error":"publication_stale"} when maxAgeSeconds has elapsed
 
     POST /v1/widgets/<widget_id>/publication
          Auth: AGENT token.
-         Body: {"title":"...","summary":"...","text":"..."} or
+         Body: {"title":"...","summary":"...","text":"...","max_age_seconds":600} or
                {"title":"...","summary":"...","svg":"<svg>...</svg>"}
          -> 200 <publication envelope with monotonically increasing revision>
          -> 400 invalid_publication | 413 publication_too_large | 429 rate_limited
@@ -105,7 +112,7 @@ The Android client already speaks this contract. Do not change paths.
 
     GET  /v1/widgets/<widget_id>
          Auth: DEVICE or AGENT token.
-         -> 200 <legacy v2 layout envelope, application/json>
+         -> 200 <legacy v2 layout envelope + additive publication pointer, application/json>
          -> 404 {"error":"unknown_widget"}
 
     PUT  /v1/widgets/<widget_id>
@@ -125,6 +132,11 @@ The Android client already speaks this contract. Do not change paths.
 
 All error bodies are JSON: `{"error":"<code>","detail":"<human text>"}`. Auth failures are
 401 {"error":"unauthorized"}. Missing route is 404 {"error":"not_found"}. Wrong method is 405.
+
+The v2 layout (`/v1/widgets/<id>`) and the publication (`/v1/widgets/<id>/publication`) are
+separate stores. Publishing to one does not update the other; the layout response carries an
+additive `publication` pointer so a raw API consumer does not mistake a stale layout for a lost
+publish. Use `hermes widget status` to see both channels and per-device revision history.
 
 ## 5. Auth model
 

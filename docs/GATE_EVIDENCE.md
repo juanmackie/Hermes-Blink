@@ -8,21 +8,24 @@ must be recorded separately.
 
 ### Passing local checks
 
-- `python -m unittest discover -s hermes-plugin/hermes-widget/tests -v` — **61/61 passed**
-  on CPython 3.11.15 (Windows); the same suite is **61/61 passed** on CPython 3.13.14.
+- `python -m unittest discover -s hermes-plugin/hermes-widget/tests -v` — **69/69 passed**
+  on CPython 3.11.15 (Windows); the same suite is **69/69 passed** on CPython 3.13.14.
 - `python -m compileall -q hermes-plugin/hermes-widget scripts` — **passed** on 3.11 and 3.13.
 - `python scripts/check-contract-parity.py` — **passed**.
 - `python scripts/verify-cli-local.py` — **0 failures** (CLI verbs, redaction,
   upgrade/rollback, contract parity).
-- Android with JDK 21:
+- Android with JDK 21 (verified 2026-09-25 after the v3.0.2 source changes):
 
   ```sh
   cd android
   # Set JAVA_HOME to your JDK 21 installation before running Gradle.
-  ./gradlew testDebugUnitTest lintDebug assembleDebug --rerun-tasks
+  ./gradlew testDebugUnitTest lintDebug assembleDebug \
+    --max-workers=1 -Dorg.gradle.jvmargs=-Xmx1536m
   ```
 
-  **passed**: Kotlin unit tests, lint, and debug APK assembly.
+  **passed**: Kotlin unit tests (including `PairingLinkTest`), lint, and debug APK
+  assembly. Rebuilt debug APK: 7,559,283 bytes, sha256
+  `7ceac6b95fd6117553b42ded384f87b6b732dbc7adbd47eafe26911035d60527`.
 - The current checkout contains a debug-signed APK at
   `android/app/build/outputs/apk/debug/app-debug.apk`.
 - The Android package is installed on the attached test device as `com.you.hermeswidget`
@@ -52,10 +55,23 @@ and verify `/v1/health` before pairing.
   launcher and POSIX `start_new_session` branches, without mutating Python's process-wide
   `os.name`.
 - `.github/workflows/ci.yml` now runs the suite on Ubuntu 24.04 with Python 3.11 and 3.13,
-  on `windows-latest` with Python 3.11, plus the secret scan and Android unit tests. CI was
-  configured in this change but **not executed in this environment**.
+  on `windows-latest` with Python 3.11, plus the secret scan and Android unit tests. The Android
+  job no longer uses the deprecated `android-actions/setup-android@v3` (the cause of the three
+  red runs reported on 2026-09-25); it installs `cmdline-tools` directly and caps Gradle
+  workers/heap. CI was configured in this change but **not executed in this environment**.
 - The container/TrueNAS binding and host-side port publish described in the guides were
   **not executed here**; `scripts/gate-*.sh` and the real container remain the evidence path.
+
+### Delivery truthfulness and device identity — verified 2026-09-25
+
+- 8 new regression tests in `hermes-plugin/hermes-widget/tests/test_delivery.py` cover:
+  superseded-revision history and per-device `skippedRevisions`, `lastFetchedRevision`,
+  `maxAgeSeconds` stale drop (`410 publication_stale`), `capabilities` SVG allowlist and
+  render surface, the layout→publication pointer, device label round-trip plus `PATCH /v1/device`
+  authorization, the pairing one-liner, and the layout TTL ceiling.
+- The Kotlin `PairingLinkTest` deep-link parse/round-trip test passes in the local Android
+  build (`testDebugUnitTest`), which also compiles the device-label, rename, deep-link, and
+  tap-event changes.
 
 ### Verification caveats
 

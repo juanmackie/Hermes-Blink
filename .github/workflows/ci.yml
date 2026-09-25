@@ -62,13 +62,25 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with:
           distribution: 'temurin'
           java-version: '21'
-      - uses: android-actions/setup-android@v3
+      - name: Install Android SDK command-line tools
+        run: |
+          SDK="$HOME/android-sdk"
+          mkdir -p "$SDK/cmdline-tools"
+          curl -fsSL -o /tmp/cmdline-tools.zip \
+            https://dl.google.com/android/repository/commandlinetools-linux-11076708_latest.zip
+          python -c "import zipfile; zipfile.ZipFile('/tmp/cmdline-tools.zip').extractall('$SDK/cmdline-tools')"
+          mv "$SDK/cmdline-tools/cmdline-tools" "$SDK/cmdline-tools/latest"
+          chmod +x "$SDK/cmdline-tools/latest/bin/"*
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --sdk_root="$SDK" \
+            "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
       - name: Android unit tests (wrapper only, no local.properties)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew testDebugUnitTest --rerun-tasks
+          ./gradlew testDebugUnitTest --rerun-tasks --max-workers=1 -Dorg.gradle.jvmargs=-Xmx1536m

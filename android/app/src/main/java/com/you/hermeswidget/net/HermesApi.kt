@@ -62,7 +62,7 @@ object HermesApi {
         } catch (e: Exception) { -1 to ("Error: ${e.message}") }
     }
 
-    fun pair(baseUrl: String, code: String): Pair<Int, String?> {
+    fun pair(baseUrl: String, code: String, deviceLabel: String? = null): Pair<Int, String?> {
         val url = URL(baseUrl.trimEnd('/') + "/v1/pair")
         val conn = url.openConnection() as HttpURLConnection
         conn.requestMethod = "POST"
@@ -70,7 +70,10 @@ object HermesApi {
         conn.setRequestProperty("Content-Type", "application/json")
         conn.connectTimeout = 10000
         conn.readTimeout = 10000
-        val body = JSONObject().put("code", code).toString()
+        val body = JSONObject().put("code", code).apply {
+            // A default label makes multiple devices distinguishable in the host CLI.
+            if (!deviceLabel.isNullOrBlank()) put("deviceLabel", deviceLabel)
+        }.toString()
         conn.outputStream.write(body.toByteArray(StandardCharsets.UTF_8))
         return try {
             val c = conn.responseCode
@@ -78,6 +81,31 @@ object HermesApi {
             c to b
         } catch (e: Exception) {
             -1 to ("Error: ${e.message}")
+        }
+    }
+
+    fun renameDevice(baseUrl: String, token: String, label: String): HttpResult {
+        val conn = open(baseUrl, "/v1/device", token, method = "PATCH")
+        return try {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.outputStream.write(
+                JSONObject().put("label", label).toString().toByteArray(StandardCharsets.UTF_8)
+            )
+            val code = conn.responseCode
+            HttpResult(
+                code = code,
+                body = if (code in 200..299) {
+                    conn.inputStream.bufferedReader().use { it.readText() }
+                } else {
+                    null
+                },
+                retryAfterSeconds = retryAfter(conn),
+            )
+        } catch (e: Exception) {
+            HttpResult(-1, error = e.message ?: e.javaClass.simpleName)
+        } finally {
+            conn.disconnect()
         }
     }
 

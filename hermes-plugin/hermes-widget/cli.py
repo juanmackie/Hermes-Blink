@@ -680,12 +680,14 @@ def _pair(args: Any) -> int:
             "serverUrl": server_url,
             "code": code,
             "expiresAt": pairing["expiresAt"],
+            "pairingLine": f"{server_url}  code={code}",
             "instructions": instructions,
         }, indent=2))
         return 0
     print(f"Server URL:   {server_url}")
     print(f"Pairing code: {code}")
     print(f"Expires:      {pairing['expiresAt']}")
+    print(f"Pairing line: {server_url}  code={code}")
     for line in instructions:
         print(f"  - {line}")
     return 0
@@ -708,6 +710,10 @@ def _status(args: Any) -> int:
     restart_required = _restart_required((host, port), None, running)
     widget_id = store.DEFAULT_WIDGET_ID
     widget_present = store.get_widget(widget_id) is not None
+    try:
+        publication = store.publication_status(widget_id)
+    except store.StoreError:
+        publication = {"state": "unknown", "delivery": [], "revisions": []}
     try:
         routine_ok = proactive.find_routine() is not None
     except Exception:
@@ -741,6 +747,12 @@ def _status(args: Any) -> int:
             "probe_port": port,
             "restartRequired": restart_required,
             "restart_required": restart_required,
+            "publicationState": publication.get("state"),
+            "stale": publication.get("stale", False),
+            "pollIntervalSeconds": publication.get("pollIntervalSeconds"),
+            "revisions": publication.get("revisions", []),
+            "delivery": publication.get("delivery", []),
+            "capabilities": publication.get("capabilities"),
         }
         print(json.dumps(payload, indent=2))
         return 0
@@ -762,9 +774,20 @@ def _status(args: Any) -> int:
     else:
         print("Restart:      not required")
     print(f"Routine:      {'installed' if routine_ok else 'not installed (run hermes widget up)'}")
-    for device in devices:
-        st = "revoked" if device.get("revoked") else "active"
-        print(f"  - {device.get('label')} [{st}] last seen {device.get('lastSeenAt') or 'never'}")
+    print(f"Publication:  {publication.get('state', 'unknown')}" + (" (stale)" if publication.get("stale") else ""))
+    poll = publication.get("pollIntervalSeconds")
+    if poll:
+        print(f"Poll:         nominally every {poll // 60} min (WorkManager periodic; actual gaps vary)")
+    for item in publication.get("delivery", []):
+        st = "revoked" if item.get("revoked") else "active"
+        skipped = item.get("skippedRevisions") or []
+        detail = (
+            f" lastFetchedRev={item.get('lastFetchedRevision')}"
+            f" lastPoll={item.get('lastPollAt') or 'never'}"
+        )
+        if skipped:
+            detail += f" superseded-unfetched={skipped}"
+        print(f"  - {item.get('label')} [{st}] {item.get('state')}{detail}")
     return 0
 
 

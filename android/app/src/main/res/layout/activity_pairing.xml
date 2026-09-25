@@ -21,6 +21,14 @@
         android:inputType="textCapCharacters"
         android:layout_marginTop="12dp" />
 
+    <TextView
+        android:id="@+id/pairing_expiry"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="8dp"
+        android:textSize="13sp"
+        android:textColor="#666666" />
+
     <Button
         android:id="@+id/pair_btn"
         android:layout_width="wrap_content"

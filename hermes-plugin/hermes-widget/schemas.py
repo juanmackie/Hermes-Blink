@@ -174,7 +174,17 @@ WIDGET_PUBLISH = {
                 "type": "integer",
                 "minimum": 1,
                 "maximum": 31536000,
-                "description": "Optional expiry lifetime; mutually exclusive with expires_at.",
+                "description": "Optional server-side expiry lifetime; mutually exclusive with expires_at.",
+            },
+            "max_age_seconds": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 31536000,
+                "description": (
+                    "Optional freshness window since publishedAt. A revision older than "
+                    "this when the phone fetches is dropped (410 publication_stale) and "
+                    "reported as stale instead of rendered late."
+                ),
             },
         },
         "required": ["title", "summary"],

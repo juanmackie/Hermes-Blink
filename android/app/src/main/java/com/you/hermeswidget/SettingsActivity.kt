@@ -6,6 +6,7 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
+import com.you.hermeswidget.config.PairingLink
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.ConnectionState
 import com.you.hermeswidget.net.HermesApi
@@ -20,8 +21,35 @@ class SettingsActivity : Activity() {
         val urlEdit = findViewById<EditText>(R.id.backend_url_input)
         val codeEdit = findViewById<EditText>(R.id.pairing_code_input)
         val pairButton = findViewById<Button>(R.id.connect_btn)
+        val labelEdit = findViewById<EditText>(R.id.device_label_input)
+        val renameButton = findViewById<Button>(R.id.rename_btn)
 
         SecureStore.baseUrl(this)?.let { urlEdit.setText(it) }
+        labelEdit.setText(PairingLink.deviceLabel())
+
+        renameButton.setOnClickListener {
+            val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this).orEmpty()
+            val token = SecureStore.token(this)
+            val label = labelEdit.text.toString().trim()
+            if (token.isNullOrBlank()) {
+                Toast.makeText(this, "Pair this phone before renaming it", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            if (label.isEmpty()) {
+                Toast.makeText(this, "Enter a device name", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            Thread {
+                val result = HermesApi.renameDevice(baseUrl, token, label)
+                runOnUiThread {
+                    if (result.code in 200..299) {
+                        Toast.makeText(this, "Renamed to $label", Toast.LENGTH_SHORT).show()
+                    } else {
+                        Toast.makeText(this, "Rename failed (HTTP ${result.code})", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }.start()
+        }
 
         pairButton.setOnClickListener {
             val baseUrl = urlEdit.text.toString().trim().trimEnd('/')
@@ -39,7 +67,7 @@ class SettingsActivity : Activity() {
             Toast.makeText(this, "Pairing securely…", Toast.LENGTH_SHORT).show()
             Thread {
                 val result = runCatching {
-                    val (code, body) = HermesApi.pair(baseUrl, code)
+                    val (code, body) = HermesApi.pair(baseUrl, code, PairingLink.deviceLabel())
                     if (code != 200 || body == null) {
                         error("pairing failed (HTTP $code)")
                     }

@@ -34,6 +34,18 @@ MAX_SVG_DIMENSION = 8_192
 MAX_SVG_ELEMENTS = 2_000
 MAX_SVG_DEPTH = 32
 MAX_TTL_SECONDS = 365 * 24 * 60 * 60
+# The v2 layout channel uses ttlSeconds only as a device-side "stale" banner; the
+# publication channel uses it as a server-side expiry. They are deliberately
+# different windows, so each gets an explicit name rather than one shared number.
+LAYOUT_MAX_TTL_SECONDS = 24 * 60 * 60
+POLL_INTERVAL_SECONDS = 15 * 60
+EVENT_VOCABULARY = ("refresh", "dismiss", "review", "event")
+EVENT_EMISSION_POINTS = {
+    "refresh": "publication tap fetches now; v2 button action kind=refresh",
+    "dismiss": "v2 button action kind=dismiss",
+    "review": "opening the publication zoom view",
+    "event": "v2 button action kind=event with a caller-supplied name in payload",
+}
 
 SUPPORTED_MEDIA_TYPES = ("image/png", "image/jpeg", "image/webp")
 SUPPORTED_EXTENSIONS = (".png", ".jpg", ".jpeg", ".webp")
@@ -51,12 +63,12 @@ _UNSAFE_SVG_VALUE_RE = re.compile(
 )
 _LOCAL_URL_RE = re.compile(r"url\(\s*#([A-Za-z_][A-Za-z0-9_.:-]{0,127})\s*\)", re.IGNORECASE)
 
-_SVG_TAGS = {
+SVG_ALLOWED_ELEMENTS = {
     "svg", "g", "path", "rect", "circle", "ellipse", "line", "polyline",
     "polygon", "text", "tspan", "defs", "linearGradient", "radialGradient",
     "stop", "clipPath", "title", "desc",
 }
-_SVG_ATTRIBUTES = {
+SVG_ALLOWED_ATTRIBUTES = {
     "id", "class", "x", "y", "x1", "y1", "x2", "y2", "cx", "cy", "r",
     "rx", "ry", "width", "height", "d", "points", "transform", "fill",
     "fill-opacity", "fill-rule", "stroke", "stroke-width", "stroke-linecap",
@@ -68,6 +80,9 @@ _SVG_ATTRIBUTES = {
     "stop-opacity", "clip-path", "clipPathUnits", "textLength", "lengthAdjust",
     "rotate", "dx", "dy", "vector-effect", "paint-order", "role", "aria-label", "style",
 }
+# Elements absent from SVG_ALLOWED_ELEMENTS (script, foreignObject, image, use,
+# animate, style, ...) are rejected with an error naming the element, never silently
+# dropped. The same is true for attributes absent from SVG_ALLOWED_ATTRIBUTES.
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
@@ -112,6 +127,7 @@ class PreparedPublication:
     text: str | None
     asset: PreparedAsset | None
     expires_at: str | None
+    max_age_seconds: int | None = None
 
 
 def capabilities() -> dict[str, Any]:
@@ -132,12 +148,57 @@ def capabilities() -> dict[str, Any]:
             "maxElements": MAX_SVG_ELEMENTS,
             "maxDimension": MAX_SVG_DIMENSION,
             "staticSubset": True,
+            "allowedElements": sorted(SVG_ALLOWED_ELEMENTS),
+            "allowedAttributes": sorted(SVG_ALLOWED_ATTRIBUTES),
+            "ignoredAttributes": [],
+            "rejectedConstructs": [
+                "script", "foreignObject", "image", "use", "animate", "style",
+                "DOCTYPE/ENTITY", "http(s) or ftp URLs", "event handler attributes",
+                "attributes absent from allowedAttributes",
+            ],
+            "textAllowed": True,
+            "safeFontFamilies": [
+                "sans-serif", "serif", "monospace",
+            ],
+            "fontNote": (
+                "Only generic families are guaranteed on-device; named families may be "
+                "substituted by the Android renderer."
+            ),
         },
         "titleMaxBytes": MAX_TITLE_BYTES,
         "summaryRequired": True,
         "summaryMaxBytes": MAX_SUMMARY_BYTES,
         "maxTtlSeconds": MAX_TTL_SECONDS,
+        "publicationMaxTtlSeconds": MAX_TTL_SECONDS,
+        "layoutMaxTtlSeconds": LAYOUT_MAX_TTL_SECONDS,
+        "maxAgeSeconds": MAX_TTL_SECONDS,
+        "pollIntervalSeconds": POLL_INTERVAL_SECONDS,
+        "render": {
+            "fit": "contain",
+            "fitMode": "ContentScale.Fit",
+            "note": (
+                "Images and SVG are letterboxed inside the widget bounds; they are never "
+                "cropped or stretched. lastRendered and recommendedAspectRatio are added "
+                "by the server from the most recent render acknowledgement."
+            ),
+        },
+        "events": {
+            "vocabulary": list(EVENT_VOCABULARY),
+            "emissionPoints": EVENT_EMISSION_POINTS,
+        },
     }
+
+
+def _normalize_max_age(max_age_seconds: int | None) -> int | None:
+    if max_age_seconds is None:
+        return None
+    if isinstance(max_age_seconds, bool) or not isinstance(max_age_seconds, int):
+        raise PublicationInputError("max_age_seconds must be an integer")
+    if not 1 <= max_age_seconds <= MAX_TTL_SECONDS:
+        raise PublicationInputError(
+            f"max_age_seconds must be between 1 and {MAX_TTL_SECONDS}"
+        )
+    return max_age_seconds
 
 
 def prepare_publication(
@@ -149,11 +210,13 @@ def prepare_publication(
     file_path: str | os.PathLike[str] | None = None,
     expires_at: str | datetime | None = None,
     ttl_seconds: int | None = None,
+    max_age_seconds: int | None = None,
     now: datetime | None = None,
 ) -> PreparedPublication:
     """Validate exactly one content source and return bounded publication data."""
     title_value = _bounded_text(title, "title", MAX_TITLE_BYTES, required=True, single_line=True)
     summary_value = _bounded_text(summary, "summary", MAX_SUMMARY_BYTES, required=True)
+    max_age = _normalize_max_age(max_age_seconds)
 
     sources = [("text", text), ("svg", svg), ("file", file_path)]
     supplied = [(kind, value) for kind, value in sources if value is not None]
@@ -164,7 +227,7 @@ def prepare_publication(
     expiry = _normalize_expiry(expires_at, ttl_seconds, now or datetime.now(timezone.utc))
     if kind == "text":
         text_value = _bounded_text(value, "text", MAX_TEXT_BYTES, required=True)
-        return PreparedPublication(title_value, summary_value, "text", text_value, None, expiry)
+        return PreparedPublication(title_value, summary_value, "text", text_value, None, expiry, max_age)
 
     if kind == "svg":
         if not isinstance(value, str):
@@ -178,6 +241,7 @@ def prepare_publication(
             None,
             PreparedAsset("image/svg+xml", raw, width, height, hashlib.sha256(raw).hexdigest()),
             expiry,
+            max_age,
         )
 
     if not isinstance(value, (str, os.PathLike)):
@@ -197,6 +261,7 @@ def prepare_publication(
         None,
         PreparedAsset(media_type, data, width, height, hashlib.sha256(data).hexdigest()),
         expiry,
+        max_age,
     )
 
 
@@ -242,13 +307,13 @@ def validate_svg(raw: bytes) -> tuple[int, int]:
         if depth > MAX_SVG_DEPTH:
             raise PublicationInputError(f"SVG nesting exceeds the {MAX_SVG_DEPTH}-level limit")
         namespace, local = _expanded_name(element.tag)
-        if namespace != root_namespace or local not in _SVG_TAGS:
+        if namespace != root_namespace or local not in SVG_ALLOWED_ELEMENTS:
             raise PublicationInputError(f"unsupported SVG element <{local or element.tag}>")
         for raw_name, attr_value in element.attrib.items():
             attr_ns, attr_local = _expanded_name(raw_name)
             if attr_ns not in ("", _SVG_NS, _XML_NS) or attr_local in {"href", "src"}:
                 raise PublicationInputError(f"unsupported or external SVG attribute {raw_name!r}")
-            if attr_local not in _SVG_ATTRIBUTES:
+            if attr_local not in SVG_ALLOWED_ATTRIBUTES:
                 raise PublicationInputError(f"unsupported SVG attribute {attr_local!r}")
             _validate_svg_value(attr_local, attr_value)
         stack.extend((child, depth + 1) for child in element)

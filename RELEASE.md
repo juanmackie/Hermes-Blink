@@ -1,5 +1,29 @@
 # Hermes Widget — Release notes
 
+## v3.0.2 — delivery truthfulness, device identity, and discoverable contracts
+
+- The publication store now retains every revision. A revision replaced before a device fetched
+  it is recorded as `superseded` and listed in that device's `skippedRevisions`, so `status`
+  distinguishes "not polled yet" from "lost". `status` also reports `lastPollAt` and
+  `lastFetchedRevision` per device and the nominal `pollIntervalSeconds` (900).
+- `maxAgeSeconds` is a per-publication freshness window: once exceeded the server answers
+  `410 publication_stale` and reports `state: stale` instead of letting the phone render it late.
+- `capabilities` now exposes `render.lastRendered` and `recommendedAspectRatio` (from render
+  acknowledgements), the machine-readable `svg.allowedElements`/`allowedAttributes` allowlist
+  with rejected constructs, the event vocabulary and emission points, and named TTL ceilings
+  (`layoutMaxTtlSeconds` vs `publicationMaxTtlSeconds`).
+- `GET /v1/widgets/<id>` echoes a `publication` pointer so the two stores are no longer
+  confusable by a raw API consumer.
+- The Android app sends a real device label at pair time, supports per-device rename
+  (`PATCH /v1/device`, device token only), handles the `hermeswidget://pair?url=...&code=...`
+  deep link, shows a pairing-code expiry countdown, and posts a `review` event plus an immediate
+  refresh when the publication opens.
+- `hermes widget pair` prints a copy-paste `URL  code` line; `hermes widget status` shows
+  revision history and per-device poll/skip detail.
+- CI installs `cmdline-tools` directly (no deprecated Android setup action), caps Gradle
+  workers/heap for constrained runners, and runs the suite on Ubuntu 3.11/3.13 and Windows.
+  `docs/APK_RELEASE.md` documents building without Android Studio.
+
 ## v3.0.1 — truthful binding and pairing guidance
 
 - Binding precedence is consistent across the bootstrap, `setup`, `up`, `serve`,

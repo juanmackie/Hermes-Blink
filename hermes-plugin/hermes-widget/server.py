@@ -233,6 +233,8 @@ class _Handler(BaseHTTPRequestHandler):
             return "widgets", None
         if path == "/v1/events":
             return "events", None
+        if path == "/v1/device":
+            return "device", None
         if path.startswith("/v1/assets/"):
             asset_id = path[len("/v1/assets/"):]
             if asset_id and "/" not in asset_id:
@@ -258,6 +260,7 @@ class _Handler(BaseHTTPRequestHandler):
         "pair": ("POST",),
         "widgets": ("GET",),
         "events": ("GET",),
+        "device": ("PATCH",),
         "asset": ("GET", "HEAD"),
         "publication": ("GET", "POST", "PUT"),
         "publication-ack": ("POST",),
@@ -365,6 +368,7 @@ class _Handler(BaseHTTPRequestHandler):
                 file_path=file_path,
                 expires_at=body.get("expires_at"),
                 ttl_seconds=body.get("ttl_seconds"),
+                max_age_seconds=body.get("max_age_seconds", body.get("maxAgeSeconds")),
             )
             self._json(200, result)
             return
@@ -373,6 +377,15 @@ class _Handler(BaseHTTPRequestHandler):
         publication = store.get_publication(widget_id)
         if publication is None:
             self._error(404, "unknown_publication", f"no publication for widget {widget_id!r}")
+            return
+        if publication.get("stale"):
+            # Drop content that is already outside its freshness window instead of
+            # letting the phone render it late; the publisher sees state "stale".
+            self._error(
+                410,
+                "publication_stale",
+                "publication is older than its maxAgeSeconds freshness window",
+            )
             return
         revision = publication.get("revision")
         if isinstance(revision, bool) or not isinstance(revision, int):
@@ -486,7 +499,40 @@ class _Handler(BaseHTTPRequestHandler):
         if layout is None:
             self._error(404, "unknown_widget", f"no widget with id {widget_id!r}")
             return
+        # The layout and publication channels are separate stores. Echo a pointer
+        # so a raw API consumer does not read a stale layout and conclude that a
+        # just-published revision was lost.
+        current = store.get_publication(widget_id)
+        if current is not None:
+            layout = {
+                **layout,
+                "publication": {
+                    "revision": current.get("revision"),
+                    "publishedAt": current.get("publishedAt"),
+                    "kind": current.get("kind"),
+                    "state": (
+                        "stale"
+                        if current.get("stale")
+                        else "expired"
+                        if current.get("expired")
+                        else "published"
+                    ),
+                },
+            }
         self._json(200, layout)
+
+    def _device(self, _widget_id: str | None) -> None:
+        role, device_id = self._authorize(allow_device=True)
+        if role != "device" or not device_id:
+            raise _HttpError(403, "device_required", "device label changes require a paired device token")
+        body = self._read_json_body()
+        if not isinstance(body, dict):
+            raise _HttpError(400, "bad_request", "body must be a JSON object")
+        label = body.get("label")
+        updated = store.update_device_label(device_id, label)
+        if updated is None:
+            raise _HttpError(404, "unknown_device", "device does not exist")
+        self._json(200, updated)
 
     def _widget_events(self, widget_id: str | None) -> None:
         _role, device_id = self._authorize(allow_device=True)

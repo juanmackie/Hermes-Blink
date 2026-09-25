@@ -15,8 +15,12 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.you.hermeswidget.net.Config
+import com.you.hermeswidget.net.HermesApi
 import com.you.hermeswidget.net.PublicationContent
 import com.you.hermeswidget.net.PublicationRepository
+import com.you.hermeswidget.net.SecureStore
+import com.you.hermeswidget.work.RefreshWorker
 import com.you.hermeswidget.widget.PublicationImages
 import kotlin.math.max
 import kotlin.math.min
@@ -71,6 +75,23 @@ class PublicationActivity : Activity() {
             }
         }
         setContentView(root)
+        recordTapAndRefresh()
+    }
+
+    /**
+     * Opening the zoom view is the only visible interaction affordance, so it
+     * fetches now and reports the tap. Delivery states stay server-side; this
+     * never claims the user read the content.
+     */
+    private fun recordTapAndRefresh() {
+        RefreshWorker.enqueueNow(this)
+        val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this) ?: return
+        val token = SecureStore.token(this) ?: return
+        Thread {
+            runCatching {
+                HermesApi.postEvent(baseUrl, Config.getWidgetId(this), "review", null, token)
+            }
+        }.start()
     }
 
     private fun textView(value: String): ScrollView = ScrollView(this).apply {

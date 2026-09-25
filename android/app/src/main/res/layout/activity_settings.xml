@@ -36,6 +36,16 @@
             android:inputType="textCapCharacters"
             android:maxLength="32" />
 
+        <EditText
+            android:id="@+id/device_label_input"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="12dp"
+            android:autofillHints="off"
+            android:hint="Device name (e.g. Kitchen tablet)"
+            android:inputType="textPersonName"
+            android:maxLength="64" />
+
         <Button
             android:id="@+id/connect_btn"
             android:layout_width="wrap_content"
@@ -43,5 +53,13 @@
             android:layout_gravity="end"
             android:layout_marginTop="20dp"
             android:text="@string/pair_device" />
+
+        <Button
+            android:id="@+id/rename_btn"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="end"
+            android:layout_marginTop="12dp"
+            android:text="Rename this device" />
     </LinearLayout>
 </ScrollView>

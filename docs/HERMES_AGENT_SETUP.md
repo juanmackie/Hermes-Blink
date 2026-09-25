@@ -162,6 +162,13 @@ The app exchanges the code for a per-device token, stores that token in
 encrypted Android storage, and never asks for `agent_token`. Pairing codes
 expire and can be used only once. Re-pair after revoking or replacing a phone.
 
+The app sends a default device label (manufacturer, model, Android release) at
+pair time and shows the code's expiry countdown. You can rename the device in
+the app's Settings screen (a device may rename only itself). `hermes widget
+pair` also prints a copy-paste one-liner (`URL  code`) for messaging surfaces;
+a QR code can encode the same `hermeswidget://pair?url=...&code=...` deep link,
+which the app opens directly. The app has no in-app scanner.
+
 You can see paired phones, their labels and last-seen times with:
 
     hermes widget devices
@@ -191,9 +198,14 @@ offline with an explicit offline state; an expired publication is not shown.
 
 ## 7. Keep it fresh in the background
 
-The phone polls periodically (nominally every 15 minutes), on app open, and after a
-manual refresh. The bootstrap installs one idempotent Hermes routine every six
-hours:
+The phone polls on a 15-minute WorkManager task (nominal), on app open, and after
+a manual refresh. WorkManager batches and defers background work, so the observed
+gap between revisions is often longer than 15 minutes; `hermes widget status`
+(and `widget_status`) report `lastPollAt`, `lastFetchedRevision`, and any
+`skippedRevisions` so "not polled yet" is distinguishable from "superseded
+before it was fetched". A publication created with `maxAgeSeconds` is dropped
+(`410 publication_stale`) once it is too old to be useful rather than rendered
+late. The bootstrap installs one idempotent Hermes routine every six hours:
 
     hermes widget routine --schedule "every 6h" --widget-id hermes-brief
 

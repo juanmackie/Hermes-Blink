@@ -179,6 +179,7 @@ def widget_mint_pairing_code(args: dict[str, Any] | None = None, **_kwargs: Any)
                 "server_url must be a private HTTPS URL the phone can reach",
             )
         payload["serverUrl"] = usable
+        payload["pairingLine"] = f"{usable}  code={minted.get('code', '')}"
     return _dumps(payload)
 
 
@@ -193,6 +194,7 @@ def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
         file_path = args.get("image_path", args.get("path"))
     expires_at = args.get("expires_at", args.get("expiresAt"))
     ttl_seconds = args.get("ttl_seconds", args.get("ttlSeconds"))
+    max_age_seconds = args.get("max_age_seconds", args.get("maxAgeSeconds"))
     try:
         result = store.put_publication(
             widget_id,
@@ -203,6 +205,7 @@ def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             file_path=file_path,
             expires_at=expires_at,
             ttl_seconds=ttl_seconds,
+            max_age_seconds=max_age_seconds,
         )
     except store.StoreError as exc:
         return _store_error(exc)
@@ -300,8 +303,11 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             ],
             "publication": publication.get("publication"),
             "publicationState": publication.get("state"),
+            "stale": publication.get("stale", False),
+            "revisions": publication.get("revisions", []),
             "delivery": publication.get("delivery", []),
             "deliveryState": delivery_state,
+            "pollIntervalSeconds": publication.get("pollIntervalSeconds"),
             "capabilities": publication.get("capabilities"),
             "dataDir": str(store.data_dir()),
         }

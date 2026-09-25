@@ -10,6 +10,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import hmac
+import importlib
 import json
 import logging
 import os
@@ -21,7 +22,7 @@ import tempfile
 import threading
 import time
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -127,7 +128,8 @@ def _default_hermes_home() -> Path:
 
 def _hermes_home() -> Path:
     try:
-        from hermes_constants import get_hermes_home
+        # Optional Hermes-host module; absent in tests, scripts, and the Android build.
+        get_hermes_home = importlib.import_module("hermes_constants").get_hermes_home
     except ImportError:
         return _default_hermes_home()
     try:
@@ -257,6 +259,14 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             "widget_id TEXT NOT NULL, device_id TEXT NOT NULL, revision INTEGER NOT NULL, "
             "rendered_at TEXT NOT NULL, width INTEGER NOT NULL, height INTEGER NOT NULL, "
             "PRIMARY KEY (widget_id, device_id, revision))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS publication_revisions ("
+            "widget_id TEXT NOT NULL, revision INTEGER NOT NULL, "
+            "published_at TEXT NOT NULL, expires_at TEXT, max_age_seconds INTEGER, "
+            "kind TEXT, title TEXT, summary TEXT, payload_json TEXT NOT NULL, "
+            "superseded_at TEXT, superseded_reason TEXT, "
+            "PRIMARY KEY (widget_id, revision))"
         )
         conn.commit()
         _initialised.add(str(db_path()))
@@ -449,6 +459,7 @@ def _publication_semantics(publication: dict) -> dict:
         "title": publication.get("title"),
         "summary": publication.get("summary"),
         "expiresAt": publication.get("expiresAt"),
+        "maxAgeSeconds": publication.get("maxAgeSeconds"),
         "content": publication.get("content"),
     }
 
@@ -464,6 +475,26 @@ def _publication_expired(publication: dict | None, now: datetime | None = None) 
     if expiry.tzinfo is None:
         return True
     return expiry <= current.astimezone(timezone.utc)
+
+
+def _publication_stale(publication: dict | None, now: datetime | None = None) -> bool:
+    """True once a publication is past its maxAgeSeconds freshness window."""
+    if not publication:
+        return False
+    raw = publication.get("maxAgeSeconds")
+    if not isinstance(raw, int) or isinstance(raw, bool) or raw <= 0:
+        return False
+    published = publication.get("publishedAt")
+    if not published:
+        return False
+    try:
+        published_at = datetime.fromisoformat(str(published).replace("Z", "+00:00"))
+    except (TypeError, ValueError):
+        return False
+    if published_at.tzinfo is None:
+        return False
+    current = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    return current - published_at.astimezone(timezone.utc) > timedelta(seconds=raw)
 
 
 def _write_immutable_asset(conn: sqlite3.Connection, asset: Any) -> tuple[str, Path | None]:
@@ -531,6 +562,7 @@ def put_publication(
     file_path: str | os.PathLike[str] | None = None,
     expires_at: str | datetime | None = None,
     ttl_seconds: int | None = None,
+    max_age_seconds: int | None = None,
 ) -> dict:
     """Validate, store, and atomically publish one text or visual revision."""
     if not isinstance(widget_id, str) or not widget_id or len(widget_id) > 128:
@@ -544,6 +576,7 @@ def put_publication(
             file_path=file_path,
             expires_at=expires_at,
             ttl_seconds=ttl_seconds,
+            max_age_seconds=max_age_seconds,
         )
     except _PublicationInputTooLarge as exc:
         raise PublicationTooLarge(str(exc)) from exc
@@ -586,6 +619,7 @@ def put_publication(
                     "title": prepared.title,
                     "summary": prepared.summary,
                     "expiresAt": prepared.expires_at,
+                    "maxAgeSeconds": prepared.max_age_seconds,
                     "content": content,
                 }
                 if (
@@ -612,6 +646,7 @@ def put_publication(
                 "summary": prepared.summary,
                 "publishedAt": now,
                 "expiresAt": prepared.expires_at,
+                "maxAgeSeconds": prepared.max_age_seconds,
                 "content": content,
             }
             conn.execute(
@@ -628,6 +663,32 @@ def put_publication(
                     now,
                     prepared.expires_at,
                 ),
+            )
+            # Keep every revision as history instead of letting the current-row
+            # upsert erase it; mark a superseded revision so "not polled yet" is
+            # distinguishable from "lost".
+            conn.execute(
+                "INSERT INTO publication_revisions "
+                "(widget_id, revision, published_at, expires_at, max_age_seconds, kind, title, summary, payload_json) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(widget_id, revision) DO UPDATE SET payload_json=excluded.payload_json",
+                (
+                    widget_id,
+                    revision,
+                    now,
+                    prepared.expires_at,
+                    prepared.max_age_seconds,
+                    prepared.kind,
+                    prepared.title,
+                    prepared.summary,
+                    json.dumps(publication, separators=(",", ":"), ensure_ascii=False),
+                ),
+            )
+            conn.execute(
+                "UPDATE publication_revisions SET superseded_at = ?, "
+                "superseded_reason = COALESCE(superseded_reason, 'superseded_by_revision_' || ?) "
+                "WHERE widget_id = ? AND revision < ? AND superseded_at IS NULL",
+                (now, revision, widget_id, revision),
             )
             for device in conn.execute("SELECT device_id FROM devices WHERE revoked = 0").fetchall():
                 conn.execute(
@@ -665,6 +726,7 @@ def get_publication(widget_id: str) -> dict | None:
     if not isinstance(publication, dict):
         raise StoreError("stored publication is corrupt")
     publication["expired"] = _publication_expired(publication)
+    publication["stale"] = _publication_stale(publication)
     return publication
 
 
@@ -823,17 +885,40 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
                     (widget_id,),
                 ).fetchall()
             }
+            revision_rows = conn.execute(
+                "SELECT revision, published_at, expires_at, max_age_seconds, superseded_at, "
+                "superseded_reason, kind, title FROM publication_revisions "
+                "WHERE widget_id = ? ORDER BY revision DESC",
+                (widget_id,),
+            ).fetchall()
         finally:
             conn.close()
     current_revision = _as_int(publication.get("revision", 0), "publication revision") if publication else 0
+    stale = bool(publication) and _publication_stale(publication)
     delivery = []
     for device in devices:
         device_id = str(device["device_id"])
-        current_fetch = fetches.get((device_id, current_revision))
+        device_fetches = {
+            revision: row for (owner, revision), row in fetches.items() if owner == device_id
+        }
+        current_fetch = device_fetches.get(current_revision)
         current_ack = acks.get((device_id, current_revision))
         downloaded = bool(current_fetch and current_fetch["downloaded_at"])
         render_submitted = bool(current_ack)
         state = "render_submitted" if render_submitted else "downloaded" if downloaded else "not_downloaded"
+        last_fetched_revision = max(device_fetches) if device_fetches else None
+        last_poll_at = max(
+            (row["fetched_at"] for row in device_fetches.values() if row["fetched_at"]),
+            default=None,
+        )
+        # Revisions that were replaced before this device ever fetched them are
+        # "skipped", not "not_downloaded": the publisher can tell they were lost.
+        skipped_revisions = [
+            _as_int(row["revision"], "publication revision")
+            for row in revision_rows
+            if row["superseded_at"]
+            and _as_int(row["revision"], "publication revision") not in device_fetches
+        ]
         delivery.append(
             {
                 "deviceId": device_id,
@@ -846,14 +931,42 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
                 "renderSubmittedAt": current_ack["rendered_at"] if current_ack else None,
                 "renderedWidth": current_ack["width"] if current_ack else None,
                 "renderedHeight": current_ack["height"] if current_ack else None,
+                "lastFetchedRevision": last_fetched_revision,
+                "lastPollAt": last_poll_at,
+                "skippedRevisions": skipped_revisions,
             }
         )
+    revisions = [
+        {
+            "revision": _as_int(row["revision"], "publication revision"),
+            "publishedAt": row["published_at"],
+            "expiresAt": row["expires_at"],
+            "maxAgeSeconds": row["max_age_seconds"],
+            "kind": row["kind"],
+            "title": row["title"],
+            "superseded": bool(row["superseded_at"]),
+            "supersededAt": row["superseded_at"],
+            "supersededReason": row["superseded_reason"],
+        }
+        for row in revision_rows
+    ]
     return {
         "widgetId": widget_id,
-        "state": "empty" if not publication else "expired" if publication.get("expired") else "published",
+        "state": (
+            "empty"
+            if not publication
+            else "stale"
+            if stale
+            else "expired"
+            if publication.get("expired")
+            else "published"
+        ),
+        "stale": stale,
         "publication": publication,
+        "revisions": revisions,
         "delivery": delivery,
-        "capabilities": _publication_capabilities(),
+        "pollIntervalSeconds": _publication_capabilities().get("pollIntervalSeconds"),
+        "capabilities": publication_capabilities(),
     }
 
 
@@ -876,8 +989,33 @@ def publication_for_asset(asset_id: str) -> dict | None:
     return None
 
 
+def _last_render_metrics() -> dict | None:
+    """The most recent render acknowledgement's surface size, if any."""
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT width, height FROM publication_acks ORDER BY rendered_at DESC LIMIT 1"
+            ).fetchone()
+        finally:
+            conn.close()
+    if not row:
+        return None
+    width = _as_int(row["width"], "rendered width")
+    height = _as_int(row["height"], "rendered height")
+    if width <= 0 or height <= 0:
+        return None
+    return {"width": width, "height": height, "aspectRatio": round(width / height, 4)}
+
+
 def publication_capabilities() -> dict:
-    return _publication_capabilities()
+    caps = dict(_publication_capabilities())
+    last = _last_render_metrics()
+    render = dict(caps.get("render") or {})
+    render["lastRendered"] = last
+    render["recommendedAspectRatio"] = last["aspectRatio"] if last else None
+    caps["render"] = render
+    return caps
 
 
 def list_widgets() -> list[str]:
@@ -971,6 +1109,30 @@ def mint_pairing_code(ttl_minutes: int = PAIRING_TTL_MINUTES) -> dict:
         finally:
             conn.close()
     return {"code": code, "expiresAt": _iso_from_epoch(expires_at)}
+
+
+def update_device_label(device_id: str, label: Any) -> dict | None:
+    """Rename one device. Returns None when the device does not exist."""
+    if not isinstance(device_id, str) or not device_id:
+        raise StoreError("device_id is required")
+    if not isinstance(label, str):
+        raise StoreError("label must be a string")
+    clean = label.strip()[:64]
+    if not clean:
+        raise StoreError("label must not be empty")
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT device_id FROM devices WHERE device_id = ?", (device_id,)
+            ).fetchone()
+            if row is None:
+                return None
+            conn.execute("UPDATE devices SET label = ? WHERE device_id = ?", (clean, device_id))
+            conn.commit()
+        finally:
+            conn.close()
+    return {"deviceId": device_id, "label": clean}
 
 
 def register_device(code: str, label: str) -> dict | None:
@@ -1118,7 +1280,10 @@ def post_event(widget_id: str, device_id: str, event: str, payload: dict | None)
                 (widget_id, device_id, event, payload_json, _now()),
             )
             conn.commit()
-            return int(cur.lastrowid)
+            event_id = cur.lastrowid
+            if event_id is None:
+                raise StoreError("event insert did not return an id")
+            return int(event_id)
         finally:
             conn.close()
 
