@@ -225,6 +225,9 @@ Before publishing a visual, preview the exact proposal at the sizes the phone re
 
     hermes widget preview --publication-file proposal.json --sizes 2x2,4x2,4x4 --out ./widget-previews
 
+For a host without libcairo, Pillow still renders raster previews and the built-in Pillow path
+renders text; only SVG rasterisation needs CairoSVG.
+
 Capacity findings are warnings, not silent truncation. If a publication carries a stable
 `itemId` and `approve`/`snooze`/`open` actions, a tap is recorded as a durable intent. The
 agent consumes it with `widget_read_intents` and records the result with

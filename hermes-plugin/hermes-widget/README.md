@@ -113,5 +113,6 @@ fabricates data or a visual. Manage or remove it with
 - `skills/widget/SKILL.md` — what the agent is taught: which fields render, the type scale, the
   spacing rhythm, the widget sizes, and the reference layouts in `../../fixtures/golden/`.
 - `preview.py` — `hermes widget preview <layout.json>` renders a layout to HTML; publication
-  mode additionally rasterises exact text/SVG/raster previews with CairoSVG/Pillow when available
-  and a deterministic bounded PNG fallback on minimal hosts.
+  mode rasterises exact text/SVG/raster previews. Raster images use Pillow independently of
+  CairoSVG; text falls back to a built-in Pillow text path when libcairo is absent; SVG still
+  requires CairoSVG. A deterministic bounded PNG placeholder remains the last-resort fallback.

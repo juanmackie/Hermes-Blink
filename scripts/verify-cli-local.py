@@ -89,6 +89,14 @@ for name, fn, ns in verb_cases:
     rc, _ = run(fn, ns)
     check(f"verb_{name}", rc == 0)
 
+rc, _ = run(cli._publish, SimpleNamespace(
+    widget_id=WIDGET, publication_file=None, layout_file=None, layout_json=None,
+    title="CLI priority", summary="CLI priority summary", text="hello", svg=None,
+    file_path=None, priority="high", max_age_seconds=None, item_id=None, actions=None,
+    json=True,
+))
+check("verb_publish_priority", rc == 0 and store.get_publication(WIDGET).get("priority") == "high")
+
 # --- upgrade/rollback preserve pairing -----------------------------------
 device_id = store.device_for_token(device_token)["deviceId"]
 devices_before = len(store.list_devices())

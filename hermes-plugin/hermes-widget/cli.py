@@ -276,8 +276,18 @@ def add_parser(parser: Any) -> None:
 
     pub = commands.add_parser("publish", help="Publish a brief layout to the widget.")
     pub.add_argument("--widget-id", default=store.DEFAULT_WIDGET_ID)
-    pub.add_argument("--layout-file", default=None, help="Path to layout JSON file.")
-    pub.add_argument("--layout-json", default=None, help="Inline layout JSON.")
+    pub.add_argument("--layout-file", default=None, help="Path to layout JSON file (legacy mode).")
+    pub.add_argument("--layout-json", default=None, help="Inline layout JSON (legacy mode).")
+    pub.add_argument("--publication-file", default=None, help="JSON publication to publish (title/summary plus one source).")
+    pub.add_argument("--title", default=None, help="Publication title.")
+    pub.add_argument("--summary", default=None, help="Publication accessible summary.")
+    pub.add_argument("--text", default=None, help="Publication plain text.")
+    pub.add_argument("--svg", default=None, help="Inline static publication SVG.")
+    pub.add_argument("--file-path", default=None, help="Local PNG/JPEG/WebP publication path.")
+    pub.add_argument("--priority", choices=("normal", "high"), default="normal", help="Publication wake priority.")
+    pub.add_argument("--max-age-seconds", type=int, default=None, help="Publication freshness window.")
+    pub.add_argument("--item-id", default=None, help="Stable item identity for publication actions.")
+    pub.add_argument("--actions", default=None, help="JSON array of allowlisted publication actions.")
     pub.add_argument("--json", action="store_true")
 
     commands.add_parser("restart", help="Restart the hermes-widget systemd user service.")
@@ -978,6 +988,63 @@ def _doctor(args: Any) -> int:
 
 def _publish(args: Any) -> int:
     widget_id = getattr(args, "widget_id", store.DEFAULT_WIDGET_ID)
+    publication_mode = any(
+        getattr(args, name, None) is not None
+        for name in ("publication_file", "title", "summary", "text", "svg", "file_path", "actions")
+    ) or getattr(args, "max_age_seconds", None) is not None or getattr(args, "item_id", None) is not None
+    if publication_mode:
+        payload: dict[str, Any] = {}
+        publication_file = getattr(args, "publication_file", None)
+        if publication_file:
+            try:
+                loaded = json.loads(Path(publication_file).read_text(encoding="utf-8"))
+            except Exception as exc:
+                err = {"error": "invalid_publication", "detail": _redact(str(exc))}
+                print(json.dumps(err, indent=2) if getattr(args, "json", False) else _redact(f"publish failed: {exc}"))
+                return 1
+            if not isinstance(loaded, dict):
+                err = {"error": "invalid_publication", "detail": "publication must be a JSON object"}
+                print(json.dumps(err, indent=2) if getattr(args, "json", False) else _redact(err["detail"]))
+                return 1
+            payload.update(loaded)
+        for name in ("title", "summary", "text", "svg", "file_path", "max_age_seconds", "item_id", "actions"):
+            value = getattr(args, name, None)
+            if value is not None:
+                payload[name] = value
+        if getattr(args, "priority", "normal") != "normal" or "priority" not in payload:
+            payload["priority"] = getattr(args, "priority", "normal")
+        if isinstance(payload.get("actions"), str):
+            try:
+                payload["actions"] = json.loads(payload["actions"])
+            except Exception as exc:
+                err = {"error": "invalid_publication", "detail": _redact(str(exc))}
+                print(json.dumps(err, indent=2) if getattr(args, "json", False) else _redact(f"publish failed: {exc}"))
+                return 1
+        try:
+            result = store.put_publication(
+                widget_id,
+                title=payload.get("title"),
+                summary=payload.get("summary"),
+                text=payload.get("text"),
+                svg=payload.get("svg"),
+                file_path=payload.get("file_path", payload.get("filePath")),
+                expires_at=payload.get("expires_at", payload.get("expiresAt")),
+                ttl_seconds=payload.get("ttl_seconds", payload.get("ttlSeconds")),
+                max_age_seconds=payload.get("max_age_seconds", payload.get("maxAgeSeconds")),
+                priority=payload.get("priority", "normal"),
+                item_id=payload.get("item_id", payload.get("itemId")),
+                actions=payload.get("actions"),
+            )
+        except store.StoreError as exc:
+            err = {"error": exc.code, "detail": _redact(str(exc))}
+            print(json.dumps(err, indent=2) if getattr(args, "json", False) else _redact(str(exc)))
+            return 1
+        if getattr(args, "json", False):
+            print(json.dumps({"ok": True, **result}, indent=2))
+        else:
+            print(f"Published {widget_id} revision {result.get('revision')} ({result.get('priority', 'normal')})")
+        return 0
+
     layout_json = getattr(args, "layout_json", None)
     layout_file = getattr(args, "layout_file", None)
     payload: dict[str, Any] | None = None

@@ -440,17 +440,79 @@ def _svg_text_png(publication: dict, width: int, height: int) -> tuple[bytes, st
         import cairosvg  # type: ignore
         return cairosvg.svg2png(bytestring=svg), "cairosvg"
     except Exception:
-        return _fallback_png(width_px, height_px, label=b"text"), "fallback"
+        # Text does not need libcairo.  Keep a useful built-in path on minimal
+        # hosts instead of returning the same placeholder as a failed raster.
+        return _pillow_text_png(publication, width_px, height_px)
+
+
+def _pillow_text_png(publication: dict, width: int, height: int) -> tuple[bytes, str]:
+    """Render the bounded text envelope with Pillow when CairoSVG is absent."""
+    try:
+        from PIL import Image, ImageDraw, ImageFont  # type: ignore
+    except Exception:
+        return _fallback_png(width, height, label=b"text"), "fallback"
+    try:
+        width_px, height_px = max(1, width), max(1, height)
+        pad = max(8, min(18, width_px // 12))
+        title_size = max(12, min(22, width_px // 12))
+        body_size = max(10, min(16, width_px // 15))
+        summary_size = max(9, min(12, width_px // 18))
+        usable = max(40, width_px - pad * 2)
+
+        def font(size: int, bold: bool = False):
+            candidates = (
+                "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold
+                else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+                "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold
+                else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+            )
+            for candidate in candidates:
+                try:
+                    return ImageFont.truetype(candidate, size)
+                except OSError:
+                    continue
+            return ImageFont.load_default()
+
+        content = publication.get("content") or {}
+        title = str(publication.get("title") or "Hermes")
+        summary = str(publication.get("summary") or "")
+        text = str(content.get("text") or "")
+        title_line = textwrap.shorten(title, width=max(8, usable // max(7, title_size // 2)), placeholder="…")
+        summary_line = textwrap.shorten(summary, width=max(12, usable // max(6, summary_size // 2)), placeholder="…")
+        body_lines = textwrap.wrap(text, width=max(12, usable // max(6, body_size // 2))) or [""]
+        max_lines = max(1, (height_px - pad * 2 - title_size - summary_size - 12) // (body_size + 5))
+        body_lines = body_lines[:max_lines]
+        image = Image.new("RGB", (width_px, height_px), (245, 245, 247))
+        draw = ImageDraw.Draw(image)
+        y = pad
+        draw.text((pad, y), title_line, font=font(title_size, True), fill=(17, 17, 17))
+        y += title_size + 4
+        draw.text((pad, y), summary_line, font=font(summary_size), fill=(110, 110, 115))
+        y += summary_size + 8
+        for line in body_lines:
+            draw.text((pad, y), line, font=font(body_size), fill=(17, 17, 17))
+            y += body_size + 5
+        output = io.BytesIO()
+        image.save(output, format="PNG", optimize=True)
+        return output.getvalue(), "pillow-text"
+    except Exception:
+        return _fallback_png(width, height, label=b"text"), "fallback"
 
 
 def _fit_image(data: bytes, media_type: str, width: int, height: int) -> tuple[bytes, str]:
+    # Pillow is sufficient for raster publications.  CairoSVG is only needed for
+    # the SVG branch; importing both together made a perfectly valid PNG fall back
+    # to the placeholder on hosts that do not have libcairo installed.
     try:
-        import cairosvg  # type: ignore
         from PIL import Image, ImageOps  # type: ignore
     except Exception:
         return _fallback_png(width, height, label=b"image"), "fallback"
     try:
         if media_type == "image/svg+xml":
+            try:
+                import cairosvg  # type: ignore
+            except Exception:
+                return _fallback_png(width, height, label=b"image"), "fallback"
             source = cairosvg.svg2png(bytestring=data)
             image = Image.open(io.BytesIO(source)).convert("RGBA")
         else:

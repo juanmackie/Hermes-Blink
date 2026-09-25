@@ -87,10 +87,10 @@ and verify `/v1/health` before pairing.
 
 ### v3.1 local verification — 2026-09-25
 
-- The host suite now includes five feature-proposal regression tests covering content-free
-  priority wakes and degradation, ordered delivery receipts, registered-size PNG previews,
-  durable idempotent action intents/audit, and revoked-device rejection: **74/74 passed** on
-  CPython 3.11.
+- The host suite now includes seven feature-proposal regression tests covering content-free
+  priority wakes and degradation, ordered delivery receipts, Pillow-only raster previews,
+  the no-Cairo text path, registered-size PNG previews, durable idempotent action
+  intents/audit, and revoked-device rejection: **76/76 passed** on CPython 3.11.
 - `python scripts/check-contract-parity.py`, `python scripts/verify-cli-local.py`, and
   `pyflakes hermes-plugin/hermes-widget/*.py` passed.
 - Android `testDebugUnitTest`, `lintDebug`, and `assembleDebug` passed with JDK 17 and the

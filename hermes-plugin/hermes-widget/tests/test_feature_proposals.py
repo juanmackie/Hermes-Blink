@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import http.client
 import importlib
+import io
 import importlib.util
 import json
 import os
@@ -41,6 +42,7 @@ class FeatureProposals(unittest.TestCase):
     def setUpClass(cls):
         _load_plugin()
         cls.store = importlib.import_module("hermes_plugins.hermes_widget.store")
+        cls.preview = importlib.import_module("hermes_plugins.hermes_widget.preview")
         cls.server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
         cls.server = cls.server_module.make_server("127.0.0.1", 0)
         cls.port = cls.server.server_address[1]
@@ -119,6 +121,29 @@ class FeatureProposals(unittest.TestCase):
         self.assertEqual((preview["pixelWidth"], preview["pixelHeight"]), (240, 240))
         self.assertEqual(preview["mediaType"], "image/png")
         self.assertTrue(preview["data"])
+
+    def test_raster_preview_uses_pillow_without_cairo(self):
+        from PIL import Image
+
+        source = Image.new("RGB", (1200, 480), (12, 140, 220))
+        source.putpixel((0, 0), (255, 0, 0))
+        encoded = io.BytesIO()
+        source.save(encoded, format="PNG")
+        with patch.dict(sys.modules, {"cairosvg": None}):
+            data, renderer = self.preview._fit_image(encoded.getvalue(), "image/png", 540, 240)
+        self.assertEqual(renderer, "pillow")
+        self.assertNotEqual(renderer, "fallback")
+        self.assertGreater(len(data), 700)
+        with Image.open(io.BytesIO(data)) as preview:
+            self.assertEqual(preview.size, (540, 240))
+
+    def test_text_preview_keeps_a_usable_path_without_cairo(self):
+        with patch.dict(sys.modules, {"cairosvg": None}):
+            data, renderer = self.preview._svg_text_png(
+                {"title": "Title", "summary": "Summary", "content": {"text": "Body"}}, 240, 240
+            )
+        self.assertEqual(renderer, "pillow-text")
+        self.assertTrue(data.startswith(b"\x89PNG\r\n\x1a\n"))
 
     def test_action_is_idempotent_queued_and_resolution_is_audited(self):
         self.store.put_publication(

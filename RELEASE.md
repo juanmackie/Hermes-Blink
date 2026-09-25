@@ -14,7 +14,8 @@
 - Every hosted widget instance is reported with its current size class and bounds. The new
   `widget_preview` tool, `POST /v1/widgets/<id>/preview`, and publication-mode CLI render exact
   current/proposed text/SVG/raster content to bounded PNGs at registered sizes. Capacity findings
-  are advisory warnings, never silent truncation.
+  are advisory warnings, never silent truncation. Raster previews use Pillow independently of
+  CairoSVG; text has a built-in Pillow fallback, while SVG still requires CairoSVG.
 - Publications and v2 action nodes carry stable `itemId`s. `approve`, `snooze`, and `open` taps
   create durable, idempotent, allowlisted intents and audit rows; the agent reads and resolves
   them explicitly with `widget_read_intents` and `widget_resolve_intent`. The HTTP server never

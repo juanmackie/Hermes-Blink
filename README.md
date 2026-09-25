@@ -148,11 +148,14 @@ user, then uses expedited WorkManager with an exact-alarm fallback where permitt
 
 `widget_preview` and `POST /v1/widgets/{id}/preview` rasterise the exact proposed or current
 publication at the device's registered `2x2`, `4x2`, `2x4`, `4x4`, or custom sizes. Capacity
-findings are warnings, never silent truncation. The CLI writes local PNGs:
+findings are warnings, never silent truncation. Raster previews use Pillow without requiring
+libcairo; text has a built-in Pillow fallback, while SVG rasterisation still requires CairoSVG.
+The CLI writes local PNGs:
 
 ```sh
 hermes widget preview --sizes 2x2,4x2,4x4 --out ./widget-previews
 hermes widget preview --publication-file proposal.json --out ./widget-previews
+hermes widget publish --title "Market open" --summary "Brief" --text "..." --priority high
 ```
 
 Publication and v2 `button`/`list_item` actions may carry stable `itemId`s. `approve`, `snooze`,
