@@ -3,6 +3,8 @@
     xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
 
     <application
         android:label="Hermes Widget"
@@ -29,12 +31,27 @@
             </intent-filter>
         </activity>
         <activity android:name=".PublicationActivity" android:exported="false" />
+        <activity android:name=".DiagnosticsActivity" android:exported="false" />
 
         <activity android:name=".config.WidgetConfigActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_CONFIGURE" />
             </intent-filter>
         </activity>
+
+        <service
+            android:name=".push.UnifiedPushService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="org.unifiedpush.android.connector.PUSH_EVENT" />
+            </intent-filter>
+        </service>
+
+        <receiver android:name=".widget.WakeAlarmReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="com.you.hermeswidget.WAKE_FALLBACK" />
+            </intent-filter>
+        </receiver>
 
         <receiver android:name=".widget.HermesWidgetReceiver" android:exported="true" android:label="Hermes">
             <intent-filter>

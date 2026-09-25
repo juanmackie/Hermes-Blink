@@ -35,9 +35,9 @@ SKILL_PATH = PLUGIN / "skills" / "widget" / "SKILL.md"
 SCHEMA_DOC_PATH = REPO / "docs" / "SCHEMA.md"
 
 # Fields that live in the envelope, not on a node, and are not rendered per-node.
-ENVELOPE_METADATA = {"version", "widgetId", "title", "ttlSeconds", "accentColor", "updatedAt", "root"}
+ENVELOPE_METADATA = {"version", "widgetId", "itemId", "title", "ttlSeconds", "accentColor", "updatedAt", "root"}
 # Common node fields checked once as a group rather than inside the per-type table.
-NODE_BASE_FIELDS = {"type", "id", "weight", "padding", "alignment"}
+NODE_BASE_FIELDS = {"type", "id", "itemId", "weight", "padding", "alignment"}
 
 failures: list[str] = []
 

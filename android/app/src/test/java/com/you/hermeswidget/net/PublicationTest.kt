@@ -28,6 +28,32 @@ class PublicationTest {
     }
 
     @Test
+    fun parsesPriorityAndQueuedActionMetadata() {
+        val publication = Publication.parse(
+            envelope().let { root ->
+                JSONObject(root)
+                    .put("priority", "high")
+                    .put("itemId", "task-1")
+                    .put("actions", org.json.JSONArray().put(
+                        JSONObject()
+                            .put("kind", "approve")
+                            .put("itemId", "task-1")
+                            .put("actionClass", "reversible")
+                            .put("label", "Approve")
+                    ))
+                    .put("actionStates", JSONObject().put(
+                        "task-1", JSONObject().put("status", "queued")
+                    ))
+                    .toString()
+            }
+        )
+        assertEquals("high", publication.priority)
+        assertEquals("task-1", publication.itemId)
+        assertEquals(1, publication.actions.size)
+        assertEquals("queued", publication.actionStates["task-1"]?.status)
+    }
+
+    @Test
     fun acceptsSvgAssetAndUsesItsReportedDimensions() {
         val publication = Publication.parse(
             envelope(

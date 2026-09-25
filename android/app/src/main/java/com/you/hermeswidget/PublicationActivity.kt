@@ -15,14 +15,17 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import androidx.appcompat.app.AlertDialog
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.HermesApi
+import com.you.hermeswidget.net.PublicationAction
 import com.you.hermeswidget.net.PublicationContent
 import com.you.hermeswidget.net.PublicationRepository
 import com.you.hermeswidget.net.SecureStore
 import com.you.hermeswidget.work.RefreshWorker
 import com.you.hermeswidget.widget.PublicationImages
-import kotlin.math.max
+import org.json.JSONObject
+import java.util.UUID
 import kotlin.math.min
 
 class PublicationActivity : Activity() {
@@ -74,6 +77,15 @@ class PublicationActivity : Activity() {
                 }
             }
         }
+        publication.actions.forEach { action ->
+            val state = publication.actionStates[action.itemId]?.status
+            val label = if (state == null || state == "queued") action.label else "${action.label} ($state)"
+            root.addView(android.widget.Button(this).apply {
+                text = label
+                isEnabled = state == null || state == "queued" || state == "awaiting_confirmation"
+                setOnClickListener { confirmAndSend(action) }
+            })
+        }
         setContentView(root)
         recordTapAndRefresh()
     }
@@ -83,6 +95,51 @@ class PublicationActivity : Activity() {
      * fetches now and reports the tap. Delivery states stay server-side; this
      * never claims the user read the content.
      */
+    private fun confirmAndSend(action: PublicationAction) {
+        val sensitive = action.confirmOnDevice || action.actionClass in setOf("destructive", "external", "irreversible")
+        if (!sensitive) {
+            sendAction(action, confirmed = false)
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Queue this action?")
+            .setMessage("This only queues an intent for the agent; it does not execute the operation here.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Queue") { _, _ -> sendAction(action, confirmed = true) }
+            .show()
+    }
+
+    private fun sendAction(action: PublicationAction, confirmed: Boolean) {
+        val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this) ?: return
+        val token = SecureStore.token(this) ?: return
+        val publication = PublicationRepository.loadCached(this) ?: return
+        val clientEventId = UUID.randomUUID().toString()
+        Thread {
+            val result = HermesApi.postAction(
+                baseUrl, publication.widgetId, action.kind, action.itemId, action.actionClass,
+                publication.revision, clientEventId, confirmed, token,
+                JSONObject(action.payload).toString(),
+            )
+            if (result.code !in 200..299) {
+                Config.enqueuePendingAction(this, JSONObject()
+                    .put("event", action.kind)
+                    .put("itemId", action.itemId)
+                    .put("actionClass", action.actionClass)
+                    .put("revision", publication.revision)
+                    .put("clientEventId", clientEventId)
+                    .put("confirmOnDevice", confirmed)
+                    .put("payload", JSONObject(action.payload).toString()))
+            }
+            runOnUiThread {
+                Toast.makeText(
+                    this,
+                    if (result.code in 200..299) "Action queued" else "Action saved; it will retry when connected",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
+        }.start()
+    }
+
     private fun recordTapAndRefresh() {
         RefreshWorker.enqueueNow(this)
         val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this) ?: return

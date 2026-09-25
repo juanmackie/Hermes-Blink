@@ -107,7 +107,9 @@ check("rollback_keeps_device", store.device_for_token(device_token) is not None
 # --- agent tools exist; exactly one skill document ------------------------
 tools_src = (REPO / "hermes-plugin" / "hermes-widget" / "tools.py").read_text(encoding="utf-8")
 expected_tools = ["widget_update", "widget_validate", "widget_list", "widget_read_events",
-                  "widget_mint_pairing_code", "widget_setup", "widget_publish", "widget_status"]
+                  "widget_mint_pairing_code", "widget_setup", "widget_publish", "widget_preview",
+                  "widget_read_intents", "widget_resolve_intent", "widget_set_quiet_hours",
+                  "widget_status"]
 missing = [t for t in expected_tools if f"def {t}" not in tools_src]
 check("agent_tools_present", not missing,
       ("missing: " + ", ".join(missing)) if missing else f"{len(expected_tools)}/{len(expected_tools)}")

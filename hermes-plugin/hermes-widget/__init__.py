@@ -34,6 +34,10 @@ _TOOLS: tuple[tuple[dict[str, Any], Callable[..., str]], ...] = (
     (schemas.WIDGET_MINT_PAIRING_CODE, tools.widget_mint_pairing_code),
     (schemas.WIDGET_SETUP, tools.widget_setup),
     (schemas.WIDGET_PUBLISH, tools.widget_publish),
+    (schemas.WIDGET_PREVIEW, tools.widget_preview),
+    (schemas.WIDGET_READ_INTENTS, tools.widget_read_intents),
+    (schemas.WIDGET_RESOLVE_INTENT, tools.widget_resolve_intent),
+    (schemas.WIDGET_SET_QUIET_HOURS, tools.widget_set_quiet_hours),
     (schemas.WIDGET_STATUS, tools.widget_status),
 )
 
@@ -64,7 +68,8 @@ def _availability_reminder(**_kwargs: Any) -> dict[str, str]:
             "Hermes widget publishing is available. When a useful user-facing update exists, "
             "call widget_publish with a title, required summary, and exactly one text, safe "
             "static SVG, or bounded local raster source; otherwise do nothing. Publishing "
-            "stores a revision and does not prove phone delivery or user visibility."
+            "stores a revision and does not prove phone delivery or user visibility. High "
+            "priority asks for a content-free wake; queued actions are not executions."
         )
     }
 

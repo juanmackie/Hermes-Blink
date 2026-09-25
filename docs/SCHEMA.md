@@ -131,15 +131,35 @@ Every interactive node carries an `action` object with a `kind` and type-specifi
 {"kind":"refresh"}
 {"kind":"dismiss","itemId":"item-2"}
 {"kind":"review","itemId":"item-1"}
+{"kind":"approve","itemId":"item-1","actionClass":"reversible"}
+{"kind":"snooze","itemId":"item-1","actionClass":"reversible"}
+{"kind":"open","itemId":"item-1","actionClass":"read_only"}
 ```
 
-- `kind` enum: `event` | `refresh` | `dismiss` | `review`.
+- `kind` enum: `event` | `refresh` | `dismiss` | `review` | `approve` | `snooze` | `open`.
 - `event` requires `event` (string ≤200) and optional `payload` (object) and optional `itemId`.
 - `refresh` triggers an immediate re-fetch (no extra fields).
-- `dismiss` / `review` require `itemId` (stable item to hide/mark) and optional `payload`.
+- `dismiss` / `review` / `approve` / `snooze` / `open` require a stable `itemId`.
+- `approve` / `snooze` / `open` enqueue an allowlisted intent; they do not execute an operation
+  on the widget server. `actionClass` is bounded to the documented policy classes; destructive,
+  external, and irreversible classes require an explicit agent confirmation.
 - Removed: `url` (https://) and `open_app` (hermes://) — no deeplink/url rendering.
 
 The host plugin validates `kind` against its allowlist before storing any layout.
+
+## Pre-publish preview and inventory
+
+The Android app reports every hosted widget instance with its current size class and pixel
+bounds to `PUT /v1/device/instances`. `widget_preview` and `POST /v1/widgets/<id>/preview`
+render the exact current or proposed publication at those registered sizes. The response
+contains bounded base64 PNGs; the CLI writes them with:
+
+    hermes widget preview --sizes 2x2,4x2,4x4 --out ./widget-previews
+    hermes widget preview --publication-file proposal.json --out ./widget-previews
+
+Capacity findings (`TEXT_MAY_CLIP_2X2`, `LAYOUT_MAY_CLIP_2X2`, and image letterbox warnings)
+are advisory. A warning never silently truncates a publication; the device remains the final
+render authority.
 
 ## Dry run and preview
 
@@ -150,8 +170,9 @@ without consuming a rate-limit slot**. It accepts the same `layout` argument as
 succeeded.
 
 Design warnings are advisory: the push still succeeds. They are `ROOT_PADDING_LOW` (root
-padding below 12 on an edge), `TOO_MANY_TEXT_STYLES` (more than three of the four steps), and
-`NEAR_NODE_CAP` (over 80 of the 100 allowed nodes).
+padding below 12 on an edge), `TOO_MANY_TEXT_STYLES` (more than three of the four steps),
+`NEAR_NODE_CAP` (over 80 of the 100 allowed nodes), and the registered-instance capacity
+warnings described above.
 
 `hermes widget preview <layout.json>` renders the tree to a standalone HTML file — every widget
 shape Android can give it, with the widget's real bounds outlined so clipping is visible. It is
@@ -172,7 +193,8 @@ cannot show real font metrics. The device stays authoritative.
 - **Node cap.** Reject layouts with > 100 total nodes. Per-container `maxItems` is a secondary guard.
 - **Rate limit.** Max 30 pushes per widget per hour. Dry runs do not count.
 - **Hex-only colours.** Enforced for every colour field.
-- **Action allowlist.** Only `event`, `refresh`, `dismiss`, `review` (v2).
+- **Action allowlist.** Only `event`, `refresh`, `dismiss`, `review`, `approve`, `snooze`, and
+  `open` (v2); the latter three enqueue intents and never execute on the HTTP server.
 - **No raw arbitrary code.** Nodes are a closed enum; actions are a closed enum. Unknown types are rejected in validation and skipped by the renderer.
 
 ## Constraints (enforced server-side + by renderer)
@@ -186,7 +208,8 @@ cannot show real font metrics. The device stays authoritative.
 - `stat.label` / `stat.value`: ≤50 chars; `list_item.title` / `subtitle`: ≤200 chars.
 - `calendar.events`: ≤50.
 - `spacing`: 0–64; `divider.thickness`: 1–16 (default 1); `spacer.size`: 1–256 (required).
-- `action.payload`: an object; `action.itemId` ≤128 chars.
+- `action.payload`: an object; `action.itemId` ≤128 chars. `itemId` is stable and required
+  for item actions.
 
 ## Publication channel (separate store)
 
@@ -199,7 +222,9 @@ and `widget_status` report both channels.
 Every revision is retained in `publication_revisions`. A revision replaced before a device
 fetched it is marked `superseded` and appears in that device's `skippedRevisions`, so
 "waiting" and "lost" are different states. Each publication requires `title` and `summary`
-and exactly one of `text`, inline `svg`, or a local PNG/JPEG/WebP `file_path`.
+and exactly one of `text`, inline `svg`, or a local PNG/JPEG/WebP `file_path`. Optional
+`priority` is `normal` or `high`; optional `itemId` and `actions` provide stable queue-only
+interaction. The effective priority and any degradation reason are returned in the envelope.
 
 ### Freshness vs expiry
 
@@ -208,6 +233,7 @@ and exactly one of `text`, inline `svg`, or a local PNG/JPEG/WebP `file_path`.
 | `ttlSeconds` (≤86400) | v2 layout | Device-side stale banner; the last good layout keeps rendering. |
 | `expiresAt` / `ttl_seconds` (≤31536000) | publication | Server-side expiry; an expired revision is not delivered. |
 | `maxAgeSeconds` (≤31536000) | publication | Freshness window since `publishedAt`. Once exceeded the server answers `410 publication_stale` and `status` reports `stale`, so content is dropped rather than rendered late. |
+| `priority` (`normal`/`high`) | publication | Requests a content-free wake. The effective lane, requested lane, and any quiet-hour/rate-limit degradation are reported. |
 
 `capabilities.layoutMaxTtlSeconds` and `capabilities.publicationMaxTtlSeconds` expose the two
 ceilings explicitly; they are intentionally different windows, not a bug.
@@ -231,10 +257,11 @@ URLs, and event-handler attributes. `text` is allowed; only generic `font-family
 ### Events and polling
 
 The event vocabulary is `refresh`, `dismiss`, `review`, `event` (a caller-named event with its
-own `payload`). Emission points:
+own `payload`), plus the queue-only action kinds `approve`, `snooze`, and `open`. Emission points:
 
 - `refresh` — tapping the publication fetches now; also a v2 `button` with `kind=refresh`.
 - `dismiss` / `event` — v2 button actions.
+- `approve` / `snooze` / `open` — v2/publication actions that enqueue an intent.
 - `review` — opening the publication zoom view.
 
 The phone polls on a `PeriodicWorkRequest` of 15 minutes (`capabilities.pollIntervalSeconds`
@@ -242,10 +269,20 @@ The phone polls on a `PeriodicWorkRequest` of 15 minutes (`capabilities.pollInte
 observed gap between revisions can be longer than nominal; `status` exposes `lastPollAt`,
 `lastFetchedRevision`, and `skippedRevisions` per device so waiting and lost are distinct.
 
-Push nudge (opt-in, not shipped): for sub-poll delivery of time-sensitive revisions, an
-operator can add an FCM data message on publish. That requires a Firebase project and
-`google-services.json`, so the server ships no Firebase dependency by default; the
-tap-to-refresh and `maxAgeSeconds` paths above are the dependency-free mitigations.
+Priority wake is opt-in per publication. `priority: "high"` sends only `{"message":"fetch"}`
+to the device's UnifiedPush endpoint; no title, summary, widget id, or publication content
+enters the push. The app pulls over the existing authenticated HTTPS path, using expedited
+WorkManager and (when permitted) an exact-alarm fallback. The high lane is six per hour and
+thirty per day; over-limit and UTC quiet-hours requests degrade to normal and record the
+reason. `widget_status` exposes the ordered `nudge_sent → fetched → downloaded →
+render_submitted` receipts. A `rendered` receipt means a render pass completed, not that a
+human saw the content.
+
+Action taps are queue-not-authorise: `approve`, `snooze`, and `open` create durable,
+idempotent intents with an audit row. The agent consumes them with `widget_read_intents` and
+records `applied`, `declined`, or `held` with `widget_resolve_intent`; a sensitive class
+requires confirmation. A revoked device cannot report inventory or enqueue an intent, and
+unactioned intents expire.
 
 ## Forward compatibility
 

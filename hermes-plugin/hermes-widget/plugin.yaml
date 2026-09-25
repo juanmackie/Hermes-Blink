@@ -1,9 +1,9 @@
 name: hermes-widget
-version: 3.0.0
+version: 3.1.0
 description: >-
   Hermes personal visual channel: accessible text, safe static SVG, validated
-  local raster media, legacy v2 layouts, private authenticated delivery, and
-  periodic refresh.
+  local raster media, legacy v2 layouts, private authenticated delivery,
+  content-free priority wakeups, durable action intents, and periodic refresh.
 author: Hermes Widget contributors
 kind: standalone
 entrypoint: __init__.py
@@ -15,6 +15,10 @@ provides_tools:
   - widget_mint_pairing_code
   - widget_setup
   - widget_publish
+  - widget_preview
+  - widget_read_intents
+  - widget_resolve_intent
+  - widget_set_quiet_hours
   - widget_status
 provides_commands:
   - widget

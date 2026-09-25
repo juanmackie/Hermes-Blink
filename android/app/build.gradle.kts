@@ -44,7 +44,7 @@ android {
         minSdk = 26
         targetSdk = 35
         versionCode = 1
-        versionName = "0.1.0"
+        versionName = "0.2.0"
     }
     buildFeatures {
         compose = true
@@ -96,6 +96,13 @@ dependencies {
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
     implementation("com.caverock:androidsvg-aar:1.4")
+    // User-selected distributor (ntfy, NextPush, embedded FCM, ...); no Google
+    // service is required by the app itself.
+    implementation("org.unifiedpush.android:connector:3.0.9") {
+        // The app already ships AndroidX Security's Tink runtime.  The connector's
+        // newer plain-Java Tink artifact duplicates its protobuf classes.
+        exclude(group = "com.google.crypto.tink", module = "tink")
+    }
 
     // JVM unit tests: real org.json (the android.jar stub throws "not mocked").
     testImplementation("junit:junit:4.13.2")

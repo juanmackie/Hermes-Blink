@@ -156,7 +156,7 @@ private class WidgetRenderer(private val accent: Color) {
 
     @Composable
     fun ButtonNode(node: Node) {
-        val click = node.action.clickModifier() ?: GlanceModifier
+        val click = node.action.clickModifier(node.itemId) ?: GlanceModifier
         val (fill, ink) = when (node.style) {
             "filled" -> accent to Color.White
             "outlined" -> Typo.colorOr(null, "#FFFFFF") to Typo.colorOr(null, Typo.PRIMARY)
@@ -179,7 +179,7 @@ private class WidgetRenderer(private val accent: Color) {
 
     @Composable
     fun ListItemNode(node: Node) {
-        val click = node.action.clickModifier() ?: GlanceModifier
+        val click = node.action.clickModifier(node.itemId) ?: GlanceModifier
         Row(
             modifier = click.fillMaxWidth().padding(LayoutDefaults.CARD_PADDING.dp),
             verticalAlignment = Alignment.Vertical.CenterVertically,
@@ -308,14 +308,16 @@ private class WidgetRenderer(private val accent: Color) {
         }
     }
 
-    private fun Action?.clickModifier(): GlanceModifier? {
+    private fun Action?.clickModifier(nodeItemId: String? = null): GlanceModifier? {
         val action = this ?: return null
         return GlanceModifier.clickable(
             actionRunCallback<ActionCallbacks.EventAction>(
                 actionParametersOf(
                     ActionParameters.Key<String>("event") to (action.event ?: action.kind),
                     ActionParameters.Key<String>("kind") to action.kind,
-                    ActionParameters.Key<String>("itemId") to (action.itemId ?: ""),
+                    ActionParameters.Key<String>("itemId") to (action.itemId ?: nodeItemId ?: ""),
+                    ActionParameters.Key<String>("actionClass") to (action.actionClass ?: "reversible"),
+                    ActionParameters.Key<Boolean>("confirmOnDevice") to action.confirmOnDevice,
                     ActionParameters.Key<String>("payload") to
                         (action.payload?.let { org.json.JSONObject(it as Map<*, *>).toString() } ?: "{}"),
                 )

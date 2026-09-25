@@ -2,6 +2,8 @@ package com.you.hermeswidget.net
 
 import android.content.Context
 import android.content.SharedPreferences
+import org.json.JSONArray
+import org.json.JSONObject
 import java.io.File
 
 object Config {
@@ -16,6 +18,11 @@ object Config {
     private const val KEY_ASSET_ID = "asset_id"
     private const val KEY_CONNECTION_STATE = "connection_state"
     private const val KEY_LAST_CHECKED_AT = "last_checked_at"
+    private const val KEY_LAST_POLL_AT = "last_poll_at"
+    private const val KEY_LAST_FETCH_AT = "last_fetch_at"
+    private const val KEY_LAST_RENDER_AT = "last_render_at"
+    private const val KEY_BATTERY_EXEMPTION = "battery_exemption"
+    private const val KEY_PENDING_ACTIONS = "pending_actions"
 
     private fun prefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -141,5 +148,65 @@ object Config {
 
     fun getLastCheckedAt(context: Context): Long? {
         return prefs(context).getLong(KEY_LAST_CHECKED_AT, 0L).takeIf { it > 0L }
+    }
+
+    fun setDiagnosticTime(context: Context, key: String, at: Long = System.currentTimeMillis()) {
+        require(key in setOf("poll", "fetch", "render")) { "unknown diagnostic time" }
+        prefs(context).edit().putLong(
+            when (key) {
+                "poll" -> KEY_LAST_POLL_AT
+                "fetch" -> KEY_LAST_FETCH_AT
+                else -> KEY_LAST_RENDER_AT
+            }, at
+        ).apply()
+    }
+
+    fun getDiagnosticTimes(context: Context): Map<String, Long?> = mapOf(
+        "lastPollAt" to prefs(context).getLong(KEY_LAST_POLL_AT, 0L).takeIf { it > 0L },
+        "lastFetchAt" to prefs(context).getLong(KEY_LAST_FETCH_AT, 0L).takeIf { it > 0L },
+        "lastRenderAt" to prefs(context).getLong(KEY_LAST_RENDER_AT, 0L).takeIf { it > 0L },
+    )
+
+    fun setBatteryExemptionHint(context: Context, granted: Boolean) {
+        prefs(context).edit().putBoolean(KEY_BATTERY_EXEMPTION, granted).apply()
+    }
+
+    fun getBatteryExemptionHint(context: Context): Boolean =
+        prefs(context).getBoolean(KEY_BATTERY_EXEMPTION, false)
+
+    /** A small bounded outbox for taps made while the private path is unavailable. */
+    fun enqueuePendingAction(context: Context, action: JSONObject) {
+        val id = action.optString("clientEventId")
+        if (id.isBlank()) return
+        val current = runCatching {
+            JSONArray(prefs(context).getString(KEY_PENDING_ACTIONS, "[]") ?: "[]")
+        }.getOrElse { JSONArray() }
+        val next = JSONArray()
+        for (index in 0 until current.length()) {
+            val item = current.optJSONObject(index) ?: continue
+            if (item.optString("clientEventId") != id) next.put(item)
+        }
+        next.put(action)
+        while (next.length() > 50) next.remove(0)
+        prefs(context).edit().putString(KEY_PENDING_ACTIONS, next.toString()).apply()
+    }
+
+    fun pendingActions(context: Context): List<JSONObject> {
+        val array = runCatching {
+            JSONArray(prefs(context).getString(KEY_PENDING_ACTIONS, "[]") ?: "[]")
+        }.getOrElse { JSONArray() }
+        return (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+    }
+
+    fun removePendingAction(context: Context, clientEventId: String) {
+        val current = runCatching {
+            JSONArray(prefs(context).getString(KEY_PENDING_ACTIONS, "[]") ?: "[]")
+        }.getOrElse { JSONArray() }
+        val next = JSONArray()
+        for (index in 0 until current.length()) {
+            val item = current.optJSONObject(index) ?: continue
+            if (item.optString("clientEventId") != clientEventId) next.put(item)
+        }
+        prefs(context).edit().putString(KEY_PENDING_ACTIONS, next.toString()).apply()
     }
 }

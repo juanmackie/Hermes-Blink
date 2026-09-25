@@ -14,6 +14,7 @@ requests concurrently, so module globals would race.
 """
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import ssl
@@ -24,8 +25,9 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 try:  # normal path: imported as part of the hermes-widget plugin package
-    from . import store
+    from . import preview, store
 except ImportError:  # pragma: no cover - direct import from tests/scripts
+    import preview  # type: ignore
     import store  # type: ignore
 
 VERSION = "1.0.0"
@@ -84,6 +86,8 @@ def _map_store_error(exc: store.StoreError) -> _HttpError:
     if isinstance(exc, store.AssetUnavailable):
         return _HttpError(503, exc.code, message)
     if isinstance(exc, store.PublicationError):
+        return _HttpError(400, exc.code, message)
+    if isinstance(exc, store.ActionIntentError):
         return _HttpError(400, exc.code, message)
     if isinstance(exc, store.RateLimitError):
         return _HttpError(429, exc.code, message)
@@ -235,6 +239,10 @@ class _Handler(BaseHTTPRequestHandler):
             return "events", None
         if path == "/v1/device":
             return "device", None
+        if path == "/v1/device/instances":
+            return "device-instances", None
+        if path == "/v1/intents":
+            return "intents", None
         if path.startswith("/v1/assets/"):
             asset_id = path[len("/v1/assets/"):]
             if asset_id and "/" not in asset_id:
@@ -245,6 +253,10 @@ class _Handler(BaseHTTPRequestHandler):
             rest = path[len(prefix):]
             if rest.endswith("/publication/ack") and rest[: -len("/publication/ack")]:
                 return "publication-ack", unquote(rest[: -len("/publication/ack")])
+            if rest.endswith("/settings") and rest[: -len("/settings")]:
+                return "settings", unquote(rest[: -len("/settings")])
+            if rest.endswith("/preview") and rest[: -len("/preview")]:
+                return "preview", unquote(rest[: -len("/preview")])
             if rest.endswith("/publication") and rest[: -len("/publication")]:
                 return "publication", unquote(rest[: -len("/publication")])
             if rest.endswith("/events") and rest[: -len("/events")]:
@@ -261,9 +273,13 @@ class _Handler(BaseHTTPRequestHandler):
         "widgets": ("GET",),
         "events": ("GET",),
         "device": ("PATCH",),
+        "device-instances": ("PUT",),
+        "intents": ("GET", "POST"),
+        "settings": ("GET", "PUT"),
         "asset": ("GET", "HEAD"),
         "publication": ("GET", "POST", "PUT"),
         "publication-ack": ("POST",),
+        "preview": ("POST",),
         "widget": ("GET", "PUT"),
         "widget-events": ("POST",),
     }
@@ -369,6 +385,9 @@ class _Handler(BaseHTTPRequestHandler):
                 expires_at=body.get("expires_at"),
                 ttl_seconds=body.get("ttl_seconds"),
                 max_age_seconds=body.get("max_age_seconds", body.get("maxAgeSeconds")),
+                priority=body.get("priority", "normal"),
+                item_id=body.get("item_id", body.get("itemId")),
+                actions=body.get("actions"),
             )
             self._json(200, result)
             return
@@ -416,8 +435,8 @@ class _Handler(BaseHTTPRequestHandler):
         body = self._read_json_body()
         if not isinstance(body, dict):
             raise _HttpError(400, "invalid_render_ack", "render acknowledgement must be an object")
-        if body.get("status") != "render_submitted":
-            raise _HttpError(400, "invalid_render_ack", "status must be render_submitted")
+        if body.get("status") not in {"render_submitted", "rendered"}:
+            raise _HttpError(400, "invalid_render_ack", "status must be render_submitted or rendered")
         revision = body.get("revision")
         width = body.get("renderedWidth", body.get("width"))
         height = body.get("renderedHeight", body.get("height"))
@@ -425,7 +444,10 @@ class _Handler(BaseHTTPRequestHandler):
             raise _HttpError(400, "invalid_render_ack", "revision must be an integer")
         if isinstance(width, bool) or isinstance(height, bool) or not isinstance(width, int) or not isinstance(height, int):
             raise _HttpError(400, "invalid_render_ack", "rendered dimensions must be integers")
-        result = store.acknowledge_publication_render(widget_id, device_id, revision, width, height)
+        result = store.acknowledge_publication_render(
+            widget_id, device_id, revision, width, height,
+            status=body.get("status"),
+        )
         self._json(200, result)
 
     def _asset(self, asset_id: str | None) -> None:
@@ -521,6 +543,150 @@ class _Handler(BaseHTTPRequestHandler):
             }
         self._json(200, layout)
 
+    def _device_instances(self, _widget_id: str | None) -> None:
+        role, device_id = self._authorize(allow_device=True)
+        if role != "device" or not device_id:
+            raise _HttpError(403, "device_required", "instance inventory requires a paired device token")
+        body = self._read_json_body()
+        if not isinstance(body, dict):
+            raise _HttpError(400, "bad_request", "body must be a JSON object")
+        widget_id = body.get("widgetId", body.get("widget_id"))
+        if not isinstance(widget_id, str) or not widget_id:
+            raise _HttpError(400, "bad_request", "widgetId is required")
+        instances = store.report_widget_instances(device_id, widget_id, body.get("instances"))
+        self._json(200, {"ok": True, "widgetId": widget_id, "instances": instances})
+
+    def _settings(self, widget_id: str | None) -> None:
+        if widget_id is None:
+            raise _HttpError(404, "not_found", "widget id is required")
+        self._authorize(allow_device=False)
+        if self.command == "GET":
+            self._json(200, store.get_widget_settings(widget_id))
+            return
+        body = self._read_json_body()
+        if not isinstance(body, dict):
+            raise _HttpError(400, "bad_request", "body must be a JSON object")
+        self._json(200, {"ok": True, **store.set_widget_settings(
+            widget_id, body.get("quietHours", body.get("quiet_hours"))
+        )})
+
+    def _preview(self, widget_id: str | None) -> None:
+        if widget_id is None:
+            raise _HttpError(404, "not_found", "widget id is required")
+        self._authorize(allow_device=False)
+        body = self._read_json_body()
+        if body is None:
+            body = {}
+        if not isinstance(body, dict):
+            raise _HttpError(400, "invalid_preview", "preview body must be a JSON object")
+        raw_publication = body.get("publication")
+        if raw_publication is None:
+            source_keys = {"title", "summary", "text", "svg", "file_path", "filePath"}
+            raw_publication = body if source_keys.intersection(body) else None
+        if raw_publication is None:
+            publication = store.get_publication(widget_id)
+            if publication is None:
+                raise _HttpError(404, "unknown_publication", f"no publication for widget {widget_id!r}")
+        else:
+            if not isinstance(raw_publication, dict):
+                raise _HttpError(400, "invalid_preview", "publication must be a JSON object")
+            if isinstance(raw_publication.get("content"), dict) and not any(
+                key in raw_publication for key in ("text", "svg", "file_path", "filePath")
+            ):
+                publication = {**raw_publication, "widgetId": widget_id}
+                raw_publication = None
+        if raw_publication is not None:
+            try:
+                prepared = store.prepare_publication(
+                    title=raw_publication.get("title"),
+                    summary=raw_publication.get("summary"),
+                    text=raw_publication.get("text"),
+                    svg=raw_publication.get("svg"),
+                    file_path=raw_publication.get("file_path", raw_publication.get("filePath")),
+                    expires_at=raw_publication.get("expires_at", raw_publication.get("expiresAt")),
+                    ttl_seconds=raw_publication.get("ttl_seconds", raw_publication.get("ttlSeconds")),
+                    max_age_seconds=raw_publication.get("max_age_seconds", raw_publication.get("maxAgeSeconds")),
+                    priority=raw_publication.get("priority", "normal"),
+                    item_id=raw_publication.get("item_id", raw_publication.get("itemId")),
+                    actions=raw_publication.get("actions"),
+                )
+            except Exception as exc:  # normalize publication errors to the HTTP contract
+                raise _HttpError(400, "invalid_publication", str(exc)) from exc
+            content: dict[str, Any]
+            if prepared.kind == "text":
+                content = {"type": "text", "mediaType": "text/plain; charset=utf-8", "text": prepared.text}
+            else:
+                assert prepared.asset is not None
+                content = {
+                    "type": "image", "mediaType": prepared.asset.media_type,
+                    "width": prepared.asset.width, "height": prepared.asset.height,
+                    "bytes": len(prepared.asset.data), "sha256": prepared.asset.sha256,
+                    # The preview endpoint accepts inline asset bytes only for this
+                    # one response; it never persists them.
+                    "data": base64.b64encode(prepared.asset.data).decode("ascii"),
+                }
+            publication = {
+                "version": store._publication_capabilities()["publicationVersion"],
+                "widgetId": widget_id,
+                "publicationId": "preview",
+                "revision": 0,
+                "kind": prepared.kind,
+                "title": prepared.title,
+                "summary": prepared.summary,
+                "publishedAt": store._now(),
+                "expiresAt": prepared.expires_at,
+                "priority": prepared.priority,
+                "itemId": prepared.item_id,
+                "actions": list(prepared.actions),
+                "content": content,
+            }
+        inventory = store.list_widget_instances(widget_id)
+        requested_sizes = body.get("sizes", body.get("sizeClasses"))
+        try:
+            previews = preview.render_publication_previews(
+                publication,
+                sizes=requested_sizes,
+                inventory=inventory,
+                asset_loader=lambda asset_id: store.read_asset(asset_id)[1],
+            )
+        except ValueError as exc:
+            raise _HttpError(400, "invalid_preview", str(exc)) from exc
+        self._json(200, {
+            "ok": True,
+            "widgetId": widget_id,
+            "revision": publication.get("revision"),
+            "sizes": [item["size"] for item in previews],
+            "previews": previews,
+            "warnings": store._capacity_warnings_for_publication(publication, widget_id),
+            "note": "Preview is an advisory server raster; the Android device remains authoritative.",
+        })
+
+    def _intents(self, _widget_id: str | None) -> None:
+        self._authorize(allow_device=False)
+        if self.command == "GET":
+            query = parse_qs(urlsplit(self.path).query, keep_blank_values=False)
+            widget_id = query.get("widget_id", [None])[0]
+            status = query.get("status", [None])[0]
+            try:
+                limit = int(query.get("limit", ["200"])[0])
+            except (TypeError, ValueError):
+                limit = 200
+            self._json(200, {
+                "intents": store.get_intents(widget_id, status=status, limit=limit),
+                "audit": store.get_action_audit(widget_id, limit=limit),
+            })
+            return
+        body = self._read_json_body()
+        if not isinstance(body, dict):
+            raise _HttpError(400, "bad_request", "body must be a JSON object")
+        result = store.resolve_intent(
+            body.get("intentId", body.get("intent_id", "")),
+            body.get("outcome", ""),
+            result=body.get("result"),
+            confirmed=body.get("confirmed", False),
+        )
+        self._json(200, {"ok": True, "intent": result})
+
     def _device(self, _widget_id: str | None) -> None:
         role, device_id = self._authorize(allow_device=True)
         if role != "device" or not device_id:
@@ -529,9 +695,19 @@ class _Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             raise _HttpError(400, "bad_request", "body must be a JSON object")
         label = body.get("label")
-        updated = store.update_device_label(device_id, label)
-        if updated is None:
-            raise _HttpError(404, "unknown_device", "device does not exist")
+        if label is not None:
+            updated = store.update_device_label(device_id, label)
+            if updated is None:
+                raise _HttpError(404, "unknown_device", "device does not exist")
+        else:
+            updated = {"deviceId": device_id}
+        if "pushEndpoint" in body or "push_endpoint" in body:
+            push_result = store.set_device_push_endpoint(
+                device_id, body.get("pushEndpoint", body.get("push_endpoint"))
+            )
+            updated = {**updated, **push_result}
+        if label is None and "pushEndpoint" not in body and "push_endpoint" not in body:
+            raise _HttpError(400, "bad_request", "label or pushEndpoint is required")
         self._json(200, updated)
 
     def _widget_events(self, widget_id: str | None) -> None:
@@ -547,8 +723,41 @@ class _Handler(BaseHTTPRequestHandler):
             raise _HttpError(400, "bad_request", "'event' is required")
         if payload is not None and not isinstance(payload, dict):
             raise _HttpError(400, "bad_request", "'payload' must be a JSON object")
-        if store.get_widget(widget_id) is None:
+        # The Android client places idempotency and action fields at the envelope
+        # level; retain them in the durable payload so both wire shapes dedupe.
+        if isinstance(payload, dict):
+            payload = dict(payload)
+        else:
+            payload = {}
+        for field in ("clientEventId", "itemId", "actionClass", "confirmOnDevice", "revision"):
+            if field in body:
+                payload.setdefault(field, body[field])
+        if payload:
+            body["payload"] = payload
+        else:
+            payload = None
+        if store.get_widget(widget_id) is None and store.get_publication(widget_id) is None:
             raise _HttpError(404, "unknown_widget", f"no widget with id {widget_id!r}")
+        intent_event = event
+        if event == "event" and isinstance(payload, dict):
+            candidate = payload.get("intent", payload.get("action", body.get("action", body.get("kind"))))
+            if candidate in {"approve", "snooze", "open"}:
+                intent_event = str(candidate)
+        if intent_event in {"approve", "snooze", "open"}:
+            if not device_id:
+                raise _HttpError(403, "device_required", "actions require a paired device token")
+            result = store.post_action_event(
+                widget_id,
+                device_id,
+                intent_event,
+                payload,
+                revision=body.get("revision"),
+                item_id=body.get("itemId", body.get("item_id")),
+                action_class=body.get("actionClass", body.get("action_class")),
+                confirm_on_device=body.get("confirmOnDevice", body.get("confirm_on_device", False)),
+            )
+            self._json(200, {"ok": True, **result})
+            return
         event_id = store.post_event(widget_id, device_id or "agent", event, payload)
         self._json(200, {"ok": True, "id": event_id})
 

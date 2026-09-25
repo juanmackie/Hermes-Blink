@@ -6,6 +6,7 @@ an otherwise healthy agent turn. All persistence goes through store.*.
 """
 from __future__ import annotations
 
+import base64
 import contextlib
 import io
 import json
@@ -195,6 +196,7 @@ def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     expires_at = args.get("expires_at", args.get("expiresAt"))
     ttl_seconds = args.get("ttl_seconds", args.get("ttlSeconds"))
     max_age_seconds = args.get("max_age_seconds", args.get("maxAgeSeconds"))
+    item_id = args.get("item_id", args.get("itemId"))
     try:
         result = store.put_publication(
             widget_id,
@@ -206,6 +208,9 @@ def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             expires_at=expires_at,
             ttl_seconds=ttl_seconds,
             max_age_seconds=max_age_seconds,
+            priority=args.get("priority", "normal"),
+            item_id=item_id,
+            actions=args.get("actions"),
         )
     except store.StoreError as exc:
         return _store_error(exc)
@@ -213,11 +218,12 @@ def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
         {
             "ok": True,
             **result,
-            "delivery": "pending_periodic_fetch",
+            "delivery": "pending_wake" if result.get("priority") == "high" else "pending_periodic_fetch",
             "visibility": "not_claimed",
             "next": (
-                "The revision is stored. The phone will fetch it on its next poll; "
-                "use widget_status to distinguish downloaded from render_submitted."
+                "The revision is stored. The phone will fetch it on its next poll or "
+                "content-free wake; use widget_status to distinguish nudge_sent, fetched, "
+                "downloaded, and render_submitted."
             ),
         }
     )
@@ -265,6 +271,146 @@ def widget_setup(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
         return _dumps({"ok": False, "error": "setup_failed"})
 
 
+def _preview_publication(args: dict[str, Any]) -> tuple[dict[str, Any], str]:
+    """Prepare a current or proposed publication without writing a revision."""
+    widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
+    if not isinstance(widget_id, str):
+        raise store.PublicationError("widget_id must be a string")
+    proposed = args.get("publication")
+    if proposed is None:
+        publication = store.get_publication(widget_id)
+        if publication is None:
+            raise store.PublicationError(f"no publication for widget {widget_id!r}")
+        return publication, widget_id
+    if not isinstance(proposed, dict):
+        raise store.PublicationError("publication must be a JSON object")
+    if isinstance(proposed.get("content"), dict) and not any(
+        key in proposed for key in ("text", "svg", "file_path", "filePath")
+    ):
+        return {**proposed, "widgetId": widget_id}, widget_id
+    prepared = store.prepare_publication(
+        title=proposed.get("title"),
+        summary=proposed.get("summary"),
+        text=proposed.get("text"),
+        svg=proposed.get("svg"),
+        file_path=proposed.get("file_path", proposed.get("filePath")),
+        expires_at=proposed.get("expires_at", proposed.get("expiresAt")),
+        ttl_seconds=proposed.get("ttl_seconds", proposed.get("ttlSeconds")),
+        max_age_seconds=proposed.get("max_age_seconds", proposed.get("maxAgeSeconds")),
+        priority=proposed.get("priority", "normal"),
+        item_id=proposed.get("item_id", proposed.get("itemId")),
+        actions=proposed.get("actions"),
+    )
+    if prepared.kind == "text":
+        content: dict[str, Any] = {
+            "type": "text", "mediaType": "text/plain; charset=utf-8", "text": prepared.text,
+        }
+    else:
+        assert prepared.asset is not None
+        content = {
+            "type": "image", "mediaType": prepared.asset.media_type,
+            "width": prepared.asset.width, "height": prepared.asset.height,
+            "bytes": len(prepared.asset.data), "sha256": prepared.asset.sha256,
+            "data": base64.b64encode(prepared.asset.data).decode("ascii"),
+        }
+    return {
+        "version": 1,
+        "widgetId": widget_id,
+        "publicationId": "preview",
+        "revision": 0,
+        "kind": prepared.kind,
+        "title": prepared.title,
+        "summary": prepared.summary,
+        "publishedAt": store._now(),
+        "expiresAt": prepared.expires_at,
+        "priority": prepared.priority,
+        "itemId": prepared.item_id,
+        "actions": list(prepared.actions),
+        "content": content,
+    }, widget_id
+
+
+def widget_preview(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    """Render bounded PNG previews without changing the current publication."""
+    args = args or {}
+    try:
+        publication, widget_id = _preview_publication(args)
+        from . import preview  # type: ignore
+    except ImportError:  # pragma: no cover
+        import preview  # type: ignore
+    except store.StoreError as exc:
+        return _store_error(exc)
+    except ValueError as exc:
+        return _error("invalid_preview", str(exc))
+    try:
+        rendered = preview.render_publication_previews(
+            publication,
+            sizes=args.get("sizes"),
+            inventory=store.list_widget_instances(widget_id),
+            asset_loader=lambda asset_id: store.read_asset(asset_id)[1],
+        )
+    except (ValueError, store.StoreError) as exc:
+        return _store_error(exc) if isinstance(exc, store.StoreError) else _error("invalid_preview", str(exc))
+    return _dumps({
+        "ok": True,
+        "widgetId": widget_id,
+        "revision": publication.get("revision"),
+        "previews": rendered,
+        "warnings": store._capacity_warnings_for_publication(publication, widget_id),
+        "note": "Preview is advisory; the Android device remains authoritative.",
+    })
+
+
+def widget_read_intents(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    args = args or {}
+    widget_id = args.get("widget_id", args.get("widgetId"))
+    status = args.get("status")
+    limit = args.get("limit", 200)
+    if widget_id is not None and not isinstance(widget_id, str):
+        return _error("invalid_widget_id", "widget_id must be a string")
+    if status is not None and not isinstance(status, str):
+        return _error("invalid_status", "status must be a string")
+    if isinstance(limit, bool) or not isinstance(limit, int):
+        return _error("invalid_limit", "limit must be an integer")
+    try:
+        return _dumps({
+            "intents": store.get_intents(widget_id, status=status, limit=limit),
+            "audit": store.get_action_audit(widget_id, limit=limit),
+        })
+    except store.StoreError as exc:
+        return _store_error(exc)
+
+
+def widget_resolve_intent(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    args = args or {}
+    intent_id = args.get("intent_id", args.get("intentId"))
+    outcome = args.get("outcome")
+    if not isinstance(intent_id, str) or not isinstance(outcome, str):
+        return _error("invalid_action_intent", "intent_id and outcome are required")
+    try:
+        result = store.resolve_intent(
+            intent_id,
+            outcome,
+            result=args.get("result"),
+            confirmed=args.get("confirmed", False),
+        )
+    except store.StoreError as exc:
+        return _store_error(exc)
+    return _dumps({"ok": True, "intent": result})
+
+
+def widget_set_quiet_hours(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    args = args or {}
+    widget_id = args.get("widget_id", args.get("widgetId"))
+    if not isinstance(widget_id, str) or not widget_id:
+        return _error("invalid_widget_id", "widget_id is required")
+    quiet = args.get("quiet_hours", args.get("quietHours"))
+    try:
+        return _dumps({"ok": True, **store.set_widget_settings(widget_id, quiet)})
+    except store.StoreError as exc:
+        return _store_error(exc)
+
+
 def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     """Summarize host, publication, and per-device delivery state honestly."""
     args = args or {}
@@ -281,6 +427,13 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     delivery_state = "empty"
     if publication.get("publication"):
         delivery_state = "not_downloaded"
+        if any(item.get("nudgeStatus") == "sent" for item in publication.get("delivery", [])):
+            delivery_state = "nudge_sent"
+        if any(
+            any(receipt.get("state") == "fetched" for receipt in item.get("receipts", []))
+            for item in publication.get("delivery", [])
+        ):
+            delivery_state = "fetched"
         if any(item.get("state") == "render_submitted" for item in publication.get("delivery", [])):
             delivery_state = "render_submitted"
         elif any(item.get("state") == "downloaded" for item in publication.get("delivery", [])):
@@ -297,6 +450,7 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
                     "deviceId": d.get("deviceId"),
                     "label": d.get("label"),
                     "revoked": d.get("revoked", False),
+                    "pushEndpointRegistered": d.get("pushEndpointRegistered", False),
                     "lastSeenAt": d.get("lastSeenAt"),
                 }
                 for d in devices
@@ -307,6 +461,9 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             "revisions": publication.get("revisions", []),
             "delivery": publication.get("delivery", []),
             "deliveryState": delivery_state,
+            "inventory": publication.get("inventory", []),
+            "intents": publication.get("intents", []),
+            "actionAudit": publication.get("actionAudit", []),
             "pollIntervalSeconds": publication.get("pollIntervalSeconds"),
             "capabilities": publication.get("capabilities"),
             "dataDir": str(store.data_dir()),

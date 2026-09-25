@@ -1,7 +1,7 @@
 ---
 name: hermes-widget
 description: "Publish accessible text, safe static SVG, or validated raster visuals to the personal Hermes widget; preserve the legacy layout flow when useful."
-version: 3.0.0
+version: 3.1.0
 author: Hermes Widget contributors
 license: MIT
 metadata:
@@ -32,10 +32,14 @@ source:
 - `svg`: inline static SVG for charts, diagrams, or simple shapes.
 - `file_path`: one local PNG, JPEG, or WebP file on the Hermes host.
 
-Add either `expires_at` (timezone-aware ISO-8601) or `ttl_seconds`, never both. Do not send a
-secret, private identifier, full message body, or content the user would not want visible on
-a lock screen. A successful tool result means the host stored a revision; it does **not** mean
-the phone downloaded or rendered it. Use `widget_status` for those later states.
+Add either `expires_at` (timezone-aware ISO-8601) or `ttl_seconds`, never both. Set
+`priority: "high"` only for a genuinely time-sensitive update: the phone receives a
+content-free UnifiedPush wake, pulls over the existing private HTTPS path, and the server
+rate-limits the high lane (six per hour, thirty per day) with visible degradation to normal.
+Use `widget_set_quiet_hours` for a UTC quiet window when the user does not want wake noise.
+Do not put publication content in a push payload. A successful tool result means the host
+stored a revision; it does **not** mean the phone downloaded or rendered it. Use
+`widget_status` for `nudge_sent`, `fetched`, `downloaded`, and `render_submitted` separately.
 
 ### Visual guardrails
 
@@ -77,6 +81,7 @@ Every push is one envelope:
     {
       "version": 2,
       "widgetId": "hermes-brief",
+      "itemId": "optional-stable-item",
       "title": "Today",
       "ttlSeconds": 1800,
       "accentColor": "#7C3AED",
@@ -95,8 +100,10 @@ Hard rules the server enforces. A violation is rejected and nothing is stored:
 - `text.value` <= 500 chars, `button.label` <= 200, `badge.text` <= 50, `stat.label`/`stat.value` <= 50.
 - `column`/`box` <= 100 children, `row` <= 20, `list` <= 100, `calendar.events` <= 50.
 - `spacer.size` is required (1–256). `spacer` is the only node with a required size.
-- `action.kind` is `event`, `refresh`, `dismiss`, or `review`. `event` needs a non-empty
-  `event`; `dismiss` and `review` need an `itemId`.
+- `action.kind` is `event`, `refresh`, `dismiss`, `review`, `approve`, `snooze`, or
+  `open`. `event` needs a non-empty `event`; the item and action kinds need an `itemId`.
+  `approve`/`snooze`/`open` enqueue an allowlisted intent; they never execute work on the
+  server. Sensitive classes wait for an authenticated agent decision.
 - Removed in v2, and rejected: `image`, `icon`, `toggle`, `chart`, calendar `month` mode, and
   `url`/`open_app`/deeplink actions. There is no deeplink rendering.
 - There is no conditional visibility. `visibleIf` was reserved in an earlier draft and is gone;
@@ -126,8 +133,9 @@ here is a silent no-op, so build the design out of this list rather than inventi
 | `list_item` | `title`, `subtitle`, `trailingText`, `action` |
 | `button` | `label`, `style`, `action` |
 
-Every node also takes `id` (stable identity you can reference from an action), `weight` (share
-leftover space between siblings in a `row` or `column`), `padding`, and `alignment`
+Every node also takes `id` (stable identity you can reference from an action), `itemId`
+(stable identity for an action round-trip), `weight` (share leftover space between siblings in
+a `row` or `column`), `padding`, and `alignment`
 (`start`/`center`/`end`/`fill`): on `text` it aligns the text, on a container it aligns the
 children. `padding` is an object — `{"top":12,"bottom":12,"start":12,"end":12}`; an omitted
 edge is 0.
@@ -200,6 +208,12 @@ Events are newest first and carry the widget id, device id, event name, and payl
 loop: if the user tapped "refresh", push an updated layout; if "dismiss" or "review", update
 that item's state and push the revised layout.
 
+Action taps are a queue, not an authorisation. Publications may carry stable `itemId`s and
+`approve`/`snooze`/`open` actions. Read them with `widget_read_intents`, perform only the
+allowlisted reversible work in the agent, then record `applied`, `declined`, or `held` with
+`widget_resolve_intent`. Destructive/external classes require explicit confirmation and are
+still only recorded as intent state. Duplicate `clientEventId`s collapse to one intent.
+
 ## Proactive refresh
 
 The plugin installs an idempotent Hermes cron job every 6 hours. On an unattended run, use
@@ -237,6 +251,7 @@ Python validator and the Android parser, so they are guaranteed to render.
 - [ ] Content fits the size you designed for, and degrades if the user resizes
 - [ ] No `image`, `icon`, `chart`, `toggle`, calendar `month`, or `url` action — and no field
       outside the "only these fields render" table
+- [ ] `widget_preview` used at the registered sizes (or deliberately accepted a capacity warning)
 - [ ] `widget_validate` run, and every warning either fixed or deliberately accepted
 - [ ] Never a secret, token, full email body, or anything unwanted on a locked home screen
 

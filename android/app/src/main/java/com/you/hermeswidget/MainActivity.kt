@@ -14,6 +14,7 @@ import com.you.hermeswidget.net.PublicationFreshness
 import com.you.hermeswidget.net.SecureStore
 import com.you.hermeswidget.net.freshness
 import com.you.hermeswidget.work.RefreshWorker
+import org.unifiedpush.android.connector.UnifiedPush
 
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -21,6 +22,9 @@ class MainActivity : AppCompatActivity() {
         setContentView(R.layout.activity_main)
         findViewById<Button>(R.id.connect_btn).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
+        }
+        findViewById<Button>(R.id.diagnostics_btn).setOnClickListener {
+            startActivity(Intent(this, DiagnosticsActivity::class.java))
         }
         WorkManager.getInstance(this)
             .getWorkInfosForUniqueWorkLiveData(RefreshWorker.IMMEDIATE_NAME)
@@ -32,7 +36,19 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         RefreshWorker.schedulePeriodic(this)
         RefreshWorker.enqueueNow(this)
+        registerUnifiedPushIfAvailable()
         renderStatus()
+    }
+
+    private fun registerUnifiedPushIfAvailable() {
+        if (SecureStore.baseUrl(this).isNullOrBlank() || SecureStore.token(this).isNullOrBlank()) return
+        runCatching {
+            UnifiedPush.tryUseCurrentOrDefaultDistributor(this) { success ->
+                if (success) {
+                    UnifiedPush.register(applicationContext, messageForDistributor = "Hermes Widget")
+                }
+            }
+        }
     }
 
     private fun renderStatus() {

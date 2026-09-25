@@ -6,6 +6,7 @@ an inert subcommand when the import fails.
 """
 from __future__ import annotations
 
+import base64
 import contextlib
 import json
 import os
@@ -292,9 +293,12 @@ def add_parser(parser: Any) -> None:
         "preview",
         help="Render a layout JSON file to an HTML preview (no device needed).",
     )
-    prev.add_argument("layout_file", help="Path to a v2 layout JSON file.")
-    prev.add_argument("--out", default=None, help="Output HTML path (default: next to the input).")
-    prev.add_argument("--json", action="store_true", help="Print the dry-run report instead of a path.")
+    prev.add_argument("layout_file", nargs="?", help="Path to a v2 layout JSON file (legacy HTML mode).")
+    prev.add_argument("--out", default=None, help="Output HTML path or PNG output directory.")
+    prev.add_argument("--json", action="store_true", help="Print the dry-run/report JSON.")
+    prev.add_argument("--widget-id", default=store.DEFAULT_WIDGET_ID, help="Widget id for publication preview.")
+    prev.add_argument("--sizes", default=None, help="Comma-separated publication sizes, e.g. 2x2,4x2,4x4.")
+    prev.add_argument("--publication-file", default=None, help="JSON file containing a publication to preview before publishing.")
 
 
 # ---------------------------------------------------------------------------
@@ -333,7 +337,7 @@ def dispatch(args: Any) -> int:
 
 
 def _preview(args: Any) -> int:
-    """Validate a layout and render it to HTML, so a design can be seen without a phone."""
+    """Render either the legacy layout HTML or exact publication PNG previews."""
     try:
         from . import preview
         from .validate import ValidationError, inspect_layout
@@ -341,34 +345,106 @@ def _preview(args: Any) -> int:
         import preview  # type: ignore
         from validate import ValidationError, inspect_layout  # type: ignore
 
-    import json as _json
-    import pathlib as _pathlib
-
-    source = _pathlib.Path(args.layout_file)
-    if not source.is_file():
-        print(f"layout file not found: {source}")
-        return 1
-    try:
-        layout = _json.loads(source.read_text(encoding="utf-8"))
-    except ValueError as exc:
-        print(f"{source} is not valid JSON: {exc}")
-        return 1
-
-    try:
-        report = inspect_layout(layout)
-    except ValidationError as exc:
-        print(f"invalid layout: {exc}")
-        return 1
-
-    if getattr(args, "json", False):
-        print(_json.dumps(report, indent=2, sort_keys=True))
-        return 0
-
-    out = preview.preview_file(source, out=args.out)
-    print(f"preview written to {out}")
-    if report["warnings"]:
+    # Publication mode is selected by --sizes/--publication-file, or explicitly
+    # by a JSON file containing a publication rather than a v2 layout.
+    publication_mode = bool(getattr(args, "sizes", None) or getattr(args, "publication_file", None))
+    source_path = getattr(args, "publication_file", None)
+    if not publication_mode and not source_path and getattr(args, "layout_file", None):
+        source = Path(args.layout_file)
+        if not source.is_file():
+            print(f"layout file not found: {source}")
+            return 1
+        try:
+            layout = json.loads(source.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            print(f"{source} is not valid JSON: {exc}")
+            return 1
+        try:
+            report = inspect_layout(layout)
+        except ValidationError as exc:
+            print(f"invalid layout: {exc}")
+            return 1
+        if getattr(args, "json", False):
+            print(json.dumps(report, indent=2, sort_keys=True))
+            return 0
+        out = preview.preview_file(source, out=args.out)
+        print(f"preview written to {out}")
         for warning in report["warnings"]:
             print(f"  warning {warning['code']}: {warning['detail']}")
+        return 0
+
+    widget_id = getattr(args, "widget_id", None) or store.DEFAULT_WIDGET_ID
+    proposed = None
+    if source_path:
+        source = Path(source_path)
+        if not source.is_file():
+            print(f"publication file not found: {source}")
+            return 1
+        try:
+            proposed = json.loads(source.read_text(encoding="utf-8"))
+        except ValueError as exc:
+            print(f"{source} is not valid JSON: {exc}")
+            return 1
+    if proposed is not None and not isinstance(proposed, dict):
+        print("publication file must contain a JSON object")
+        return 1
+    try:
+        if proposed is None:
+            publication = store.get_publication(widget_id)
+            if publication is None:
+                print(f"no publication for widget {widget_id!r}")
+                return 1
+        elif isinstance(proposed.get("content"), dict) and not any(
+            key in proposed for key in ("text", "svg", "file_path", "filePath")
+        ):
+            publication = {**proposed, "widgetId": widget_id}
+        else:
+            prepared = store.prepare_publication(
+                title=proposed.get("title"), summary=proposed.get("summary"),
+                text=proposed.get("text"), svg=proposed.get("svg"),
+                file_path=proposed.get("file_path", proposed.get("filePath")),
+                expires_at=proposed.get("expires_at", proposed.get("expiresAt")),
+                ttl_seconds=proposed.get("ttl_seconds", proposed.get("ttlSeconds")),
+                max_age_seconds=proposed.get("max_age_seconds", proposed.get("maxAgeSeconds")),
+                priority=proposed.get("priority", "normal"),
+                item_id=proposed.get("item_id", proposed.get("itemId")),
+                actions=proposed.get("actions"),
+            )
+            if prepared.kind == "text":
+                content = {"type": "text", "mediaType": "text/plain; charset=utf-8", "text": prepared.text}
+            else:
+                assert prepared.asset is not None
+                content = {
+                    "type": "image", "mediaType": prepared.asset.media_type,
+                    "width": prepared.asset.width, "height": prepared.asset.height,
+                    "bytes": len(prepared.asset.data), "sha256": prepared.asset.sha256,
+                    "data": base64.b64encode(prepared.asset.data).decode("ascii"),
+                }
+            publication = {
+                "version": 1, "widgetId": widget_id, "publicationId": "preview", "revision": 0,
+                "kind": prepared.kind, "title": prepared.title, "summary": prepared.summary,
+                "publishedAt": store._now(), "expiresAt": prepared.expires_at,
+                "priority": prepared.priority, "itemId": prepared.item_id,
+                "actions": list(prepared.actions), "content": content,
+            }
+        rendered = preview.render_publication_previews(
+            publication,
+            sizes=getattr(args, "sizes", None),
+            inventory=store.list_widget_instances(widget_id),
+            asset_loader=lambda asset_id: store.read_asset(asset_id)[1],
+        )
+    except (ValueError, store.StoreError) as exc:
+        print(f"preview failed: {exc}")
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": True, "widgetId": widget_id, "previews": rendered}, indent=2))
+        return 0
+    out_dir = Path(args.out) if args.out else Path.cwd() / "widget-previews"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    for item in rendered:
+        target = out_dir / f"{widget_id}-{item['size']}.png"
+        target.write_bytes(base64.b64decode(item["data"]))
+        print(f"preview written to {target}")
     return 0
 
 
@@ -752,6 +828,9 @@ def _status(args: Any) -> int:
             "pollIntervalSeconds": publication.get("pollIntervalSeconds"),
             "revisions": publication.get("revisions", []),
             "delivery": publication.get("delivery", []),
+            "inventory": publication.get("inventory", []),
+            "intents": publication.get("intents", []),
+            "anomalies": publication.get("anomalies", []),
             "capabilities": publication.get("capabilities"),
         }
         print(json.dumps(payload, indent=2))
@@ -775,6 +854,10 @@ def _status(args: Any) -> int:
         print("Restart:      not required")
     print(f"Routine:      {'installed' if routine_ok else 'not installed (run hermes widget up)'}")
     print(f"Publication:  {publication.get('state', 'unknown')}" + (" (stale)" if publication.get("stale") else ""))
+    print(f"Instances:    {len(publication.get('inventory', []))} registered")
+    print(f"Intents:      {len(publication.get('intents', []))} recorded")
+    if publication.get("anomalies"):
+        print(f"Anomalies:    {len(publication['anomalies'])} (see JSON status)")
     poll = publication.get("pollIntervalSeconds")
     if poll:
         print(f"Poll:         nominally every {poll // 60} min (WorkManager periodic; actual gaps vary)")

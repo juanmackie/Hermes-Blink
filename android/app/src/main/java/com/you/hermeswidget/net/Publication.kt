@@ -1,5 +1,6 @@
 package com.you.hermeswidget.net
 
+import org.json.JSONArray
 import org.json.JSONObject
 import java.time.Instant
 
@@ -27,6 +28,10 @@ data class Publication(
     val publishedAt: String,
     val expiresAt: String?,
     val expired: Boolean,
+    val priority: String,
+    val itemId: String?,
+    val actions: List<PublicationAction>,
+    val actionStates: Map<String, PublicationActionState>,
     val content: PublicationContent,
 ) {
     fun isExpired(nowMillis: Long = System.currentTimeMillis()): Boolean {
@@ -57,6 +62,47 @@ data class Publication(
             val publishedAt = json.requiredString("publishedAt")
             val expiresAt = json.optionalString("expiresAt")
             val expired = json.optBoolean("expired", false)
+            val priority = json.optString("priority", "normal")
+            require(priority == "normal" || priority == "high") { "invalid publication priority" }
+            val itemId = json.optionalString("itemId")
+            val actionsJson = json.optJSONArray("actions") ?: JSONArray()
+            val actions = buildList {
+                for (index in 0 until actionsJson.length()) {
+                    val action = actionsJson.optJSONObject(index) ?: continue
+                    val kind = action.optString("kind", "")
+                    require(kind in setOf("approve", "snooze", "open")) { "invalid publication action" }
+                    val actionItem = action.requiredString("itemId")
+                    require(actionItem.length in 1..128) { "invalid publication action itemId" }
+                    val actionClass = action.optString("actionClass", "reversible")
+                    require(actionClass in setOf(
+                        "reversible", "read_only", "dismiss_reminder", "rerun_check",
+                        "staged_patch", "flag", "destructive", "external", "irreversible",
+                    )) { "invalid publication action class" }
+                    add(PublicationAction(
+                        kind = kind,
+                        itemId = actionItem,
+                        label = action.optString("label", kind.replaceFirstChar { it.uppercase() }),
+                        actionClass = actionClass,
+                        confirmOnDevice = action.optBoolean("confirmOnDevice", false),
+                        payload = action.optJSONObject("payload")?.toMap() ?: emptyMap(),
+                    ))
+                }
+            }
+            val actionStatesJson = json.optJSONObject("actionStates")
+            val actionStates = buildMap {
+                if (actionStatesJson != null) {
+                    val keys = actionStatesJson.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        val state = actionStatesJson.optJSONObject(key) ?: continue
+                        put(key, PublicationActionState(
+                            status = state.optString("status", "queued"),
+                            result = state.optString("result").takeIf { it.isNotEmpty() },
+                            updatedAt = state.optString("updatedAt").takeIf { it.isNotEmpty() },
+                        ))
+                    }
+                }
+            }
             val contentJson = json.optJSONObject("content")
                 ?: throw IllegalArgumentException("publication content is missing")
 
@@ -124,11 +170,30 @@ data class Publication(
                 publishedAt = publishedAt,
                 expiresAt = expiresAt,
                 expired = expired,
+                priority = priority,
+                itemId = itemId,
+                actions = actions,
+                actionStates = actionStates,
                 content = content,
             )
         }
     }
 }
+
+data class PublicationAction(
+    val kind: String,
+    val itemId: String,
+    val label: String,
+    val actionClass: String,
+    val confirmOnDevice: Boolean,
+    val payload: Map<String, Any>,
+)
+
+data class PublicationActionState(
+    val status: String,
+    val result: String?,
+    val updatedAt: String?,
+)
 
 sealed class PublicationContent {
     data class Text(val text: String) : PublicationContent()
@@ -172,6 +237,16 @@ private fun JSONObject.requiredString(name: String): String {
     val value = opt(name) ?: throw IllegalArgumentException("$name is missing")
     require(value is String && value.isNotEmpty()) { "$name is invalid" }
     return value
+}
+
+private fun JSONObject.toMap(): Map<String, Any> {
+    val result = mutableMapOf<String, Any>()
+    val keys = keys()
+    while (keys.hasNext()) {
+        val key = keys.next()
+        if (!isNull(key)) result[key] = get(key)
+    }
+    return result
 }
 
 private fun JSONObject.optionalString(name: String): String? {

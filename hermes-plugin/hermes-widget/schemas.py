@@ -186,8 +186,113 @@ WIDGET_PUBLISH = {
                     "reported as stale instead of rendered late."
                 ),
             },
+            "priority": {
+                "type": "string",
+                "enum": ["normal", "high"],
+                "description": (
+                    "High asks the phone to wake through its content-free UnifiedPush "
+                    "endpoint; it is rate-limited and may degrade to normal visibly."
+                ),
+            },
+            "item_id": {
+                "type": "string",
+                "maxLength": 128,
+                "description": "Stable item identity for an optional action round-trip.",
+            },
+            "actions": {
+                "type": "array",
+                "maxItems": 10,
+                "description": "Allowlisted, queue-not-authorise actions attached to stable itemIds.",
+                "items": {"type": "object"},
+            },
         },
         "required": ["title", "summary"],
+    },
+}
+
+
+WIDGET_PREVIEW = {
+    "name": "widget_preview",
+    "description": (
+        "Render the exact publication or a proposed publication to bounded PNG previews "
+        "at registered widget sizes without publishing it. This is a design aid, not a "
+        "claim that the phone rendered the content."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "widget_id": {"type": "string", "description": "Widget id; defaults to hermes-brief."},
+            "publication": {
+                "type": "object",
+                "description": "Optional proposed publication envelope; omit to preview the current revision.",
+            },
+            "sizes": {
+                "type": "array",
+                "items": {"type": "string", "enum": ["2x2", "4x2", "2x4", "4x4"]},
+                "description": "Optional size classes; omit to use the device inventory.",
+            },
+        },
+        "required": [],
+    },
+}
+
+
+WIDGET_READ_INTENTS = {
+    "name": "widget_read_intents",
+    "description": (
+        "Read durable, allowlisted widget action intents and their audit trail. Intents are "
+        "queued taps, not executions; resolve them explicitly after the agent has validated the work."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "widget_id": {"type": "string"},
+            "status": {"type": "string", "enum": ["queued", "awaiting_confirmation", "applied", "declined", "held", "expired"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 1000},
+        },
+        "required": [],
+    },
+}
+
+
+WIDGET_RESOLVE_INTENT = {
+    "name": "widget_resolve_intent",
+    "description": (
+        "Record the terminal outcome of a widget intent after the agent has handled it. "
+        "This records a decision; it never executes the queued operation. Sensitive "
+        "classes require confirmed=true."
+    ),
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "intent_id": {"type": "string", "maxLength": 160},
+            "outcome": {"type": "string", "enum": ["applied", "declined", "held", "expired"]},
+            "result": {"type": "string", "maxLength": 2000},
+            "confirmed": {"type": "boolean"},
+        },
+        "required": ["intent_id", "outcome"],
+    },
+}
+
+
+WIDGET_SET_QUIET_HOURS = {
+    "name": "widget_set_quiet_hours",
+    "description": "Set or clear a widget's UTC quiet-hours window; high-priority wakes degrade visibly to normal during it.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "widget_id": {"type": "string"},
+            "quiet_hours": {
+                "type": ["object", "null"],
+                "properties": {
+                    "start": {"type": "string", "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"},
+                    "end": {"type": "string", "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"},
+                },
+                "required": ["start", "end"],
+                "additionalProperties": False,
+            },
+        },
+        "required": ["widget_id", "quiet_hours"],
     },
 }
 
@@ -195,9 +300,10 @@ WIDGET_PUBLISH = {
 WIDGET_STATUS = {
     "name": "widget_status",
     "description": (
-        "Report Hermes widget host status: publication revision and summary, separate "
-        "per-device downloaded/render_submitted states, connection freshness, routine, "
-        "devices, and counts. None of these states claims the user saw content. Use before pairing."
+        "Report Hermes widget host status: publication revision and summary, ordered "
+        "nudge/fetch/download/render receipts, registered widget instances, queued action "
+        "intents/audit, connection freshness, routine, devices, and counts. None of these "
+        "states claims the user saw content. Use before pairing."
     ),
     "parameters": {
         "type": "object",

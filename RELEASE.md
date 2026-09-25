@@ -1,5 +1,25 @@
 # Hermes Widget — Release notes
 
+## v3.1.0 — priority wake, previews, and queued actions
+
+- `widget_publish` now accepts `priority: "normal" | "high"`. High-priority revisions use a
+  device-registered UnifiedPush endpoint and send only a content-free `fetch` wake; the phone
+  pulls over the existing private HTTPS path. The high lane is limited to six per hour and thirty
+  per day, supports UTC quiet hours, and records soft-limit degradation rather than losing a
+  revision.
+- Delivery receipts now distinguish `nudge_sent`, `fetched`, `downloaded`, `render_submitted`, and
+  an explicit `rendered` pass. The Android app persists poll/fetch/render diagnostics, offers a
+  user-initiated battery-optimisation review, and uses expedited WorkManager plus an exact-alarm
+  fallback when a UnifiedPush wake arrives.
+- Every hosted widget instance is reported with its current size class and bounds. The new
+  `widget_preview` tool, `POST /v1/widgets/<id>/preview`, and publication-mode CLI render exact
+  current/proposed text/SVG/raster content to bounded PNGs at registered sizes. Capacity findings
+  are advisory warnings, never silent truncation.
+- Publications and v2 action nodes carry stable `itemId`s. `approve`, `snooze`, and `open` taps
+  create durable, idempotent, allowlisted intents and audit rows; the agent reads and resolves
+  them explicitly with `widget_read_intents` and `widget_resolve_intent`. The HTTP server never
+  executes agent work, and sensitive classes require confirmation.
+
 ## v3.0.2 — delivery truthfulness, device identity, and discoverable contracts
 
 - The publication store now retains every revision. A revision replaced before a device fetched

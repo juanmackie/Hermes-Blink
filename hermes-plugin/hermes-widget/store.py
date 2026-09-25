@@ -27,14 +27,31 @@ from pathlib import Path
 from typing import Any
 
 try:  # normal path: imported as part of the hermes-widget plugin package
-    from .publication import PublicationInputError, prepare_publication
+    from . import push as _push
+    from .publication import (
+        ACTION_CLASSES,
+        ACTION_KINDS,
+        MAX_ACTION_PAYLOAD_BYTES,
+        PRIORITY_HIGH_MAX_PER_DAY,
+        PRIORITY_HIGH_MAX_PER_HOUR,
+        SENSITIVE_ACTION_CLASSES,
+        PublicationInputError,
+        prepare_publication,
+    )
     from .publication import PublicationTooLarge as _PublicationInputTooLarge
     from .publication import capabilities as _publication_capabilities
     from .validate import ValidationError
     from .validate import inspect_layout as _inspect_layout
     from .validate import validate_layout as _validate
 except ImportError:  # pragma: no cover - direct import from tests/scripts
+    import push as _push  # type: ignore
     from publication import (  # type: ignore
+        ACTION_CLASSES,
+        ACTION_KINDS,
+        MAX_ACTION_PAYLOAD_BYTES,
+        PRIORITY_HIGH_MAX_PER_DAY,
+        PRIORITY_HIGH_MAX_PER_HOUR,
+        SENSITIVE_ACTION_CLASSES,
         PublicationInputError,
         prepare_publication,
     )
@@ -51,6 +68,14 @@ MAX_LAYOUT_BYTES = 64 * 1024
 MAX_NODES = 100
 PUSH_WINDOW_SECONDS = 3600
 PUSH_MAX_PER_WINDOW = 30
+HIGH_PRIORITY_WINDOW_SECONDS = 3600
+HIGH_PRIORITY_DAY_SECONDS = 24 * 3600
+HIGH_PRIORITY_MAX_PER_HOUR = PRIORITY_HIGH_MAX_PER_HOUR
+HIGH_PRIORITY_MAX_PER_DAY = PRIORITY_HIGH_MAX_PER_DAY
+ACTION_INTENT_TTL_SECONDS = 7 * 24 * 3600
+ACTION_RATE_WINDOW_SECONDS = 3600
+ACTION_MAX_PER_WINDOW = 30
+MAX_WIDGET_INSTANCES = 32
 PAIRING_TTL_MINUTES = 10
 DEVICE_TOKEN_PREFIX = "dvc" + "_"
 AGENT_TOKEN_ENV = "HERMES_WIDGET_" + "AGENT_TOKEN"
@@ -113,6 +138,12 @@ class PairingError(StoreError):
     """A pairing code was unknown, already used, or expired."""
 
     code = "invalid_or_expired_code"
+
+
+class ActionIntentError(StoreError):
+    """An action tap could not be safely queued."""
+
+    code = "invalid_action_intent"
 
 
 # ---------------------------------------------------------------------------
@@ -268,6 +299,63 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             "superseded_at TEXT, superseded_reason TEXT, "
             "PRIMARY KEY (widget_id, revision))"
         )
+        # Additive tables keep upgrades safe for existing widget.db files.  Priority
+        # is intentionally separate from the legacy revision table: old rows have no
+        # priority and must remain readable.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS widget_settings ("
+            "widget_id TEXT PRIMARY KEY, quiet_start TEXT, quiet_end TEXT, updated_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS publication_priorities ("
+            "widget_id TEXT NOT NULL, revision INTEGER NOT NULL, "
+            "requested_priority TEXT NOT NULL, effective_priority TEXT NOT NULL, "
+            "degraded_reason TEXT, created_at TEXT NOT NULL, "
+            "PRIMARY KEY (widget_id, revision))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS publication_nudges ("
+            "widget_id TEXT NOT NULL, revision INTEGER NOT NULL, device_id TEXT NOT NULL, "
+            "status TEXT NOT NULL, attempted_at TEXT NOT NULL, sent_at TEXT, detail TEXT, "
+            "PRIMARY KEY (widget_id, revision, device_id))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS delivery_receipts ("
+            "widget_id TEXT NOT NULL, device_id TEXT NOT NULL, revision INTEGER NOT NULL, "
+            "state TEXT NOT NULL, occurred_at TEXT NOT NULL, detail TEXT, "
+            "PRIMARY KEY (widget_id, device_id, revision, state))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS device_push_endpoints ("
+            "device_id TEXT PRIMARY KEY, endpoint TEXT NOT NULL, endpoint_hash TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS widget_instances ("
+            "device_id TEXT NOT NULL, widget_id TEXT NOT NULL, instance_id TEXT NOT NULL, "
+            "size_class TEXT NOT NULL, width_dp INTEGER NOT NULL, height_dp INTEGER NOT NULL, "
+            "width_px INTEGER NOT NULL, height_px INTEGER NOT NULL, reported_at TEXT NOT NULL, "
+            "PRIMARY KEY (device_id, widget_id, instance_id))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS action_intents ("
+            "intent_id TEXT PRIMARY KEY, widget_id TEXT NOT NULL, device_id TEXT NOT NULL, "
+            "event_id INTEGER NOT NULL, item_id TEXT NOT NULL, action_class TEXT NOT NULL, "
+            "status TEXT NOT NULL, source_revision INTEGER NOT NULL, payload_json TEXT NOT NULL, "
+            "result TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, "
+            "expires_at TEXT NOT NULL, UNIQUE (event_id))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS action_audit ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, intent_id TEXT, widget_id TEXT NOT NULL, "
+            "device_id TEXT NOT NULL, item_id TEXT NOT NULL, action_class TEXT NOT NULL, "
+            "revision INTEGER NOT NULL, event TEXT NOT NULL, outcome TEXT NOT NULL, "
+            "detail TEXT, created_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS action_intents_status_idx "
+            "ON action_intents(widget_id, status, created_at)"
+        )
         conn.commit()
         _initialised.add(str(db_path()))
 
@@ -385,7 +473,7 @@ def inspect_widget(widget_id: str, layout: dict) -> dict:
     candidate["widgetId"] = widget_id
 
     try:
-        report = _inspect_layout(candidate)
+        report = _inspect_layout(candidate, list_widget_instances(widget_id))
     except ValidationError as exc:
         raise LayoutError(str(exc)) from exc
 
@@ -428,7 +516,12 @@ def put_widget(widget_id: str, layout: dict) -> dict:
             conn.commit()
         finally:
             conn.close()
-    return {"ok": True, "widgetId": widget_id, "updatedAt": updated_at}
+    try:
+        report = _inspect_layout(stored, list_widget_instances(widget_id))
+        warnings = report.get("capacityWarnings", [])
+    except Exception:  # noqa: BLE001 - warnings are advisory after the write committed
+        warnings = []
+    return {"ok": True, "widgetId": widget_id, "updatedAt": updated_at, "warnings": warnings}
 
 
 def get_widget(widget_id: str) -> dict | None:
@@ -452,6 +545,9 @@ def get_widget(widget_id: str) -> dict | None:
 
 
 def _publication_semantics(publication: dict) -> dict:
+    content = publication.get("content")
+    if isinstance(content, dict):
+        content = {key: value for key, value in content.items() if key != "assetId"}
     return {
         "version": publication.get("version"),
         "widgetId": publication.get("widgetId"),
@@ -460,8 +556,110 @@ def _publication_semantics(publication: dict) -> dict:
         "summary": publication.get("summary"),
         "expiresAt": publication.get("expiresAt"),
         "maxAgeSeconds": publication.get("maxAgeSeconds"),
-        "content": publication.get("content"),
+        "priority": publication.get("priority", "normal"),
+        "requestedPriority": publication.get("requestedPriority", publication.get("priority", "normal")),
+        "itemId": publication.get("itemId"),
+        "actions": publication.get("actions", []),
+        "content": content,
     }
+
+
+def _priority_counts(widget_id: str, now: float | None = None) -> tuple[int, int]:
+    current = time.time() if now is None else now
+    hour = _iso_from_epoch(current - HIGH_PRIORITY_WINDOW_SECONDS)
+    day = _iso_from_epoch(current - HIGH_PRIORITY_DAY_SECONDS)
+    with _LOCK:
+        conn = _connect()
+        try:
+            hour_count = conn.execute(
+                "SELECT COUNT(*) FROM publication_priorities WHERE widget_id = ? "
+                "AND requested_priority = 'high' AND created_at > ?",
+                (widget_id, hour),
+            ).fetchone()[0]
+            day_count = conn.execute(
+                "SELECT COUNT(*) FROM publication_priorities WHERE widget_id = ? "
+                "AND requested_priority = 'high' AND created_at > ?",
+                (widget_id, day),
+            ).fetchone()[0]
+            return int(hour_count), int(day_count)
+        finally:
+            conn.close()
+
+
+def _priority_effective(widget_id: str, requested: str) -> tuple[str, str | None]:
+    if requested != "high":
+        return "normal", None
+    settings = get_widget_settings(widget_id)
+    quiet = settings.get("quietHours")
+    if isinstance(quiet, dict) and _in_quiet_hours(quiet, datetime.now(timezone.utc)):
+        return "normal", "quiet_hours"
+    hour_count, day_count = _priority_counts(widget_id)
+    if hour_count >= HIGH_PRIORITY_MAX_PER_HOUR:
+        return "normal", "high_priority_hour_limit"
+    if day_count >= HIGH_PRIORITY_MAX_PER_DAY:
+        return "normal", "high_priority_day_limit"
+    return "high", None
+
+
+def _in_quiet_hours(quiet: dict, current: datetime) -> bool:
+    try:
+        start = datetime.strptime(str(quiet["start"]), "%H:%M").time()
+        end = datetime.strptime(str(quiet["end"]), "%H:%M").time()
+    except (KeyError, TypeError, ValueError):
+        return False
+    value = current.timetz().replace(tzinfo=None)
+    if start == end:
+        return False
+    if start < end:
+        return start <= value < end
+    return value >= start or value < end
+
+
+def _receipt(
+    conn: sqlite3.Connection,
+    widget_id: str,
+    device_id: str,
+    revision: int,
+    state: str,
+    *,
+    detail: str | None = None,
+    occurred_at: str | None = None,
+) -> None:
+    conn.execute(
+        "INSERT INTO delivery_receipts "
+        "(widget_id, device_id, revision, state, occurred_at, detail) VALUES (?, ?, ?, ?, ?, ?) "
+        "ON CONFLICT(widget_id, device_id, revision, state) DO UPDATE SET "
+        "occurred_at=excluded.occurred_at, detail=excluded.detail",
+        (widget_id, device_id, revision, state, occurred_at or _now(), detail),
+    )
+
+
+def _capacity_warnings_for_publication(publication: dict, widget_id: str) -> list[dict[str, str]]:
+    """Advisory fit checks against the smallest size a device registered."""
+    instances = list_widget_instances(widget_id)
+    if not instances:
+        return []
+    smallest = min(instances, key=lambda item: (item["widthDp"], item["heightDp"]))
+    warnings: list[dict[str, str]] = []
+    if publication.get("kind") == "text":
+        text = (publication.get("content") or {}).get("text", "")
+        if smallest["sizeClass"] == "2x2" and len(text) > 180:
+            warnings.append({
+                "code": "TEXT_MAY_CLIP_2X2",
+                "detail": f"text is {len(text)} characters and may clip on the smallest registered {smallest['sizeClass']} instance",
+            })
+    else:
+        content = publication.get("content") or {}
+        width, height = content.get("width"), content.get("height")
+        if isinstance(width, int) and isinstance(height, int) and width > 0 and height > 0:
+            target_ratio = smallest["widthDp"] / max(1, smallest["heightDp"])
+            source_ratio = width / height
+            if abs(source_ratio - target_ratio) / target_ratio > 0.35:
+                warnings.append({
+                    "code": "IMAGE_MAY_LETTERBOX",
+                    "detail": f"image aspect {source_ratio:.2f} differs from the smallest registered {smallest['sizeClass']} aspect {target_ratio:.2f}; it will be letterboxed",
+                })
+    return warnings
 
 
 def _publication_expired(publication: dict | None, now: datetime | None = None) -> bool:
@@ -552,6 +750,64 @@ def _write_immutable_asset(conn: sqlite3.Connection, asset: Any) -> tuple[str, P
         raise
 
 
+def _dispatch_priority_nudges(widget_id: str, revision: int) -> None:
+    """Best-effort, content-free wake delivery for one high-priority revision."""
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT d.device_id, p.endpoint FROM devices d "
+                "LEFT JOIN device_push_endpoints p ON p.device_id = d.device_id "
+                "JOIN widget_devices wd ON wd.device_id = d.device_id "
+                "WHERE d.revoked = 0 AND wd.widget_id = ? ORDER BY d.device_id",
+                (widget_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+    for row in rows:
+        device_id = str(row["device_id"])
+        endpoint = row["endpoint"]
+        attempted_at = _now()
+        if not endpoint:
+            _record_nudge(widget_id, revision, device_id, "not_subscribed", attempted_at, None, "no UnifiedPush endpoint")
+            continue
+        try:
+            _push.wake(str(endpoint))
+        except (ValueError, _push.PushError) as exc:
+            _record_nudge(widget_id, revision, device_id, "failed", attempted_at, None, str(exc))
+            continue
+        sent_at = _now()
+        _record_nudge(widget_id, revision, device_id, "sent", attempted_at, sent_at, None)
+
+
+def _record_nudge(
+    widget_id: str,
+    revision: int,
+    device_id: str,
+    status: str,
+    attempted_at: str,
+    sent_at: str | None,
+    detail: str | None,
+) -> None:
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                "INSERT INTO publication_nudges "
+                "(widget_id, revision, device_id, status, attempted_at, sent_at, detail) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(widget_id, revision, device_id) DO UPDATE SET "
+                "status=excluded.status, attempted_at=excluded.attempted_at, "
+                "sent_at=excluded.sent_at, detail=excluded.detail",
+                (widget_id, revision, device_id, status, attempted_at, sent_at, detail),
+            )
+            if status == "sent":
+                _receipt(conn, widget_id, device_id, revision, "nudge_sent", occurred_at=sent_at)
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def put_publication(
     widget_id: str,
     *,
@@ -563,6 +819,9 @@ def put_publication(
     expires_at: str | datetime | None = None,
     ttl_seconds: int | None = None,
     max_age_seconds: int | None = None,
+    priority: str = "normal",
+    item_id: str | None = None,
+    actions: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
 ) -> dict:
     """Validate, store, and atomically publish one text or visual revision."""
     if not isinstance(widget_id, str) or not widget_id or len(widget_id) > 128:
@@ -577,6 +836,9 @@ def put_publication(
             expires_at=expires_at,
             ttl_seconds=ttl_seconds,
             max_age_seconds=max_age_seconds,
+            priority=priority,
+            item_id=item_id,
+            actions=actions,
         )
     except _PublicationInputTooLarge as exc:
         raise PublicationTooLarge(str(exc)) from exc
@@ -584,6 +846,7 @@ def put_publication(
         raise PublicationError(str(exc)) from exc
 
     check_push_rate(widget_id)
+    effective_priority, degraded_reason = _priority_effective(widget_id, prepared.priority)
     content: dict[str, Any]
     if prepared.kind == "text":
         content = {"type": "text", "mediaType": "text/plain; charset=utf-8", "text": prepared.text}
@@ -620,6 +883,11 @@ def put_publication(
                     "summary": prepared.summary,
                     "expiresAt": prepared.expires_at,
                     "maxAgeSeconds": prepared.max_age_seconds,
+                    "priority": effective_priority,
+                    "requestedPriority": prepared.priority,
+                    "priorityDegradedReason": degraded_reason,
+                    "itemId": prepared.item_id,
+                    "actions": list(prepared.actions),
                     "content": content,
                 }
                 if (
@@ -647,6 +915,11 @@ def put_publication(
                 "publishedAt": now,
                 "expiresAt": prepared.expires_at,
                 "maxAgeSeconds": prepared.max_age_seconds,
+                "priority": effective_priority,
+                "requestedPriority": prepared.priority,
+                "priorityDegradedReason": degraded_reason,
+                "itemId": prepared.item_id,
+                "actions": list(prepared.actions),
                 "content": content,
             }
             conn.execute(
@@ -685,6 +958,12 @@ def put_publication(
                 ),
             )
             conn.execute(
+                "INSERT INTO publication_priorities "
+                "(widget_id, revision, requested_priority, effective_priority, degraded_reason, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (widget_id, revision, prepared.priority, effective_priority, degraded_reason, now),
+            )
+            conn.execute(
                 "UPDATE publication_revisions SET superseded_at = ?, "
                 "superseded_reason = COALESCE(superseded_reason, 'superseded_by_revision_' || ?) "
                 "WHERE widget_id = ? AND revision < ? AND superseded_at IS NULL",
@@ -696,6 +975,15 @@ def put_publication(
                     (widget_id, device["device_id"]),
                 )
             conn.commit()
+            if effective_priority == "high":
+                try:
+                    _dispatch_priority_nudges(widget_id, revision)
+                except Exception:  # noqa: BLE001 - a wake failure must not lose a publication
+                    logger.warning("priority wake dispatch failed", exc_info=True)
+            try:
+                publication["warnings"] = _capacity_warnings_for_publication(publication, widget_id)
+            except Exception:  # noqa: BLE001 - advisory warnings must not fail a commit
+                publication["warnings"] = []
             return publication
         except Exception:
             with contextlib.suppress(sqlite3.Error):
@@ -706,6 +994,55 @@ def put_publication(
             raise
         finally:
             conn.close()
+
+
+def get_widget_settings(widget_id: str) -> dict:
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT quiet_start, quiet_end, updated_at FROM widget_settings WHERE widget_id = ?",
+                (widget_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    if not row or not row["quiet_start"] or not row["quiet_end"]:
+        return {"widgetId": widget_id, "quietHours": None, "updatedAt": row["updated_at"] if row else None}
+    return {
+        "widgetId": widget_id,
+        "quietHours": {"start": row["quiet_start"], "end": row["quiet_end"]},
+        "updatedAt": row["updated_at"],
+    }
+
+
+def set_widget_settings(widget_id: str, quiet_hours: Any) -> dict:
+    if not isinstance(widget_id, str) or not widget_id or len(widget_id) > 128:
+        raise StoreError("widget_id is required")
+    clean = None
+    if quiet_hours is not None:
+        if not isinstance(quiet_hours, dict):
+            raise StoreError("quiet_hours must be an object or null")
+        start, end = quiet_hours.get("start"), quiet_hours.get("end")
+        time_pattern = r"(?:[01]\d|2[0-3]):[0-5]\d"
+        if (not isinstance(start, str) or not isinstance(end, str)
+                or not re.fullmatch(time_pattern, start)
+                or not re.fullmatch(time_pattern, end)):
+            raise StoreError("quiet_hours start/end must use HH:MM")
+        clean = {"start": start, "end": end}
+    now = _now()
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                "INSERT INTO widget_settings (widget_id, quiet_start, quiet_end, updated_at) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT(widget_id) DO UPDATE SET quiet_start=excluded.quiet_start, "
+                "quiet_end=excluded.quiet_end, updated_at=excluded.updated_at",
+                (widget_id, clean["start"] if clean else None, clean["end"] if clean else None, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return get_widget_settings(widget_id)
 
 
 def get_publication(widget_id: str) -> dict | None:
@@ -727,6 +1064,37 @@ def get_publication(widget_id: str) -> dict | None:
         raise StoreError("stored publication is corrupt")
     publication["expired"] = _publication_expired(publication)
     publication["stale"] = _publication_stale(publication)
+    # Add live intent outcomes without rewriting the immutable publication row.
+    item_ids = {
+        item for item in (
+            [publication.get("itemId")] if isinstance(publication.get("itemId"), str) else []
+        ) if item
+    }
+    item_ids.update(
+        action.get("itemId") for action in publication.get("actions", [])
+        if isinstance(action, dict) and isinstance(action.get("itemId"), str)
+    )
+    if item_ids:
+        with _LOCK:
+            conn = _connect()
+            try:
+                _expire_stale_intents(conn)
+                conn.commit()
+                placeholders = ",".join("?" for _ in item_ids)
+                rows = conn.execute(
+                    f"SELECT item_id, status, result, updated_at FROM action_intents "
+                    f"WHERE widget_id = ? AND item_id IN ({placeholders}) ORDER BY updated_at DESC",
+                    [widget_id, *item_ids],
+                ).fetchall()
+            finally:
+                conn.close()
+        latest: dict[str, dict] = {}
+        for row in rows:
+            latest.setdefault(str(row["item_id"]), {
+                "status": row["status"], "result": row["result"], "updatedAt": row["updated_at"]
+            })
+        if latest:
+            publication["actionStates"] = latest
     return publication
 
 
@@ -747,6 +1115,9 @@ def record_publication_fetch(
                 "fetched_at=excluded.fetched_at, downloaded_at=COALESCE(publication_fetches.downloaded_at, excluded.downloaded_at)",
                 (widget_id, device_id, revision_value, timestamp, timestamp if downloaded else None),
             )
+            _receipt(conn, widget_id, device_id, revision_value, "fetched", occurred_at=timestamp)
+            if downloaded:
+                _receipt(conn, widget_id, device_id, revision_value, "downloaded", occurred_at=timestamp)
             conn.commit()
         finally:
             conn.close()
@@ -771,17 +1142,22 @@ def record_asset_download(widget_id: str, device_id: str, revision: int, asset_i
                 "fetched_at=excluded.fetched_at, downloaded_at=excluded.downloaded_at",
                 (widget_id, device_id, revision_value, timestamp, timestamp),
             )
+            _receipt(conn, widget_id, device_id, revision_value, "fetched", occurred_at=timestamp)
+            _receipt(conn, widget_id, device_id, revision_value, "downloaded", occurred_at=timestamp)
             conn.commit()
         finally:
             conn.close()
 
 
 def acknowledge_publication_render(
-    widget_id: str, device_id: str, revision: int, width: int, height: int
+    widget_id: str, device_id: str, revision: int, width: int, height: int,
+    *, status: str = "render_submitted",
 ) -> dict:
     """Record a render submission, never a claim that the user saw it."""
     if not device_id:
         raise RenderNotReady("a device token is required")
+    if status not in {"render_submitted", "rendered"}:
+        raise PublicationError("render status must be render_submitted or rendered")
     if isinstance(width, bool) or isinstance(height, bool) or not isinstance(width, int) or not isinstance(height, int):
         raise PublicationError("render dimensions must be integers")
     if not 1 <= width <= 10_000 or not 1 <= height <= 10_000:
@@ -808,6 +1184,9 @@ def acknowledge_publication_render(
                 "rendered_at=excluded.rendered_at, width=excluded.width, height=excluded.height",
                 (widget_id, device_id, revision_value, timestamp, width, height),
             )
+            _receipt(conn, widget_id, device_id, revision_value, "render_submitted", occurred_at=timestamp)
+            if status == "rendered":
+                _receipt(conn, widget_id, device_id, revision_value, "rendered", occurred_at=timestamp)
             conn.commit()
         finally:
             conn.close()
@@ -815,7 +1194,7 @@ def acknowledge_publication_render(
         "ok": True,
         "widgetId": widget_id,
         "revision": revision_value,
-        "status": "render_submitted",
+        "status": status,
         "renderedAt": timestamp,
         "width": width,
         "height": height,
@@ -885,6 +1264,32 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
                     (widget_id,),
                 ).fetchall()
             }
+            nudges = {
+                (row["device_id"], int(row["revision"])): row
+                for row in conn.execute(
+                    "SELECT device_id, revision, status, attempted_at, sent_at, detail "
+                    "FROM publication_nudges WHERE widget_id = ?", (widget_id,)
+                ).fetchall()
+            }
+            receipts = conn.execute(
+                "SELECT device_id, revision, state, occurred_at, detail FROM delivery_receipts "
+                "WHERE widget_id = ? ORDER BY occurred_at", (widget_id,)
+            ).fetchall()
+            priorities = {
+                int(row["revision"]): {
+                    "requested_priority": row["requested_priority"],
+                    "effective_priority": row["effective_priority"],
+                    "degraded_reason": row["degraded_reason"],
+                }
+                for row in conn.execute(
+                    "SELECT revision, requested_priority, effective_priority, degraded_reason "
+                    "FROM publication_priorities WHERE widget_id = ?", (widget_id,)
+                ).fetchall()
+            }
+            intent_rows = conn.execute(
+                "SELECT intent_id, item_id, action_class, status, source_revision, result, created_at, updated_at "
+                "FROM action_intents WHERE widget_id = ? ORDER BY created_at DESC LIMIT 200", (widget_id,)
+            ).fetchall()
             revision_rows = conn.execute(
                 "SELECT revision, published_at, expires_at, max_age_seconds, superseded_at, "
                 "superseded_reason, kind, title FROM publication_revisions "
@@ -896,6 +1301,16 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
     current_revision = _as_int(publication.get("revision", 0), "publication revision") if publication else 0
     stale = bool(publication) and _publication_stale(publication)
     delivery = []
+    receipt_map: dict[tuple[str, int], list[dict[str, Any]]] = {}
+    receipt_rank = {"nudge_sent": 0, "fetched": 1, "downloaded": 2, "render_submitted": 3, "rendered": 4}
+    for row in receipts:
+        receipt_map.setdefault((str(row["device_id"]), int(row["revision"])), []).append({
+            "state": row["state"],
+            "at": row["occurred_at"],
+            "detail": row["detail"],
+        })
+    for items in receipt_map.values():
+        items.sort(key=lambda item: (receipt_rank.get(item["state"], 99), item["at"]))
     for device in devices:
         device_id = str(device["device_id"])
         device_fetches = {
@@ -903,6 +1318,7 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
         }
         current_fetch = device_fetches.get(current_revision)
         current_ack = acks.get((device_id, current_revision))
+        current_nudge = nudges.get((device_id, current_revision))
         downloaded = bool(current_fetch and current_fetch["downloaded_at"])
         render_submitted = bool(current_ack)
         state = "render_submitted" if render_submitted else "downloaded" if downloaded else "not_downloaded"
@@ -929,8 +1345,20 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
                 "downloadedAt": current_fetch["downloaded_at"] if current_fetch else None,
                 "renderSubmitted": render_submitted,
                 "renderSubmittedAt": current_ack["rendered_at"] if current_ack else None,
+                "rendered": bool(current_ack and any(
+                    receipt["state"] == "rendered"
+                    for receipt in receipt_map.get((device_id, current_revision), [])
+                )),
+                "renderedAt": current_ack["rendered_at"] if current_ack and any(
+                    receipt["state"] == "rendered"
+                    for receipt in receipt_map.get((device_id, current_revision), [])
+                ) else None,
                 "renderedWidth": current_ack["width"] if current_ack else None,
                 "renderedHeight": current_ack["height"] if current_ack else None,
+                "nudgeStatus": current_nudge["status"] if current_nudge else "not_sent",
+                "nudgeSentAt": current_nudge["sent_at"] if current_nudge else None,
+                "fetchedAt": current_fetch["fetched_at"] if current_fetch else None,
+                "receipts": receipt_map.get((device_id, current_revision), []),
                 "lastFetchedRevision": last_fetched_revision,
                 "lastPollAt": last_poll_at,
                 "skippedRevisions": skipped_revisions,
@@ -947,8 +1375,26 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
             "superseded": bool(row["superseded_at"]),
             "supersededAt": row["superseded_at"],
             "supersededReason": row["superseded_reason"],
+            "priority": priorities.get(_as_int(row["revision"], "publication revision"), {}).get("effective_priority", "normal") if priorities else "normal",
+            "requestedPriority": priorities.get(_as_int(row["revision"], "publication revision"), {}).get("requested_priority", "normal") if priorities else "normal",
+            "priorityDegradedReason": priorities.get(_as_int(row["revision"], "publication revision"), {}).get("degraded_reason") if priorities else None,
         }
         for row in revision_rows
+    ]
+    anomalies = [
+        {
+            "type": "high_priority_skipped",
+            "revision": revision,
+            "detail": "high-priority revision was superseded before any device fetched it",
+        }
+        for revision, priority in priorities.items()
+        if devices
+        and priority.get("effective_priority") == "high"
+        and any(
+            int(row["revision"]) == revision and row["superseded_at"]
+            for row in revision_rows
+        )
+        and not any(owner_revision[1] == revision for owner_revision in fetches)
     ]
     return {
         "widgetId": widget_id,
@@ -965,6 +1411,22 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
         "publication": publication,
         "revisions": revisions,
         "delivery": delivery,
+        "inventory": list_widget_instances(widget_id),
+        "anomalies": anomalies,
+        "intents": [
+            {
+                "intentId": row["intent_id"],
+                "itemId": row["item_id"],
+                "actionClass": row["action_class"],
+                "status": row["status"],
+                "sourceRevision": row["source_revision"],
+                "result": row["result"],
+                "createdAt": row["created_at"],
+                "updatedAt": row["updated_at"],
+            }
+            for row in intent_rows
+        ],
+        "actionAudit": get_action_audit(widget_id),
         "pollIntervalSeconds": _publication_capabilities().get("pollIntervalSeconds"),
         "capabilities": publication_capabilities(),
     }
@@ -1015,6 +1477,12 @@ def publication_capabilities() -> dict:
     render["lastRendered"] = last
     render["recommendedAspectRatio"] = last["aspectRatio"] if last else None
     caps["render"] = render
+    inventory = list_widget_instances()
+    caps["inventory"] = {
+        "sizes": inventory,
+        "registeredCount": len(inventory),
+        "endpoint": "PUT /v1/device/instances",
+    }
     return caps
 
 
@@ -1205,13 +1673,166 @@ def device_for_token(token: str) -> dict | None:
             conn.close()
 
 
+def set_device_push_endpoint(device_id: str, endpoint: Any) -> dict:
+    """Register or clear the device's private UnifiedPush endpoint.
+
+    Only a hash and timestamps are returned.  The raw endpoint remains in the
+    database solely long enough to deliver a wake and is never exposed by
+    status/events.
+    """
+    if not isinstance(device_id, str) or not device_id:
+        raise StoreError("device_id is required")
+    if endpoint is None or endpoint == "":
+        with _LOCK:
+            conn = _connect()
+            try:
+                conn.execute("DELETE FROM device_push_endpoints WHERE device_id = ?", (device_id,))
+                conn.commit()
+            finally:
+                conn.close()
+        return {"deviceId": device_id, "pushEndpointRegistered": False}
+    try:
+        clean = _push.validate_endpoint(endpoint)
+    except ValueError as exc:
+        raise StoreError(str(exc)) from exc
+    now = _now()
+    endpoint_hash = _hash_token(clean)
+    with _LOCK:
+        conn = _connect()
+        try:
+            active = conn.execute(
+                "SELECT device_id FROM devices WHERE device_id = ? AND revoked = 0", (device_id,)
+            ).fetchone()
+            if active is None:
+                raise StoreError("device is revoked or unknown")
+            conn.execute(
+                "INSERT INTO device_push_endpoints (device_id, endpoint, endpoint_hash, updated_at) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(device_id) DO UPDATE SET "
+                "endpoint=excluded.endpoint, endpoint_hash=excluded.endpoint_hash, updated_at=excluded.updated_at",
+                (device_id, clean, endpoint_hash, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return {"deviceId": device_id, "pushEndpointRegistered": True, "updatedAt": now}
+
+
+def _size_class(width_dp: int, height_dp: int, declared: Any = None) -> str:
+    if declared in {"2x2", "4x2", "2x4", "4x4", "custom"}:
+        return str(declared)
+    if width_dp <= 160 and height_dp <= 160:
+        return "2x2"
+    if width_dp >= 220 and height_dp <= 180:
+        return "4x2"
+    if width_dp <= 180 and height_dp >= 220:
+        return "2x4"
+    if width_dp >= 220 and height_dp >= 220:
+        return "4x4"
+    return "custom"
+
+
+def _instance_int(value: Any, name: str, lo: int, hi: int) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or not lo <= value <= hi:
+        raise StoreError(f"{name} must be an integer between {lo} and {hi}")
+    return value
+
+
+def report_widget_instances(device_id: str, widget_id: str, instances: Any) -> list[dict]:
+    """Replace a device's inventory for one widget with a bounded, validated list."""
+    if not isinstance(device_id, str) or not device_id:
+        raise StoreError("device_id is required")
+    if not isinstance(widget_id, str) or not widget_id or len(widget_id) > 128:
+        raise StoreError("widget_id is required")
+    if not isinstance(instances, list) or len(instances) > MAX_WIDGET_INSTANCES:
+        raise StoreError(f"instances must be an array of at most {MAX_WIDGET_INSTANCES} items")
+    cleaned: list[tuple[str, str, int, int, int, int]] = []
+    seen: set[str] = set()
+    for index, raw in enumerate(instances):
+        if not isinstance(raw, dict):
+            raise StoreError(f"instances[{index}] must be an object")
+        instance_id = raw.get("instanceId", raw.get("instance_id"))
+        if not isinstance(instance_id, str) or not instance_id or len(instance_id) > 128:
+            raise StoreError(f"instances[{index}].instanceId is required")
+        if instance_id in seen:
+            raise StoreError(f"instances contains duplicate instanceId {instance_id!r}")
+        seen.add(instance_id)
+        width_dp = _instance_int(raw.get("widthDp", raw.get("width_dp")), f"instances[{index}].widthDp", 1, 4096)
+        height_dp = _instance_int(raw.get("heightDp", raw.get("height_dp")), f"instances[{index}].heightDp", 1, 4096)
+        width_px = _instance_int(raw.get("widthPx", raw.get("width_px", round(width_dp))), f"instances[{index}].widthPx", 1, 16384)
+        height_px = _instance_int(raw.get("heightPx", raw.get("height_px", round(height_dp))), f"instances[{index}].heightPx", 1, 16384)
+        cleaned.append((
+            instance_id,
+            _size_class(width_dp, height_dp, raw.get("sizeClass", raw.get("size_class"))),
+            width_dp, height_dp, width_px, height_px,
+        ))
+    now = _now()
+    with _LOCK:
+        conn = _connect()
+        try:
+            active = conn.execute(
+                "SELECT device_id FROM devices WHERE device_id = ? AND revoked = 0", (device_id,)
+            ).fetchone()
+            if active is None:
+                raise StoreError("device is revoked or unknown")
+            conn.execute("DELETE FROM widget_instances WHERE device_id = ? AND widget_id = ?", (device_id, widget_id))
+            for instance_id, size_class, width_dp, height_dp, width_px, height_px in cleaned:
+                conn.execute(
+                    "INSERT INTO widget_instances "
+                    "(device_id, widget_id, instance_id, size_class, width_dp, height_dp, width_px, height_px, reported_at) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    (device_id, widget_id, instance_id, size_class, width_dp, height_dp, width_px, height_px, now),
+                )
+            conn.commit()
+        finally:
+            conn.close()
+    return list_widget_instances(widget_id, device_id=device_id)
+
+
+def list_widget_instances(widget_id: str | None = None, *, device_id: str | None = None) -> list[dict]:
+    clauses: list[str] = []
+    params: list[Any] = []
+    if widget_id is not None:
+        clauses.append("widget_id = ?")
+        params.append(widget_id)
+    if device_id is not None:
+        clauses.append("device_id = ?")
+        params.append(device_id)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT device_id, widget_id, instance_id, size_class, width_dp, height_dp, width_px, height_px, reported_at "
+                f"FROM widget_instances{where} ORDER BY device_id, instance_id",
+                params,
+            ).fetchall()
+        finally:
+            conn.close()
+    return [
+        {
+            "deviceId": row["device_id"],
+            "widgetId": row["widget_id"],
+            "instanceId": row["instance_id"],
+            "sizeClass": row["size_class"],
+            "widthDp": row["width_dp"],
+            "heightDp": row["height_dp"],
+            "widthPx": row["width_px"],
+            "heightPx": row["height_px"],
+            "reportedAt": row["reported_at"],
+        }
+        for row in rows
+    ]
+
+
 def list_devices() -> list[dict]:
     with _LOCK:
         conn = _connect()
         try:
             rows = conn.execute(
-                "SELECT device_id, label, created_at, last_seen_at, revoked "
-                "FROM devices ORDER BY created_at"
+                "SELECT d.device_id, d.label, d.created_at, d.last_seen_at, d.revoked, "
+                "CASE WHEN p.device_id IS NULL THEN 0 ELSE 1 END AS push_registered "
+                "FROM devices d LEFT JOIN device_push_endpoints p ON p.device_id = d.device_id "
+                "ORDER BY d.created_at"
             ).fetchall()
         finally:
             conn.close()
@@ -1222,6 +1843,7 @@ def list_devices() -> list[dict]:
             "createdAt": row["created_at"],
             "lastSeenAt": row["last_seen_at"],
             "revoked": bool(row["revoked"]),
+            "pushEndpointRegistered": bool(row["push_registered"]),
         }
         for row in rows
     ]
@@ -1234,6 +1856,8 @@ def revoke_device(device_id: str) -> bool:
             cur = conn.execute(
                 "UPDATE devices SET revoked = 1 WHERE device_id = ?", (device_id,)
             )
+            if cur.rowcount:
+                conn.execute("DELETE FROM device_push_endpoints WHERE device_id = ?", (device_id,))
             conn.commit()
             return cur.rowcount > 0
         finally:
@@ -1244,7 +1868,360 @@ def revoke_device(device_id: str) -> bool:
 # Events
 # ---------------------------------------------------------------------------
 
+def _json_object(value: Any, name: str, limit: int = MAX_ACTION_PAYLOAD_BYTES) -> dict:
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ActionIntentError(f"{name} must be a JSON object")
+    try:
+        size = len(json.dumps(value, separators=(",", ":")).encode("utf-8"))
+    except (TypeError, ValueError) as exc:
+        raise ActionIntentError(f"{name} is not JSON-safe") from exc
+    if size > limit:
+        raise ActionIntentError(f"{name} exceeds the {limit}-byte limit")
+    return value
+
+
+def _action_item_ids(publication: dict | None, layout: dict | None) -> set[str]:
+    ids: set[str] = set()
+    if isinstance(publication, dict):
+        if isinstance(publication.get("itemId"), str):
+            ids.add(publication["itemId"])
+        for action in publication.get("actions") or []:
+            if isinstance(action, dict) and isinstance(action.get("itemId"), str):
+                ids.add(action["itemId"])
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            if isinstance(node.get("itemId"), str):
+                ids.add(node["itemId"])
+            action = node.get("action")
+            if isinstance(action, dict) and isinstance(action.get("itemId"), str):
+                ids.add(action["itemId"])
+            for child in node.get("children") or []:
+                walk(child)
+    if isinstance(layout, dict):
+        walk(layout.get("root"))
+    return ids
+
+
+def _expire_stale_intents(conn: sqlite3.Connection) -> None:
+    now = _now()
+    stale = conn.execute(
+        "SELECT intent_id, widget_id, device_id, item_id, action_class, source_revision "
+        "FROM action_intents WHERE status IN ('queued', 'awaiting_confirmation') AND expires_at <= ?",
+        (now,),
+    ).fetchall()
+    for row in stale:
+        conn.execute(
+            "INSERT INTO action_audit "
+            "(intent_id, widget_id, device_id, item_id, action_class, revision, event, outcome, detail, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, 'expire', 'expired', 'intent expired before agent action', ?)",
+            (row["intent_id"], row["widget_id"], row["device_id"], row["item_id"],
+             row["action_class"], row["source_revision"], now),
+        )
+    conn.execute(
+        "UPDATE action_intents SET status='expired', updated_at=? "
+        "WHERE status IN ('queued', 'awaiting_confirmation') AND expires_at <= ?",
+        (now, now),
+    )
+
+
+def post_action_event(
+    widget_id: str,
+    device_id: str,
+    event: str,
+    payload: dict | None,
+    *,
+    revision: int | None = None,
+    item_id: str | None = None,
+    action_class: str | None = None,
+    confirm_on_device: bool = False,
+) -> dict:
+    """Durably record a tap and enqueue — never execute — an allowlisted intent."""
+    if event not in ACTION_KINDS:
+        raise ActionIntentError(f"action kind must be one of {list(ACTION_KINDS)}")
+    body = _json_object(payload, "payload")
+    resolved_item = item_id or body.get("itemId") or body.get("item_id")
+    if not isinstance(resolved_item, str) or not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_.:-]{0,127}", resolved_item):
+        raise ActionIntentError("action itemId is required and must be stable")
+    resolved_class = action_class or body.get("actionClass") or body.get("action_class") or "reversible"
+    if resolved_class not in ACTION_CLASSES:
+        raise ActionIntentError(f"actionClass must be one of {list(ACTION_CLASSES)}")
+    if not isinstance(confirm_on_device, bool):
+        raise ActionIntentError("confirmOnDevice must be boolean")
+    client_event_id = body.get("clientEventId")
+    if client_event_id is not None and (
+        not isinstance(client_event_id, str) or not client_event_id or len(client_event_id) > 160
+    ):
+        raise ActionIntentError("clientEventId must be a bounded string")
+    if revision is not None and (isinstance(revision, bool) or not isinstance(revision, int) or revision < 0):
+        raise ActionIntentError("revision must be a non-negative integer")
+    with _LOCK:
+        conn = _connect()
+        try:
+            _expire_stale_intents(conn)
+            device = conn.execute(
+                "SELECT device_id FROM devices WHERE device_id = ? AND revoked = 0", (device_id,)
+            ).fetchone()
+            if device is None:
+                raise ActionIntentError("device is revoked or unknown")
+            publication = None
+            row = conn.execute(
+                "SELECT payload_json, revision FROM publications WHERE widget_id = ?", (widget_id,)
+            ).fetchone()
+            if row:
+                try:
+                    publication = json.loads(row["payload_json"])
+                except (TypeError, ValueError) as exc:
+                    raise StoreError("stored publication is corrupt") from exc
+            current_revision = int(row["revision"]) if row else None
+            selected_revision = revision if revision is not None else current_revision
+            layout_row = conn.execute(
+                "SELECT layout_json FROM widgets WHERE widget_id = ?", (widget_id,)
+            ).fetchone()
+            layout = None
+            if layout_row:
+                try:
+                    layout = json.loads(layout_row["layout_json"])
+                except (TypeError, ValueError):
+                    layout = None
+            if selected_revision is None:
+                # Legacy v2 layouts have no publication revision; revision zero
+                # still gives the queue a stable, auditable ordering key.
+                selected_revision = 0 if layout is not None else None
+            if selected_revision is None:
+                raise ActionIntentError("no publication or layout revision is available for this action")
+            if current_revision is not None and selected_revision != current_revision:
+                raise ActionIntentError("action revision is not current")
+            known_items = _action_item_ids(publication, layout)
+            if (publication is not None or layout is not None) and resolved_item not in known_items:
+                raise ActionIntentError("action itemId is not present in this revision")
+            if client_event_id:
+                prior = conn.execute(
+                    "SELECT id, payload FROM events WHERE widget_id = ? AND device_id = ? ORDER BY id DESC",
+                    (widget_id, device_id),
+                ).fetchall()
+                for prior_row in prior:
+                    try:
+                        prior_payload = json.loads(prior_row["payload"] or "{}")
+                    except (TypeError, ValueError):
+                        continue
+                    if prior_payload.get("clientEventId") == client_event_id:
+                        intent = conn.execute(
+                            "SELECT * FROM action_intents WHERE event_id = ?", (prior_row["id"],)
+                        ).fetchone()
+                        if intent is not None:
+                            return {"eventId": int(prior_row["id"]), "intent": _intent_dict(intent), "duplicate": True}
+                        return {"eventId": int(prior_row["id"]), "duplicate": True}
+            cutoff = _iso_from_epoch(time.time() - ACTION_RATE_WINDOW_SECONDS)
+            count = conn.execute(
+                "SELECT COUNT(*) FROM action_audit WHERE device_id = ? "
+                "AND event IN ('approve', 'snooze', 'open') AND created_at > ?",
+                (device_id, cutoff),
+            ).fetchone()[0]
+            if int(count) >= ACTION_MAX_PER_WINDOW:
+                raise RateLimitError(f"action rate limit exceeded for device {device_id!r}")
+            now_dt = datetime.now(timezone.utc)
+            expires = (now_dt + timedelta(seconds=ACTION_INTENT_TTL_SECONDS)).isoformat().replace("+00:00", "Z")
+            payload_for_storage = dict(body)
+            payload_for_storage.update({
+                "itemId": resolved_item,
+                "actionClass": resolved_class,
+                "revision": selected_revision,
+                "confirmOnDevice": confirm_on_device,
+            })
+            event_payload = json.dumps(payload_for_storage, separators=(",", ":"), ensure_ascii=False)
+            cur = conn.execute(
+                "INSERT INTO events (widget_id, device_id, event, payload, created_at) VALUES (?, ?, ?, ?, ?)",
+                (widget_id, device_id, event, event_payload, _now()),
+            )
+            event_id = int(cur.lastrowid or 0)
+            if not event_id:
+                raise StoreError("event insert did not return an id")
+            intent_id = "intent_" + uuid.uuid4().hex
+            status = "awaiting_confirmation" if confirm_on_device or resolved_class in SENSITIVE_ACTION_CLASSES else "queued"
+            conn.execute(
+                "INSERT INTO action_intents "
+                "(intent_id, widget_id, device_id, event_id, item_id, action_class, status, source_revision, payload_json, result, created_at, updated_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?)",
+                (
+                    intent_id, widget_id, device_id, event_id, resolved_item, resolved_class,
+                    status, selected_revision, event_payload, _now(), _now(), expires,
+                ),
+            )
+            conn.execute(
+                "INSERT INTO action_audit "
+                "(intent_id, widget_id, device_id, item_id, action_class, revision, event, outcome, detail, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?)",
+                (intent_id, widget_id, device_id, resolved_item, resolved_class, selected_revision, event, status, _now()),
+            )
+            row = conn.execute("SELECT * FROM action_intents WHERE intent_id = ?", (intent_id,)).fetchone()
+            conn.commit()
+            return {"eventId": event_id, "intent": _intent_dict(row), "duplicate": False}
+        except Exception:
+            with contextlib.suppress(sqlite3.Error):
+                conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+def _intent_dict(row: sqlite3.Row) -> dict:
+    try:
+        payload = json.loads(row["payload_json"]) if row["payload_json"] else {}
+    except (TypeError, ValueError):
+        payload = {}
+    return {
+        "intentId": row["intent_id"],
+        "widgetId": row["widget_id"],
+        "deviceId": row["device_id"],
+        "eventId": int(row["event_id"]),
+        "itemId": row["item_id"],
+        "actionClass": row["action_class"],
+        "status": row["status"],
+        "sourceRevision": int(row["source_revision"]),
+        "payload": payload,
+        "result": row["result"],
+        "createdAt": row["created_at"],
+        "updatedAt": row["updated_at"],
+        "expiresAt": row["expires_at"],
+    }
+
+
+def get_intents(
+    widget_id: str | None = None,
+    *,
+    status: str | None = None,
+    limit: int = 200,
+) -> list[dict]:
+    try:
+        limit = max(1, min(int(limit), 1000))
+    except (TypeError, ValueError):
+        limit = 200
+    with _LOCK:
+        conn = _connect()
+        try:
+            _expire_stale_intents(conn)
+            clauses: list[str] = []
+            params: list[Any] = []
+            if widget_id:
+                clauses.append("widget_id = ?")
+                params.append(widget_id)
+            if status:
+                clauses.append("status = ?")
+                params.append(status)
+            where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+            params.append(limit)
+            rows = conn.execute(
+                f"SELECT * FROM action_intents{where} ORDER BY created_at DESC LIMIT ?", params
+            ).fetchall()
+            conn.commit()
+        finally:
+            conn.close()
+    return [_intent_dict(row) for row in rows]
+
+
+def get_action_audit(widget_id: str | None = None, *, limit: int = 200) -> list[dict]:
+    try:
+        limit = max(1, min(int(limit), 1000))
+    except (TypeError, ValueError):
+        limit = 200
+    with _LOCK:
+        conn = _connect()
+        try:
+            if widget_id:
+                rows = conn.execute(
+                    "SELECT intent_id, device_id, item_id, action_class, revision, event, outcome, detail, created_at "
+                    "FROM action_audit WHERE widget_id = ? ORDER BY id DESC LIMIT ?",
+                    (widget_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute(
+                    "SELECT intent_id, device_id, item_id, action_class, revision, event, outcome, detail, created_at "
+                    "FROM action_audit ORDER BY id DESC LIMIT ?", (limit,)
+                ).fetchall()
+        finally:
+            conn.close()
+    return [
+        {
+            "intentId": row["intent_id"],
+            "deviceId": row["device_id"],
+            "itemId": row["item_id"],
+            "actionClass": row["action_class"],
+            "revision": row["revision"],
+            "event": row["event"],
+            "outcome": row["outcome"],
+            "detail": row["detail"],
+            "createdAt": row["created_at"],
+        }
+        for row in rows
+    ]
+
+
+def resolve_intent(
+    intent_id: str,
+    outcome: str,
+    *,
+    result: str | None = None,
+    confirmed: bool = False,
+) -> dict:
+    """Record an agent's terminal decision; this function never runs the operation."""
+    if not isinstance(intent_id, str) or not intent_id or len(intent_id) > 160:
+        raise ActionIntentError("intent_id is required")
+    if outcome not in {"applied", "declined", "held", "expired"}:
+        raise ActionIntentError("outcome must be applied, declined, held, or expired")
+    if not isinstance(confirmed, bool):
+        raise ActionIntentError("confirmed must be boolean")
+    if result is not None:
+        if not isinstance(result, str) or len(result) > 2000:
+            raise ActionIntentError("result must be a string of at most 2000 characters")
+    with _LOCK:
+        conn = _connect()
+        try:
+            _expire_stale_intents(conn)
+            row = conn.execute("SELECT * FROM action_intents WHERE intent_id = ?", (intent_id,)).fetchone()
+            if row is None:
+                raise ActionIntentError("intent does not exist")
+            try:
+                stored_payload = json.loads(row["payload_json"] or "{}")
+            except (TypeError, ValueError):
+                stored_payload = {}
+            needs_confirmation = (
+                row["action_class"] in SENSITIVE_ACTION_CLASSES
+                or stored_payload.get("confirmOnDevice") is True
+            )
+            if needs_confirmation and outcome == "applied" and not confirmed:
+                raise ActionIntentError("sensitive or device-confirmed action requires explicit confirmation")
+            if row["status"] in {"applied", "declined", "expired"}:
+                return _intent_dict(row)
+            now = _now()
+            conn.execute(
+                "UPDATE action_intents SET status=?, result=?, updated_at=? WHERE intent_id=?",
+                (outcome, result, now, intent_id),
+            )
+            conn.execute(
+                "INSERT INTO action_audit "
+                "(intent_id, widget_id, device_id, item_id, action_class, revision, event, outcome, detail, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'resolve', ?, ?, ?)",
+                (intent_id, row["widget_id"], row["device_id"], row["item_id"], row["action_class"],
+                 row["source_revision"], outcome, result, now),
+            )
+            updated = conn.execute("SELECT * FROM action_intents WHERE intent_id = ?", (intent_id,)).fetchone()
+            conn.commit()
+            return _intent_dict(updated)
+        except Exception:
+            with contextlib.suppress(sqlite3.Error):
+                conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
 def post_event(widget_id: str, device_id: str, event: str, payload: dict | None) -> int:
+    if event in ACTION_KINDS:
+        result = post_action_event(widget_id, device_id, event, payload)
+        return int(result["eventId"])
     # E: durable, deduplicated tap storage — clientEventId + stable itemId are
     # preserved; duplicate submissions collapse to one state transition.
     if not isinstance(event, str) or not event or len(event) > 200:
@@ -1334,20 +2311,42 @@ def get_events(
         finally:
             conn.close()
     events = []
+    intent_by_event: dict[int, dict] = {}
+    if rows:
+        with _LOCK:
+            conn = _connect()
+            try:
+                ids = [int(row["id"]) for row in rows]
+                placeholders = ",".join("?" for _ in ids)
+                intent_rows = conn.execute(
+                    f"SELECT event_id, intent_id, status, result FROM action_intents "
+                    f"WHERE event_id IN ({placeholders})", ids
+                ).fetchall()
+            finally:
+                conn.close()
+        intent_by_event = {
+            int(row["event_id"]): {
+                "intentId": row["intent_id"],
+                "status": row["status"],
+                "result": row["result"],
+            }
+            for row in intent_rows
+        }
     for row in rows:
         try:
             payload = json.loads(row["payload"]) if row["payload"] else None
         except (TypeError, ValueError) as exc:
             logger.warning("ignoring malformed widget event payload %s", exc)
             payload = None
-        events.append(
-            {
-                "id": row["id"],
-                "widgetId": row["widget_id"],
-                "deviceId": row["device_id"],
-                "event": row["event"],
-                "payload": payload,
-                "createdAt": row["created_at"],
-            }
-        )
+        event = {
+            "id": row["id"],
+            "widgetId": row["widget_id"],
+            "deviceId": row["device_id"],
+            "event": row["event"],
+            "payload": payload,
+            "createdAt": row["created_at"],
+        }
+        if int(row["id"]) in intent_by_event:
+            event["intent"] = intent_by_event[int(row["id"])]
+        events.append(event)
     return events

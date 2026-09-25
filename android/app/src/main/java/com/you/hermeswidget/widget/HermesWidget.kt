@@ -83,7 +83,9 @@ class HermesWidget : GlanceAppWidget() {
         if (snapshot.paired && snapshot.publication?.isExpired() == false) {
             val (width, height) = WidgetDimensions.fromContext(context)
             renderAckScope.launch {
-                PublicationRepository.acknowledgeRenderSubmitted(context, width, height)
+                if (PublicationRepository.acknowledgeRenderSubmitted(context, width, height)) {
+                    Config.setDiagnosticTime(context, "render")
+                }
             }
         }
     }

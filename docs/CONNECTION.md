@@ -71,10 +71,11 @@ The Android client already speaks this contract. Do not change paths.
          -> 400 {"error":"invalid_or_expired_code"}
 
     PATCH /v1/device
-         Auth: paired DEVICE token only (a device may rename itself).
-         Body: {"label":"Kitchen tablet"}
-         -> 200 {"deviceId":"...","label":"Kitchen tablet"}
-         -> 403 for an agent/operator token; 400 for an empty or missing label
+         Auth: paired DEVICE token only (a device may rename itself or register a
+         UnifiedPush endpoint).
+         Body: {"label":"Kitchen tablet"} or {"pushEndpoint":"https://ntfy.example/up/..."}
+         -> 200 {"deviceId":"...","label":"Kitchen tablet","pushEndpointRegistered":true}
+         -> 403 for an agent/operator token; 400 for an empty/missing field
 
     GET  /v1/widgets
          Auth: DEVICE or AGENT token.
@@ -93,9 +94,11 @@ The Android client already speaks this contract. Do not change paths.
 
     POST /v1/widgets/<widget_id>/publication
          Auth: AGENT token.
-         Body: {"title":"...","summary":"...","text":"...","max_age_seconds":600} or
+         Body: {"title":"...","summary":"...","text":"...","max_age_seconds":600,
+                "priority":"normal|high","itemId":"...","actions":[...]} or
                {"title":"...","summary":"...","svg":"<svg>...</svg>"}
-         -> 200 <publication envelope with monotonically increasing revision>
+         -> 200 <publication envelope with monotonically increasing revision; high
+              priority includes requested/effective priority and any visible downgrade>
          -> 400 invalid_publication | 413 publication_too_large | 429 rate_limited
 
     GET  /v1/assets/<asset_id>
@@ -123,8 +126,44 @@ The Android client already speaks this contract. Do not change paths.
 
     POST /v1/widgets/<widget_id>/events
          Auth: DEVICE or AGENT token.
-         Body: {"event":"toggle_focus","payload":{...}}
-         -> 200 {"ok":true,"id":<int>}
+         Body: {"event":"toggle_focus","payload":{...}} or
+               {"event":"approve","itemId":"task-1","revision":7,
+                "actionClass":"reversible","clientEventId":"..."}
+         -> 200 {"ok":true,"id":<int>} for an event, or
+            {"ok":true,"eventId":<int>,"intent":{...}} for a queued action
+
+    POST /v1/widgets/<widget_id>/preview
+         Auth: AGENT token.
+         Body: either {"sizes":["2x2","4x2"]} for the current publication, or
+               {"publication": {title, summary, text|svg|file_path, ...}, "sizes":[...]}
+         -> 200 {"ok":true,"previews":[{"size":"2x2","mediaType":"image/png","data":"<base64>",...}]}
+         Does not publish or mutate the current revision. PNGs are an advisory server
+         rasterisation; the Android device remains authoritative.
+
+    PUT  /v1/device/instances
+         Auth: paired DEVICE token.
+         Body: {"widgetId":"hermes-brief","instances":[
+           {"instanceId":"12","sizeClass":"4x2","widthDp":270,"heightDp":120,
+            "widthPx":540,"heightPx":240}]}
+         -> 200 {"ok":true,"instances":[...]}
+         Inventory is replaced atomically for this device/widget; at most 32 instances
+         are accepted.
+
+    PUT  /v1/widgets/<widget_id>/settings
+         Auth: AGENT token.
+         Body: {"quietHours":{"start":"22:00","end":"07:00"}} or {"quietHours":null}
+         -> 200 {"ok":true,"quietHours":...}
+         Times are UTC. High-priority wakes degrade visibly to normal while quiet.
+
+    GET  /v1/intents?widget_id=<id>&status=<queued|awaiting_confirmation|applied|declined|held|expired>
+         Auth: AGENT token.
+         -> 200 {"intents":[...]}
+    POST /v1/intents
+         Auth: AGENT token.
+         Body: {"intentId":"intent_...","outcome":"applied|declined|held|expired",
+                "result":"...","confirmed":true}
+         -> 200 {"ok":true,"intent":{...}}
+         Resolution records an agent decision; it never executes the operation.
 
     GET  /v1/events?since=<iso8601>&widget_id=<id>&limit=<int>
          Auth: AGENT token.
@@ -165,6 +204,19 @@ or accidentally exposed listener from bypassing the credential boundary.
     publication_acks(widget_id TEXT, device_id TEXT, revision INTEGER,
                      rendered_at TEXT, width INTEGER, height INTEGER,
                      PRIMARY KEY(widget_id, device_id, revision))
+    publication_priorities(widget_id, revision, requested_priority, effective_priority,
+                           degraded_reason, created_at)
+    publication_nudges(widget_id, revision, device_id, status, attempted_at, sent_at, detail)
+    delivery_receipts(widget_id, device_id, revision, state, occurred_at, detail)
+    device_push_endpoints(device_id, endpoint, endpoint_hash, updated_at)
+    widget_instances(device_id, widget_id, instance_id, size_class,
+                     width_dp, height_dp, width_px, height_px, reported_at)
+    action_intents(intent_id, widget_id, device_id, event_id, item_id, action_class,
+                   status, source_revision, payload_json, result, created_at,
+                   updated_at, expires_at)
+    action_audit(id, intent_id, widget_id, device_id, item_id, action_class,
+                 revision, event, outcome, detail, created_at)
+    widget_settings(widget_id, quiet_start, quiet_end, updated_at)
     devices(device_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, label TEXT,
             created_at TEXT, last_seen_at TEXT, revoked INTEGER DEFAULT 0)
     events(id INTEGER PRIMARY KEY AUTOINCREMENT, widget_id TEXT, device_id TEXT,
@@ -197,8 +249,12 @@ Layout contract rules live in `docs/SCHEMA.md`. The legacy push-time guardrails 
 - Colours are 3- or 6-digit hex only (#RGB / #RRGGBB): accentColor, text.color, divider.color,
   badge.color, stat.color, calendar.events[].color. 8-digit alpha hex and named colours are
   rejected at push time (the device ignores them rather than failing to paint).
-- action.kind is one of event|refresh|dismiss|review. Removed: url and open_app, so there is no
-  https-only URL rule to apply any more and no deeplink rendering.
+- action.kind is one of event|refresh|dismiss|review|approve|snooze|open. The latter three
+  require a stable itemId and enqueue an intent; the HTTP server never executes them.
+- High-priority publication wakes are content-free `fetch` messages sent to the paired device's
+  UnifiedPush endpoint. The endpoint is stored as a secret, never returned by status, and the
+  high lane is limited to six per hour and thirty per day. Quiet hours and rate-limit
+  degradation are recorded rather than hidden.
 - text.value <= 500; button.label <= 200; badge.text <= 50; stat.label/stat.value <= 50;
   list_item.title/subtitle <= 200; calendar.events <= 50.
 - Per-container child caps: column/box 100, row 20, list 100.
@@ -225,7 +281,9 @@ store.py:
     verify_agent_token(token: str) -> bool
     put_widget(widget_id: str, layout: dict) -> dict            # {"ok":True,"widgetId":..,"updatedAt":..}
     put_publication(widget_id: str, *, title, summary, text=None, svg=None,
-                    file_path=None, expires_at=None, ttl_seconds=None) -> dict
+                    file_path=None, expires_at=None, ttl_seconds=None,
+                    max_age_seconds=None, priority="normal", item_id=None,
+                    actions=None) -> dict
     get_publication(widget_id: str) -> dict | None
     publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict
     publication_for_asset(asset_id: str) -> dict | None
@@ -237,7 +295,17 @@ store.py:
     get_events(since: str | None = None, widget_id: str | None = None, limit: int = 200) -> list[dict]
     record_publication_fetch(widget_id, device_id, revision, \*, downloaded=False) -> None
     record_asset_download(widget_id, device_id, revision, asset_id) -> None
-    acknowledge_publication_render(widget_id, device_id, revision, width, height) -> dict
+    acknowledge_publication_render(widget_id, device_id, revision, width, height, *, status="render_submitted") -> dict
+    report_widget_instances(device_id, widget_id, instances) -> list[dict]
+    list_widget_instances(widget_id=None, *, device_id=None) -> list[dict]
+    set_device_push_endpoint(device_id, endpoint) -> dict
+    get_widget_settings(widget_id) -> dict
+    set_widget_settings(widget_id, quiet_hours) -> dict
+    post_action_event(widget_id, device_id, event, payload, *, revision=None,
+                      item_id=None, action_class=None, confirm_on_device=False) -> dict
+    get_intents(widget_id=None, *, status=None, limit=200) -> list[dict]
+    get_action_audit(widget_id=None, *, limit=200) -> list[dict]
+    resolve_intent(intent_id, outcome, *, result=None, confirmed=False) -> dict
     get_asset(asset_id: str) -> dict
     read_asset(asset_id: str) -> tuple[dict, bytes]
     mint_pairing_code(ttl_minutes: int = 10) -> dict            # {"code":..,"expiresAt":..}
@@ -257,7 +325,7 @@ publication.py:
 validate.py:
     class ValidationError(ValueError)
     def validate_layout(layout: dict) -> None
-    def inspect_layout(layout: dict) -> dict      # validates, then reports nodeCount/bytes/textStyles/warnings
+    def inspect_layout(layout: dict, inventory: list[dict] | None = None) -> dict      # validates, then reports nodeCount/bytes/textStyles/warnings
 
 v2 is the only accepted contract. A layout that is not version 2 is rejected, not migrated:
 `migrate_layout` and the v1 compatibility path were removed once it was clear nothing had
@@ -349,9 +417,10 @@ snapshot that ages.
 
 ## 11. Coding standards
 
-- Python 3.11. The HTTP server uses the standard library; the only declared runtime
-  dependency is the pinned `defusedxml` parser in `hermes-plugin/hermes-widget/requirements.txt`.
-  No fastapi/uvicorn/requests/pydantic in the plugin.
+- Python 3.11. The HTTP server uses the standard library; `defusedxml` remains the
+  security-critical parser dependency. `Pillow`/`CairoSVG` are bounded publication-preview
+  backends and have a deterministic PNG fallback when unavailable. No fastapi/uvicorn/requests/
+  pydantic in the plugin.
 - from __future__ import annotations; type hints; small functions; no bare except.
 - Relative imports inside the plugin package.
 - Docs/comments explain WHY, not what. No placeholder or TODO-only bodies.

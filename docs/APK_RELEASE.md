@@ -7,15 +7,15 @@ owner's existing signing identity and verified. Never commit a keystore, signing
 
 ## Current local artifact
 
-The debug APK was rebuilt and tested on 2026-09-25 with JDK 21:
+The debug APK was rebuilt and tested on 2026-09-25 with JDK 17 (the project also supports JDK 21):
 
 | Field | Value |
 | --- | --- |
 | Artifact | `android/app/build/outputs/apk/debug/app-debug.apk` |
-| Size | 7,559,283 bytes |
-| SHA-256 | `7ceac6b95fd6117553b42ded384f87b6b732dbc7adbd47eafe26911035d60527` |
+| Size | 7,158,980 bytes |
+| SHA-256 | `dbf70243ba9fa90b8a0795b97d0c841bad7b9634529767e700d900d03acbb47f` |
 | Package | `com.you.hermeswidget` |
-| Version | `0.1.0` (`versionCode=1`) |
+| Version | `0.2.0` (`versionCode=1`) |
 | SDK range | minSdk 26, targetSdk 35 |
 | Signer | Android debug certificate; local testing only |
 

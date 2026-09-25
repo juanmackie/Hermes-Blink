@@ -25,7 +25,11 @@ NODE_TYPES = frozenset({
     "button", "list_item",
 })
 CONTAINER_TYPES = frozenset({"column", "row", "box", "list"})
-ACTION_KINDS = frozenset({"event", "refresh", "dismiss", "review"})
+ACTION_KINDS = frozenset({"event", "refresh", "dismiss", "review", "approve", "snooze", "open"})
+ACTION_CLASSES = frozenset({
+    "reversible", "read_only", "dismiss_reminder", "rerun_check", "staged_patch", "flag",
+    "destructive", "external", "irreversible",
+})
 _TEXT_STYLES = frozenset({"title", "body", "label", "caption"})
 _ALIGNMENTS = frozenset({"start", "center", "end", "fill"})
 _BUTTON_STYLES = frozenset({"filled", "tonal", "outlined"})
@@ -110,10 +114,14 @@ def _check_action(action: Any, where: str) -> None:
             _check_str(action, "itemId", max_len=128, min_len=1, where=where)
     elif kind == "refresh":
         pass  # no extra fields required
-    elif kind in ("dismiss", "review"):
+    elif kind in ("dismiss", "review", "approve", "snooze", "open"):
         _check_str(action, "itemId", max_len=128, min_len=1, where=where, required=True)
         if "payload" in action and not isinstance(action["payload"], dict):
             _fail(f"{where}: 'action.payload' must be an object")
+        if "actionClass" in action and action["actionClass"] not in ACTION_CLASSES:
+            _fail(f"{where}: 'action.actionClass' is not allowlisted")
+        if "confirmOnDevice" in action and not isinstance(action["confirmOnDevice"], bool):
+            _fail(f"{where}: 'action.confirmOnDevice' must be boolean")
 
 
 def _check_node(node: Any, where: str, counter: list) -> None:
@@ -128,6 +136,7 @@ def _check_node(node: Any, where: str, counter: list) -> None:
     label = f"{where}<{node_type}>"
 
     _check_str(node, "id", max_len=128, where=label)
+    _check_str(node, "itemId", max_len=128, where=label)
     if "weight" in node and not _is_number(node["weight"]):
         _fail(f"{label}: 'weight' must be a number")
     if "weight" in node and node["weight"] < 0:
@@ -227,6 +236,7 @@ def validate_layout(layout: Any) -> None:
     if not _is_int(version) or version != LAYOUT_VERSION:
         _fail(f"'version' must be the integer {LAYOUT_VERSION}")
     _check_str(layout, "widgetId", max_len=128, min_len=1, where="layout", required=True)
+    _check_str(layout, "itemId", max_len=128, where="layout")
     if "title" in layout:
         _check_str(layout, "title", max_len=200, where="layout")
     if "ttlSeconds" in layout:
@@ -258,6 +268,32 @@ _TEXT_STYLE_WARN_COUNT = 3
 _NODE_WARN_COUNT = 80
 
 
+def _capacity_warnings(stats: dict, inventory: Any) -> list[dict[str, str]]:
+    if not isinstance(inventory, list) or not inventory:
+        return []
+    valid = [
+        item for item in inventory
+        if isinstance(item, dict)
+        and isinstance(item.get("widthDp"), int)
+        and isinstance(item.get("heightDp"), int)
+    ]
+    if not valid:
+        return []
+    smallest = min(valid, key=lambda item: (item["widthDp"], item["heightDp"]))
+    warnings: list[dict[str, str]] = []
+    if smallest.get("sizeClass") == "2x2" and stats["nodes"] > 5:
+        warnings.append({
+            "code": "LAYOUT_MAY_CLIP_2X2",
+            "detail": f"{stats['nodes']} nodes may clip on the smallest registered 2x2 instance",
+        })
+    if smallest.get("sizeClass") == "2x2" and stats["textNodes"] > 3:
+        warnings.append({
+            "code": "TEXT_MAY_CLIP_2X2",
+            "detail": f"{stats['textNodes']} text nodes may not fit on the smallest registered 2x2 instance",
+        })
+    return warnings
+
+
 def _inspect_node(node: Any, stats: dict) -> None:
     if not isinstance(node, dict):
         return
@@ -265,11 +301,12 @@ def _inspect_node(node: Any, stats: dict) -> None:
     if node.get("type") == "text":
         # The effective step, not the declared one: an omitted style renders as body.
         stats["styles"].add(node.get("style") or "body")
+        stats["textNodes"] += 1
     for child in node.get("children") or []:
         _inspect_node(child, stats)
 
 
-def inspect_layout(layout: Any) -> dict:
+def inspect_layout(layout: Any, inventory: Any = None) -> dict:
     """Validate a layout and describe it without storing anything.
 
     Raises ValidationError for exactly the reasons widget_update would, so an agent can
@@ -278,7 +315,7 @@ def inspect_layout(layout: Any) -> dict:
     """
     validate_layout(layout)
 
-    stats: dict = {"nodes": 0, "styles": set()}
+    stats: dict = {"nodes": 0, "styles": set(), "textNodes": 0}
     _inspect_node(layout["root"], stats)
     payload = json.dumps(layout, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 
@@ -309,6 +346,8 @@ def inspect_layout(layout: Any) -> dict:
             "detail": f"{stats['nodes']} nodes of the {MAX_NODES} allowed - trim before adding more",
         })
 
+    capacity = _capacity_warnings(stats, inventory)
+    warnings.extend(capacity)
     return {
         "ok": True,
         "nodeCount": stats["nodes"],
@@ -316,4 +355,5 @@ def inspect_layout(layout: Any) -> dict:
         "maxBytes": MAX_LAYOUT_BYTES,
         "textStyles": sorted(stats["styles"]),
         "warnings": warnings,
+        "capacityWarnings": capacity,
     }

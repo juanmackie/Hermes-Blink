@@ -17,6 +17,11 @@
       "maxLength": 128,
       "description": "Stable identifier for this widget instance."
     },
+    "itemId": {
+      "type": "string",
+      "maxLength": 128,
+      "description": "Optional stable item identity for queue-not-authorise actions."
+    },
     "updatedAt": {
       "type": "string",
       "format": "date-time",
@@ -59,6 +64,7 @@
           ]
         },
         "id": { "type": "string", "maxLength": 128 },
+        "itemId": { "type": "string", "maxLength": 128 },
         "weight": { "type": "number", "minimum": 0 },
         "padding": {
           "type": "object",
@@ -332,11 +338,16 @@
       "properties": {
         "kind": {
           "type": "string",
-          "enum": ["event", "refresh", "dismiss", "review"]
+          "enum": ["event", "refresh", "dismiss", "review", "approve", "snooze", "open"]
         },
         "event": { "type": "string", "maxLength": 200 },
         "payload": { "type": "object" },
-        "itemId": { "type": "string", "maxLength": 128 }
+        "itemId": { "type": "string", "maxLength": 128 },
+        "actionClass": {
+          "type": "string",
+          "enum": ["reversible", "read_only", "dismiss_reminder", "rerun_check", "staged_patch", "flag", "destructive", "external", "irreversible"]
+        },
+        "confirmOnDevice": { "type": "boolean" }
       },
       "allOf": [
         {
@@ -348,11 +359,7 @@
           "then": { }
         },
         {
-          "if": { "properties": { "kind": { "const": "dismiss" } } },
-          "then": { "required": ["itemId"] }
-        },
-        {
-          "if": { "properties": { "kind": { "const": "review" } } },
+          "if": { "properties": { "kind": { "enum": ["dismiss", "review", "approve", "snooze", "open"] } } },
           "then": { "required": ["itemId"] }
         }
       ],

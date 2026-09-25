@@ -8,11 +8,11 @@ to the same Tailscale tailnet and use Tailscale Serve HTTPS rather than exposing
 
 ## What it registers
 
-- Tools: widget_publish, widget_status, widget_update, widget_validate (dry run), widget_list, widget_read_events, widget_mint_pairing_code, widget_setup
+- Tools: widget_publish, widget_preview, widget_status, widget_update, widget_validate (dry run), widget_list, widget_read_events, widget_read_intents, widget_resolve_intent, widget_set_quiet_hours, widget_mint_pairing_code, widget_setup
 - Slash command: /widget (status)
 - CLI: hermes widget serve | setup | code | status | routine | devices | install-skill | preview
 - Bundled skill: hermes-widget:widget (layout authoring, design tokens, proactive refresh)
-- A private HTTP server started with `hermes widget serve`; secure SVG parsing uses the pinned `defusedxml` dependency in `requirements.txt`
+- A private HTTP server started with `hermes widget serve`; secure SVG parsing uses the pinned `defusedxml` dependency, and publication PNG previews use optional Pillow/CairoSVG backends with a bounded fallback.
 
 ## Architecture
 
@@ -22,6 +22,7 @@ to the same Tailscale tailnet and use Tailscale Serve HTTPS rather than exposing
         -> ~/.hermes/widget/widget.db + assets/
         <- hermes widget serve (HTTP, short-lived pairing/device bearer auth)
         <- Android widget (conditional publication GET, asset GET, render ack)
+        <- Android UnifiedPush distributor (content-free `fetch` wake)
 
 The agent process and the server share one SQLite file, so a cron job or a chat turn can update
 the widget while the phone polls. Device tokens are stored only as sha256 hashes.
@@ -70,7 +71,12 @@ fabricates data or a visual. Manage or remove it with
   after its asset and metadata commit together. Device fetch and render acknowledgement
   are tracked separately; neither is reported as user visibility.
 - Layouts retain their 64 KiB / 100-node closed contract. Push rate limit: 30 per widget
-  per hour across layout and publication writes.
+  per hour across layout and publication writes. High-priority wakes are separately limited
+  to 6/hour and 30/day; over-limit and quiet-hour requests degrade to normal and are visible.
+- UnifiedPush endpoints are device-registered secrets. Wake bodies contain only `fetch`;
+  publication content is never sent through the distributor.
+- Action taps are queue-not-authorise: allowlisted intents are durable, idempotent, audited,
+  and resolved by an agent tool. Destructive/external classes require confirmation.
 - Bind the server to loopback and use private Tailscale Serve HTTPS; never expose
   the raw port publicly. The Android phone pairs with a short-lived code and never
   receives the operator token.
@@ -84,11 +90,15 @@ fabricates data or a visual. Manage or remove it with
   immutable-cacheable, integrity checked, and never interpreted as active content.
 - `POST /v1/widgets/<id>/publication` is agent-authenticated and accepts text or inline SVG;
   `widget_publish` additionally accepts a bounded local raster path on the host.
-- `POST /v1/widgets/<id>/publication/ack` records only `render_submitted` plus the usable
-  widget dimensions. It is not a claim that the user saw or understood the publication.
-- `GET /v1/capabilities` reports the active format and size limits to authenticated clients.
-- `widget_status` reports host state (`published`, `expired`, or `empty`) separately from
-  each device's `not_downloaded`, `downloaded`, or `render_submitted` state.
+- `POST /v1/widgets/<id>/publication/ack` records `render_submitted` (or an explicit
+  `rendered` pass) plus the usable widget dimensions. It is not a claim that the user saw or
+  understood the publication.
+- `PUT /v1/device/instances` records every hosted widget instance and its current size class.
+  `POST /v1/widgets/<id>/preview` renders exact current/proposed publications to bounded PNGs;
+  `hermes widget preview --sizes ... --out DIR` writes the same previews locally.
+- `GET /v1/capabilities` reports the active format, size, priority, inventory, and action limits.
+- `widget_status` reports host state separately from ordered `nudge_sent`, `fetched`,
+  `downloaded`, and `render_submitted` receipts.
 
 ## Contract
 
@@ -102,4 +112,6 @@ fabricates data or a visual. Manage or remove it with
   and the frozen module interfaces.
 - `skills/widget/SKILL.md` — what the agent is taught: which fields render, the type scale, the
   spacing rhythm, the widget sizes, and the reference layouts in `../../fixtures/golden/`.
-- `preview.py` — `hermes widget preview <layout.json>` renders a layout to HTML without a device.
+- `preview.py` — `hermes widget preview <layout.json>` renders a layout to HTML; publication
+  mode additionally rasterises exact text/SVG/raster previews with CairoSVG/Pillow when available
+  and a deterministic bounded PNG fallback on minimal hosts.

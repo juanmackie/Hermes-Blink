@@ -12,11 +12,19 @@ sizing and cannot show real font metrics.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import html
+import io
 import json
 import pathlib
+import re
+import struct
+import textwrap
+import zlib
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
+from xml.sax.saxutils import escape as xml_escape
 
 try:  # normal path: imported as part of the hermes-widget plugin package
     from .validate import ValidationError, inspect_layout
@@ -348,4 +356,219 @@ def preview_file(path: str | pathlib.Path, out: str | pathlib.Path | None = None
         raise ValueError(f"cannot render preview: {exc}") from exc
 
 
-__all__ = ["render_html", "preview_file", "is_stale", "SHAPES", "ValidationError"]
+# Nominal publication previews use the same dp classes as the Android widget.
+# The values are intentionally explicit: a caller can ask for a registered
+# custom size and the server will use its reported pixel dimensions instead.
+PUBLICATION_SIZES: dict[str, tuple[int, int]] = {
+    "2x2": (120, 120),
+    "4x2": (270, 120),
+    "2x4": (120, 270),
+    "4x4": (270, 270),
+}
+_PREVIEW_MAX_BYTES = 2 * 1024 * 1024
+_PREVIEW_MAX_COUNT = 16
+_PREVIEW_MAX_PIXELS = 4_000_000
+
+
+def _fallback_png(width: int, height: int, *, label: bytes = b"Hermes") -> bytes:
+    """Make a valid deterministic PNG when an optional raster backend is absent.
+
+    CairoSVG/Pillow are preferred for fidelity.  This fallback keeps the API
+    useful on a minimal host (and makes failures explicit in ``renderer``), while
+    never pretending that a placeholder is an exact device render.
+    """
+    width = max(1, min(4096, int(width)))
+    height = max(1, min(4096, int(height)))
+    rows = bytearray()
+    for y in range(height):
+        rows.append(0)  # PNG filter: none
+        for x in range(width):
+            # A quiet scrim with a small accent marker, independent of input.
+            edge = x < 3 or y < 3 or x >= width - 3 or y >= height - 3
+            if edge:
+                rows.extend((124, 58, 237))
+            else:
+                value = 245 - (y * 8 // max(1, height))
+                rows.extend((value, value, min(255, value + 3)))
+
+    def chunk(kind: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data)) + kind + data
+            + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+        )
+
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + chunk(b"IHDR", struct.pack(">IIBBBBB", width, height, 8, 2, 0, 0, 0))
+        + chunk(b"IDAT", zlib.compress(bytes(rows), 9))
+        + chunk(b"IEND", b"")
+    )
+
+
+def _svg_text_png(publication: dict, width: int, height: int) -> tuple[bytes, str]:
+    content = publication.get("content") or {}
+    text = str(content.get("text") or "")
+    title = str(publication.get("title") or "Hermes")
+    summary = str(publication.get("summary") or "")
+    width_px, height_px = max(1, width), max(1, height)
+    pad = max(8, min(18, width_px // 12))
+    title_size = max(12, min(22, width_px // 12))
+    body_size = max(10, min(16, width_px // 15))
+    summary_size = max(9, min(12, width_px // 18))
+    usable = max(40, width_px - pad * 2)
+    title_line = textwrap.shorten(title, width=max(8, usable // max(7, title_size // 2)), placeholder="…")
+    summary_line = textwrap.shorten(summary, width=max(12, usable // max(6, summary_size // 2)), placeholder="…")
+    body_lines = textwrap.wrap(text, width=max(12, usable // max(6, body_size // 2))) or [""]
+    # A 2x2 preview intentionally shows the same clipping boundary as a glanceable
+    # surface: no server-side reflow or crop is hidden from the publisher.
+    max_lines = max(1, (height_px - pad * 2 - title_size - summary_size - 12) // (body_size + 5))
+    body_lines = body_lines[:max_lines]
+    chunks = [
+        '<rect width="100%" height="100%" fill="#F5F5F7"/>',
+        f'<text x="{pad}" y="{pad + title_size}" font-family="sans-serif" font-size="{title_size}" font-weight="700" fill="#111">{xml_escape(title_line)}</text>',
+        f'<text x="{pad}" y="{pad + title_size + summary_size + 4}" font-family="sans-serif" font-size="{summary_size}" fill="#6E6E73">{xml_escape(summary_line)}</text>',
+    ]
+    y = pad + title_size + summary_size + 12 + body_size
+    for line in body_lines:
+        chunks.append(f'<text x="{pad}" y="{y}" font-family="sans-serif" font-size="{body_size}" fill="#111">{xml_escape(line)}</text>')
+        y += body_size + 5
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" height="{height_px}" '
+        f'viewBox="0 0 {width_px} {height_px}">' + "".join(chunks) + "</svg>"
+    ).encode("utf-8")
+    try:
+        import cairosvg  # type: ignore
+        return cairosvg.svg2png(bytestring=svg), "cairosvg"
+    except Exception:
+        return _fallback_png(width_px, height_px, label=b"text"), "fallback"
+
+
+def _fit_image(data: bytes, media_type: str, width: int, height: int) -> tuple[bytes, str]:
+    try:
+        import cairosvg  # type: ignore
+        from PIL import Image, ImageOps  # type: ignore
+    except Exception:
+        return _fallback_png(width, height, label=b"image"), "fallback"
+    try:
+        if media_type == "image/svg+xml":
+            source = cairosvg.svg2png(bytestring=data)
+            image = Image.open(io.BytesIO(source)).convert("RGBA")
+        else:
+            image = Image.open(io.BytesIO(data)).convert("RGBA")
+        image = ImageOps.contain(image, (max(1, width), max(1, height)), method=Image.Resampling.LANCZOS)
+        canvas = Image.new("RGBA", (max(1, width), max(1, height)), (245, 245, 247, 255))
+        canvas.alpha_composite(image, ((canvas.width - image.width) // 2, (canvas.height - image.height) // 2))
+        output = io.BytesIO()
+        canvas.convert("RGB").save(output, format="PNG", optimize=True)
+        return output.getvalue(), "pillow"
+    except Exception:
+        return _fallback_png(width, height, label=b"image"), "fallback"
+
+
+def _size_names(sizes: Any, inventory: list[dict] | None = None) -> list[tuple[str, int, int, bool]]:
+    if sizes is None:
+        if inventory:
+            result: list[tuple[str, int, int, bool]] = []
+            used: dict[str, int] = {}
+            for item in inventory:
+                base_name = str(item.get("sizeClass") or "custom")
+                used[base_name] = used.get(base_name, 0) + 1
+                name = base_name if used[base_name] == 1 else f"{base_name}#{used[base_name]}"
+                width_px = item.get("widthPx")
+                height_px = item.get("heightPx")
+                if isinstance(width_px, int) and isinstance(height_px, int):
+                    result.append((name, width_px, height_px, True))
+                else:
+                    result.append((
+                        name,
+                        int(item.get("widthDp") or PUBLICATION_SIZES.get(base_name, (270, 120))[0]),
+                        int(item.get("heightDp") or PUBLICATION_SIZES.get(base_name, (270, 120))[1]),
+                        False,
+                    ))
+            return result[:_PREVIEW_MAX_COUNT]
+        return [(name, width, height, False) for name, (width, height) in PUBLICATION_SIZES.items()]
+    if isinstance(sizes, str):
+        sizes = [part.strip() for part in sizes.split(",") if part.strip()]
+    if not isinstance(sizes, list) or not sizes or len(sizes) > _PREVIEW_MAX_COUNT:
+        raise ValueError(f"sizes must contain at most {_PREVIEW_MAX_COUNT} size names")
+    result: list[tuple[str, int, int, bool]] = []
+    seen: set[str] = set()
+    for raw in sizes:
+        if not isinstance(raw, str):
+            raise ValueError("each preview size must be a string")
+        name = raw.strip()
+        if name in seen:
+            raise ValueError(f"duplicate preview size {name!r}")
+        seen.add(name)
+        if name in PUBLICATION_SIZES:
+            result.append((name, *PUBLICATION_SIZES[name], False))
+            continue
+        match = re.fullmatch(r"(\d{2,5})x(\d{2,5})", name)
+        if not match:
+            raise ValueError(f"unknown preview size {name!r}")
+        width, height = int(match.group(1)), int(match.group(2))
+        if not 1 <= width <= 4096 or not 1 <= height <= 4096:
+            raise ValueError("preview dimensions are out of range")
+        result.append((name, width, height, False))
+    return result
+
+
+def render_publication_previews(
+    publication: dict,
+    *,
+    sizes: Any = None,
+    inventory: list[dict] | None = None,
+    asset_loader: Callable[[str], bytes] | None = None,
+) -> list[dict[str, Any]]:
+    """Render one publication to bounded, deterministic PNG previews.
+
+    ``publication`` is the exact envelope that would be published.  No current
+    state is changed.  ``asset_loader`` is supplied by the store for immutable
+    publication assets; tests and offline callers may provide raw bytes instead.
+    """
+    if not isinstance(publication, dict):
+        raise ValueError("publication must be an object")
+    requested = _size_names(sizes, inventory)
+    content = publication.get("content") or {}
+    kind = publication.get("kind")
+    asset_data: bytes | None = None
+    if kind == "image":
+        asset_id = content.get("assetId")
+        if asset_loader is not None and isinstance(asset_id, str):
+            asset_data = asset_loader(asset_id)
+        elif isinstance(content.get("data"), str):
+            try:
+                asset_data = base64.b64decode(content["data"], validate=True)
+            except (ValueError, TypeError):
+                asset_data = None
+    output: list[dict[str, Any]] = []
+    for name, width, height, already_pixels in requested:
+        width_px, height_px = (width, height) if already_pixels else (width * 2, height * 2)
+        if width_px * height_px > _PREVIEW_MAX_PIXELS:
+            raise ValueError("preview dimensions exceed the 4-megapixel safety limit")
+        if kind == "text":
+            data, renderer = _svg_text_png(publication, width_px, height_px)
+        else:
+            media_type = str(content.get("mediaType") or "image/png")
+            data, renderer = _fit_image(asset_data or b"", media_type, width_px, height_px)
+        if len(data) > _PREVIEW_MAX_BYTES:
+            raise ValueError("rendered preview exceeds the 2 MiB limit")
+        output.append({
+            "size": name,
+            "width": width_px if already_pixels else width,
+            "height": height_px if already_pixels else height,
+            "pixelWidth": width_px,
+            "pixelHeight": height_px,
+            "mediaType": "image/png",
+            "bytes": len(data),
+            "sha256": hashlib.sha256(data).hexdigest(),
+            "data": base64.b64encode(data).decode("ascii"),
+            "renderer": renderer,
+        })
+    return output
+
+
+__all__ = [
+    "render_html", "preview_file", "is_stale", "SHAPES", "PUBLICATION_SIZES",
+    "render_publication_previews", "ValidationError",
+]

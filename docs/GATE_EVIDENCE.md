@@ -85,6 +85,20 @@ and verify `/v1/health` before pairing.
   has passed on it.
 - TrueNAS container recreation and a 72-hour phone/network soak remain pending.
 
+### v3.1 local verification — 2026-09-25
+
+- The host suite now includes five feature-proposal regression tests covering content-free
+  priority wakes and degradation, ordered delivery receipts, registered-size PNG previews,
+  durable idempotent action intents/audit, and revoked-device rejection: **74/74 passed** on
+  CPython 3.11.
+- `python scripts/check-contract-parity.py`, `python scripts/verify-cli-local.py`, and
+  `pyflakes hermes-plugin/hermes-widget/*.py` passed.
+- Android `testDebugUnitTest`, `lintDebug`, and `assembleDebug` passed with JDK 17 and the
+  installed Android 35 SDK. The debug artifact is 7,158,980 bytes with SHA-256
+  `dbf70243ba9fa90b8a0795b97d0c841bad7b9634529767e700d900d03acbb47f`.
+- Real UnifiedPush distributor registration, Doze/exemption behavior, and a phone action
+  round-trip remain device/host soak checks; no visibility claim is made from local tests.
+
 ## Gate status
 
 | Gate | Status | Evidence or remaining action |

@@ -214,6 +214,22 @@ supported update. If nothing useful changed it does nothing, leaving the
 current publication untouched. `widget_status` distinguishes host storage,
 device download, and render submission; none claims user visibility.
 
+For a genuinely time-sensitive update, publish with `priority: "high"`. The Android app uses a
+user-selected UnifiedPush distributor (a self-hosted ntfy instance is suitable); the host sends
+only a `fetch` wake and the phone pulls the content over the private HTTPS path. The app's
+**Delivery diagnostics** screen shows the last poll/fetch/render timestamps and battery
+optimisation exemption. If UnifiedPush or WorkManager is deferred, periodic polling remains
+the fallback; no client technique can guarantee delivery through a deep Doze/network outage.
+
+Before publishing a visual, preview the exact proposal at the sizes the phone reported:
+
+    hermes widget preview --publication-file proposal.json --sizes 2x2,4x2,4x4 --out ./widget-previews
+
+Capacity findings are warnings, not silent truncation. If a publication carries a stable
+`itemId` and `approve`/`snooze`/`open` actions, a tap is recorded as a durable intent. The
+agent consumes it with `widget_read_intents` and records the result with
+`widget_resolve_intent`; the widget server never executes agent work.
+
 Remove it later with:
 
     hermes widget routine --remove

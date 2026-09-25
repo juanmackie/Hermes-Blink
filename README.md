@@ -132,5 +132,31 @@ never commit that identity or its passwords. Until that release is built and
 verified, the debug APK is for local testing only. The widget preserves the
 last successful publication offline, renders visuals with fit scaling, and
 opens a larger pinch-zoom view on tap. It reports `published`, `downloaded`,
-and `render_submitted` separately; none of those states claims that the user
-saw or understood an update.
+`render_submitted`, and the higher-level `fetched`/`nudge_sent` receipts
+separately; none of those states claims that the user saw or understood an update.
+
+### Priority wakeups, previews, and action intents
+
+`widget_publish` accepts `priority: "normal" | "high"`. A high publication sends only a
+content-free `fetch` wake to a device-registered UnifiedPush endpoint (ntfy and other
+self-hostable distributors work); the phone then pulls over the existing private HTTPS path.
+The high lane is limited to six wakes per hour and thirty per day, with over-limit requests
+visibly degraded to normal. A per-widget UTC quiet-hours window can be set with
+`widget_set_quiet_hours`. Android requests battery-optimisation exemption only from the
+user, then uses expedited WorkManager with an exact-alarm fallback where permitted. The app's
+**Delivery diagnostics** screen shows last poll, fetch, render, and exemption state.
+
+`widget_preview` and `POST /v1/widgets/{id}/preview` rasterise the exact proposed or current
+publication at the device's registered `2x2`, `4x2`, `2x4`, `4x4`, or custom sizes. Capacity
+findings are warnings, never silent truncation. The CLI writes local PNGs:
+
+```sh
+hermes widget preview --sizes 2x2,4x2,4x4 --out ./widget-previews
+hermes widget preview --publication-file proposal.json --out ./widget-previews
+```
+
+Publication and v2 `button`/`list_item` actions may carry stable `itemId`s. `approve`, `snooze`,
+and `open` taps are durably queued as allowlisted intents; they never execute on the HTTP
+server. The phone keeps a bounded retry outbox when the private path is unavailable, and the
+agent reads intents with `widget_read_intents` before recording a terminal decision with
+`widget_resolve_intent`. Destructive/external actions wait for explicit confirmation.

@@ -216,23 +216,161 @@ object HermesApi {
         }
     }
 
-    fun postEvent(baseUrl: String, widgetId: String, eventName: String, payload: String?, token: String?): Pair<Int, String?> {
-        val url = URL(baseUrl.trimEnd('/') + "/v1/widgets/$widgetId/events")
-        val conn = url.openConnection() as HttpURLConnection
-        conn.requestMethod = "POST"
-        conn.doOutput = true
-        conn.setRequestProperty("Content-Type", "application/json")
-        conn.connectTimeout = 5000
-        conn.readTimeout = 5000
-        if (!token.isNullOrEmpty()) conn.setRequestProperty("Authorization", "Bearer $token")
-        val payloadJson = payload ?: "{}"
-        val fullPayload = """{"event":"$eventName","payload":$payloadJson}"""
-        conn.outputStream.write(fullPayload.toByteArray())
+    fun postEvent(
+        baseUrl: String,
+        widgetId: String,
+        eventName: String,
+        payload: String?,
+        token: String?,
+    ): Pair<Int, String?> {
+        val result = postEventResult(baseUrl, widgetId, eventName, payload, token, null, null, null, false)
+        return result.code to result.body
+    }
+
+    fun postEventWithFields(
+        baseUrl: String,
+        widgetId: String,
+        eventName: String,
+        fields: JSONObject,
+        token: String,
+    ): HttpResult {
+        val conn = open(baseUrl, "/v1/widgets/${pathSegment(widgetId)}/events", token, method = "POST")
         return try {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val body = JSONObject().put("event", eventName)
+            val keys = fields.keys()
+            while (keys.hasNext()) {
+                val key = keys.next()
+                body.put(key, fields.get(key))
+            }
+            conn.outputStream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
             val code = conn.responseCode
-            val body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null
-            code to body
-        } catch (e: Exception) { -1 to ("Error: ${e.message}") }
+            HttpResult(
+                code = code,
+                body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null,
+                retryAfterSeconds = retryAfter(conn),
+            )
+        } catch (e: Exception) {
+            HttpResult(-1, error = e.message ?: e.javaClass.simpleName)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    fun postAction(
+        baseUrl: String,
+        widgetId: String,
+        eventName: String,
+        itemId: String,
+        actionClass: String,
+        revision: Int,
+        clientEventId: String,
+        confirmOnDevice: Boolean,
+        token: String,
+        payloadJson: String? = null,
+    ): HttpResult = postEventResult(
+        baseUrl, widgetId, eventName, null, token, itemId, actionClass,
+        revision, confirmOnDevice, clientEventId, payloadJson,
+    )
+
+    private fun postEventResult(
+        baseUrl: String,
+        widgetId: String,
+        eventName: String,
+        payload: String?,
+        token: String?,
+        itemId: String? = null,
+        actionClass: String? = null,
+        revision: Int? = null,
+        confirmOnDevice: Boolean = false,
+        clientEventId: String? = null,
+        actionPayload: String? = null,
+    ): HttpResult {
+        val conn = open(baseUrl, "/v1/widgets/${pathSegment(widgetId)}/events", token ?: "", method = "POST")
+        return try {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val body = JSONObject().put("event", eventName)
+            if (!payload.isNullOrBlank()) body.put("payload", JSONObject(payload))
+            if (itemId != null) body.put("itemId", itemId)
+            if (actionClass != null) body.put("actionClass", actionClass)
+            if (revision != null) body.put("revision", revision)
+            if (clientEventId != null) body.put("clientEventId", clientEventId)
+            if (!actionPayload.isNullOrBlank()) body.put("payload", JSONObject(actionPayload))
+            if (confirmOnDevice) body.put("confirmOnDevice", true)
+            conn.outputStream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
+            val code = conn.responseCode
+            HttpResult(
+                code = code,
+                body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null,
+                retryAfterSeconds = retryAfter(conn),
+            )
+        } catch (e: Exception) {
+            HttpResult(-1, error = e.message ?: e.javaClass.simpleName)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    fun reportInstances(
+        baseUrl: String,
+        widgetId: String,
+        instances: List<Map<String, Any>>,
+        token: String,
+    ): HttpResult {
+        val conn = open(
+            baseUrl,
+            "/v1/device/instances",
+            token,
+            method = "PUT",
+        )
+        return try {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val body = JSONObject()
+                .put("widgetId", widgetId)
+                .put("instances", org.json.JSONArray(instances))
+            conn.outputStream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
+            val code = conn.responseCode
+            HttpResult(
+                code = code,
+                body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null,
+                retryAfterSeconds = retryAfter(conn),
+            )
+        } catch (e: Exception) {
+            HttpResult(-1, error = e.message ?: e.javaClass.simpleName)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    fun clearPushEndpoint(baseUrl: String, token: String): HttpResult = registerPushEndpointInternal(
+        baseUrl, token, null,
+    )
+
+    fun registerPushEndpoint(baseUrl: String, token: String, endpoint: String): HttpResult =
+        registerPushEndpointInternal(baseUrl, token, endpoint)
+
+    private fun registerPushEndpointInternal(baseUrl: String, token: String, endpoint: String?): HttpResult {
+        val conn = open(baseUrl, "/v1/device", token, method = "PATCH")
+        return try {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val body = JSONObject()
+            if (endpoint == null) body.put("pushEndpoint", JSONObject.NULL) else body.put("pushEndpoint", endpoint)
+            conn.outputStream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
+            val code = conn.responseCode
+            HttpResult(
+                code = code,
+                body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null,
+                retryAfterSeconds = retryAfter(conn),
+            )
+        } catch (e: Exception) {
+            HttpResult(-1, error = e.message ?: e.javaClass.simpleName)
+        } finally {
+            conn.disconnect()
+        }
     }
 
     private fun open(

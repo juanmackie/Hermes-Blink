@@ -15,7 +15,13 @@ object LayoutParser {
         "calendar", "stat", "progress",
         "button", "list_item"
     )
-    private val ALLOWED_ACTION_KINDS = setOf("event", "refresh", "dismiss", "review")
+    private val ALLOWED_ACTION_KINDS = setOf(
+        "event", "refresh", "dismiss", "review", "approve", "snooze", "open"
+    )
+    private val ALLOWED_ACTION_CLASSES = setOf(
+        "reversible", "read_only", "dismiss_reminder", "rerun_check", "staged_patch", "flag",
+        "destructive", "external", "irreversible",
+    )
 
     fun parse(jsonStr: String): WidgetLayout {
         val json = JSONObject(jsonStr)
@@ -27,6 +33,7 @@ object LayoutParser {
             version = version,
             widgetId = json.optString("widgetId", "hermes-brief"),
             title = json.optString("title", "").takeIf { it.isNotEmpty() },
+            itemId = json.optString("itemId", "").takeIf { it.isNotEmpty() },
             ttlSeconds = json.optInt("ttlSeconds", -1).takeIf { it >= 0 },
             accentColor = json.optString("accentColor", "").takeIf { it.isNotEmpty() },
             updatedAt = json.optString("updatedAt", "").takeIf { it.isNotEmpty() },
@@ -44,13 +51,21 @@ object LayoutParser {
             if (kind == "event" && act.optString("event", "").isEmpty()) {
                 throw IllegalArgumentException("event action requires non-empty event")
             }
-            if ((kind == "dismiss" || kind == "review") && act.optString("itemId", "").isEmpty()) {
+            if (kind in setOf("dismiss", "review", "approve", "snooze", "open") &&
+                act.optString("itemId", "").isEmpty()
+            ) {
                 throw IllegalArgumentException("$kind action requires itemId")
+            }
+            val actionClass = act.optString("actionClass", "").takeIf { it.isNotEmpty() }
+            if (actionClass != null && actionClass !in ALLOWED_ACTION_CLASSES) {
+                throw IllegalArgumentException("Unsupported action class")
             }
             Action(
                 kind = kind,
                 event = act.optString("event", "").takeIf { it.isNotEmpty() },
                 itemId = act.optString("itemId", "").takeIf { it.isNotEmpty() },
+                actionClass = actionClass,
+                confirmOnDevice = act.optBoolean("confirmOnDevice", false),
                 payload = act.optJSONObject("payload")?.let { p ->
                     val map = mutableMapOf<String, Any>()
                     val keys = p.keys()
@@ -86,6 +101,7 @@ object LayoutParser {
         return Node(
             type = type,
             id = obj.optString("id", "").takeIf { it.isNotEmpty() },
+            itemId = obj.optString("itemId", "").takeIf { it.isNotEmpty() },
             value = obj.optString("value", obj.optString("text", "")).takeIf { it.isNotEmpty() },
             label = obj.optString("label", "").takeIf { it.isNotEmpty() },
             text = obj.optString("text", "").takeIf { it.isNotEmpty() },

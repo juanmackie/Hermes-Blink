@@ -1,1 +1,5 @@
 defusedxml==0.7.1
+# Publication previews use these optional-capability backends when installed.
+# The server retains a deterministic PNG fallback for minimal installations.
+Pillow>=10.4,<12
+CairoSVG>=2.7,<3

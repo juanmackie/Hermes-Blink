@@ -7,6 +7,7 @@ description that :mod:`store` can atomically attach to a publication revision.
 from __future__ import annotations
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -39,12 +40,26 @@ MAX_TTL_SECONDS = 365 * 24 * 60 * 60
 # different windows, so each gets an explicit name rather than one shared number.
 LAYOUT_MAX_TTL_SECONDS = 24 * 60 * 60
 POLL_INTERVAL_SECONDS = 15 * 60
-EVENT_VOCABULARY = ("refresh", "dismiss", "review", "event")
+PRIORITIES = ("normal", "high")
+PRIORITY_HIGH_MAX_PER_HOUR = 6
+PRIORITY_HIGH_MAX_PER_DAY = 30
+MAX_ACTIONS = 10
+MAX_ACTION_PAYLOAD_BYTES = 4 * 1024
+ACTION_KINDS = ("approve", "snooze", "open")
+ACTION_CLASSES = (
+    "reversible", "read_only", "dismiss_reminder", "rerun_check", "staged_patch", "flag",
+    "destructive", "external", "irreversible",
+)
+SENSITIVE_ACTION_CLASSES = frozenset({"destructive", "external", "irreversible"})
+EVENT_VOCABULARY = ("refresh", "dismiss", "review", "event") + ACTION_KINDS
 EVENT_EMISSION_POINTS = {
     "refresh": "publication tap fetches now; v2 button action kind=refresh",
     "dismiss": "v2 button action kind=dismiss",
     "review": "opening the publication zoom view",
     "event": "v2 button action kind=event with a caller-supplied name in payload",
+    "approve": "queue a validated, allowlisted approval intent",
+    "snooze": "queue a validated, allowlisted snooze intent",
+    "open": "queue a validated, allowlisted open intent",
 }
 
 SUPPORTED_MEDIA_TYPES = ("image/png", "image/jpeg", "image/webp")
@@ -128,6 +143,9 @@ class PreparedPublication:
     asset: PreparedAsset | None
     expires_at: str | None
     max_age_seconds: int | None = None
+    priority: str = "normal"
+    item_id: str | None = None
+    actions: tuple[dict[str, Any], ...] = ()
 
 
 def capabilities() -> dict[str, Any]:
@@ -173,6 +191,32 @@ def capabilities() -> dict[str, Any]:
         "layoutMaxTtlSeconds": LAYOUT_MAX_TTL_SECONDS,
         "maxAgeSeconds": MAX_TTL_SECONDS,
         "pollIntervalSeconds": POLL_INTERVAL_SECONDS,
+        "priority": {
+            "values": list(PRIORITIES),
+            "highMaxPerHour": PRIORITY_HIGH_MAX_PER_HOUR,
+            "highMaxPerDay": PRIORITY_HIGH_MAX_PER_DAY,
+            "overLimit": "degrade_to_normal_and_record",
+            "quietHours": "per-widget UTC HH:MM setting",
+        },
+        "push": {
+            "transport": "UnifiedPush",
+            "payload": "fetch",
+            "contentInPayload": False,
+            "endpointRegistration": "PATCH /v1/device",
+            "distributor": "self-hosted ntfy or another UnifiedPush distributor",
+        },
+        "receipts": ["nudge_sent", "fetched", "downloaded", "render_submitted", "rendered"],
+        "inventory": {
+            "endpoint": "PUT /v1/device/instances",
+            "sizeClasses": ["2x2", "4x2", "2x4", "4x4", "custom"],
+        },
+        "actions": {
+            "kinds": list(ACTION_KINDS),
+            "classes": list(ACTION_CLASSES),
+            "sensitiveClasses": sorted(SENSITIVE_ACTION_CLASSES),
+            "queueNotAuthorize": True,
+            "endpoint": "POST /v1/widgets/{id}/events",
+        },
         "render": {
             "fit": "contain",
             "fitMode": "ContentScale.Fit",
@@ -187,6 +231,79 @@ def capabilities() -> dict[str, Any]:
             "emissionPoints": EVENT_EMISSION_POINTS,
         },
     }
+
+
+def _normalize_priority(priority: Any) -> str:
+    if not isinstance(priority, str) or priority not in PRIORITIES:
+        raise PublicationInputError("priority must be 'normal' or 'high'")
+    return priority
+
+
+def _normalize_item_id(item_id: Any, name: str = "item_id") -> str | None:
+    if item_id is None:
+        return None
+    if not isinstance(item_id, str) or not _ID_RE.fullmatch(item_id):
+        raise PublicationInputError(f"{name} must be a stable identifier of at most 128 characters")
+    return item_id
+
+
+def _normalize_actions(
+    actions: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None,
+    publication_item_id: str | None,
+) -> tuple[dict[str, Any], ...]:
+    if actions is None:
+        return ()
+    if not isinstance(actions, (list, tuple)) or len(actions) > MAX_ACTIONS:
+        raise PublicationInputError(f"actions must be an array of at most {MAX_ACTIONS} items")
+    result: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for index, raw in enumerate(actions):
+        if not isinstance(raw, dict):
+            raise PublicationInputError(f"actions[{index}] must be an object")
+        kind = raw.get("kind", raw.get("action"))
+        if kind not in ACTION_KINDS:
+            raise PublicationInputError(f"actions[{index}].kind must be one of {list(ACTION_KINDS)}")
+        item_id = _normalize_item_id(
+            raw.get("itemId", raw.get("item_id", publication_item_id)),
+            f"actions[{index}].itemId",
+        )
+        if not item_id:
+            raise PublicationInputError(f"actions[{index}] requires itemId")
+        action_key = (str(kind), item_id)
+        if action_key in seen:
+            raise PublicationInputError(f"actions contains duplicate {kind} itemId {item_id!r}")
+        seen.add(action_key)
+        action_class = raw.get("actionClass", raw.get("action_class", "reversible"))
+        if action_class not in ACTION_CLASSES:
+            raise PublicationInputError(
+                f"actions[{index}].actionClass must be one of {list(ACTION_CLASSES)}"
+            )
+        payload = raw.get("payload", {})
+        if payload is None:
+            payload = {}
+        if not isinstance(payload, dict):
+            raise PublicationInputError(f"actions[{index}].payload must be an object")
+        try:
+            payload_size = len(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+        except (TypeError, ValueError) as exc:
+            raise PublicationInputError(f"actions[{index}].payload is not JSON-safe") from exc
+        if payload_size > MAX_ACTION_PAYLOAD_BYTES:
+            raise PublicationTooLarge(f"actions[{index}].payload exceeds the {MAX_ACTION_PAYLOAD_BYTES}-byte limit")
+        label = raw.get("label", kind.capitalize())
+        if not isinstance(label, str) or not label.strip() or len(label) > 80:
+            raise PublicationInputError(f"actions[{index}].label must be a short string")
+        confirm = raw.get("confirmOnDevice", raw.get("confirm_on_device", False))
+        if not isinstance(confirm, bool):
+            raise PublicationInputError(f"actions[{index}].confirmOnDevice must be boolean")
+        result.append({
+            "kind": kind,
+            "itemId": item_id,
+            "label": label.strip(),
+            "actionClass": action_class,
+            "confirmOnDevice": confirm,
+            "payload": payload,
+        })
+    return tuple(result)
 
 
 def _normalize_max_age(max_age_seconds: int | None) -> int | None:
@@ -211,12 +328,18 @@ def prepare_publication(
     expires_at: str | datetime | None = None,
     ttl_seconds: int | None = None,
     max_age_seconds: int | None = None,
+    priority: str = "normal",
+    item_id: str | None = None,
+    actions: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
     now: datetime | None = None,
 ) -> PreparedPublication:
     """Validate exactly one content source and return bounded publication data."""
     title_value = _bounded_text(title, "title", MAX_TITLE_BYTES, required=True, single_line=True)
     summary_value = _bounded_text(summary, "summary", MAX_SUMMARY_BYTES, required=True)
     max_age = _normalize_max_age(max_age_seconds)
+    priority_value = _normalize_priority(priority)
+    item_id_value = _normalize_item_id(item_id, "item_id")
+    action_values = _normalize_actions(actions, item_id_value)
 
     sources = [("text", text), ("svg", svg), ("file", file_path)]
     supplied = [(kind, value) for kind, value in sources if value is not None]
@@ -227,7 +350,10 @@ def prepare_publication(
     expiry = _normalize_expiry(expires_at, ttl_seconds, now or datetime.now(timezone.utc))
     if kind == "text":
         text_value = _bounded_text(value, "text", MAX_TEXT_BYTES, required=True)
-        return PreparedPublication(title_value, summary_value, "text", text_value, None, expiry, max_age)
+        return PreparedPublication(
+            title_value, summary_value, "text", text_value, None, expiry, max_age,
+            priority_value, item_id_value, action_values,
+        )
 
     if kind == "svg":
         if not isinstance(value, str):
@@ -242,6 +368,9 @@ def prepare_publication(
             PreparedAsset("image/svg+xml", raw, width, height, hashlib.sha256(raw).hexdigest()),
             expiry,
             max_age,
+            priority_value,
+            item_id_value,
+            action_values,
         )
 
     if not isinstance(value, (str, os.PathLike)):
@@ -262,6 +391,9 @@ def prepare_publication(
         PreparedAsset(media_type, data, width, height, hashlib.sha256(data).hexdigest()),
         expiry,
         max_age,
+        priority_value,
+        item_id_value,
+        action_values,
     )
 
 

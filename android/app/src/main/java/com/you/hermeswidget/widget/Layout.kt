@@ -4,6 +4,7 @@ data class WidgetLayout(
     val version: Int = 2,
     val widgetId: String = "hermes-brief",
     val title: String? = null,
+    val itemId: String? = null,
     val ttlSeconds: Int? = null,
     val accentColor: String? = null,
     val updatedAt: String? = null,
@@ -21,6 +22,7 @@ data class Padding(
 data class Node(
     val type: String,
     val id: String? = null,
+    val itemId: String? = null,
     val value: String? = null,
     val label: String? = null,
     val text: String? = null,
@@ -51,7 +53,9 @@ data class Action(
     val kind: String,
     val event: String? = null,
     val payload: Map<String, Any>? = null,
-    val itemId: String? = null
+    val itemId: String? = null,
+    val actionClass: String? = null,
+    val confirmOnDevice: Boolean = false,
 )
 
 data class CalendarEvent(
