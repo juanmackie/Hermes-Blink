@@ -464,8 +464,11 @@ def _png_dimensions(data: bytes) -> tuple[int, int]:
 
 
 def _jpeg_dimensions(data: bytes) -> tuple[int, int]:
-    if not data.startswith(b"\xff\xd8") or not data.endswith(b"\xff\xd9"):
-        raise PublicationInputError("JPEG is incomplete or has no valid frame header")
+    # Only a leading SOI and a readable frame header are required. Trailing bytes are
+    # allowed on purpose: Pixel cameras save Motion Photos, which append an MP4 after
+    # the JPEG's EOI, so requiring the file to end with FFD9 rejected real photos.
+    if not data.startswith(b"\xff\xd8"):
+        raise PublicationInputError("JPEG is missing its start-of-image marker")
     index = 2
     sof_markers = set(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
     while index < len(data):

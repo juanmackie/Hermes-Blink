@@ -309,6 +309,15 @@ class PublicationContract(unittest.TestCase):
         )
         jpeg_result = self.publication.validate_raster(jpeg, ".jpg")
         self.assertEqual(jpeg_result, ("image/jpeg", 32, 16))
+        # Pixel cameras append an MP4 to the JPEG (Motion Photo), so the file does not
+        # end with EOI. Requiring that rejected valid photos as "incomplete".
+        motion_photo = jpeg + b"\x00\x00\x00\x18ftypmp42" + bytes(64)
+        self.assertEqual(
+            self.publication.validate_raster(motion_photo, ".jpg"),
+            ("image/jpeg", 32, 16),
+        )
+        with self.assertRaises(self.publication.PublicationInputError):
+            self.publication.validate_raster(b"\xff\xd8not-a-jpeg", ".jpg")
         webp_payload = bytearray(10)
         webp_payload[4:7] = (31).to_bytes(3, "little")
         webp_payload[7:10] = (15).to_bytes(3, "little")
