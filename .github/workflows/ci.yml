@@ -5,6 +5,31 @@ on:
 jobs:
   host-tests:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ['3.11', '3.13']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install host test dependencies
+        run: >-
+          python -m pip install
+          -r hermes-plugin/hermes-widget/requirements.txt
+      - name: Python validator + plugin tests
+        env:
+          HERMES_WIDGET_FORCE_ENV: supported
+        run: >-
+          python -m unittest discover
+          -s hermes-plugin/hermes-widget/tests -v
+      - name: Contract parity across host and Android contracts
+        run: python scripts/check-contract-parity.py
+  # The Windows launcher branch is exercised on a real Windows interpreter; the
+  # same tests run on Linux above by patching the hook's platform decision.
+  windows-tests:
+    runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -14,12 +39,16 @@ jobs:
         run: >-
           python -m pip install
           -r hermes-plugin/hermes-widget/requirements.txt
-      - name: Python validator + plugin tests
+      - name: Python validator + plugin tests on Windows
+        env:
+          HERMES_WIDGET_FORCE_ENV: supported
         run: >-
-          HERMES_WIDGET_FORCE_ENV=supported python -m unittest discover
+          python -m unittest discover
           -s hermes-plugin/hermes-widget/tests -v
-      - name: Contract parity across host and Android contracts
-        run: python scripts/check-contract-parity.py
+  secret-scan:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
       - name: Secret scan and wrapper checks
         run: |
           ! git ls-files | grep -E \

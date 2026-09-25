@@ -82,7 +82,7 @@ verb_cases = [
     ("status", cli._status, SimpleNamespace(json=True, host="127.0.0.1", port=9)),
     ("code", cli._code, SimpleNamespace()),
     ("devices", cli._devices, SimpleNamespace(revoke=None)),
-    ("pair", cli._pair, SimpleNamespace(server_url="http://127.0.0.1:9", label="t", qr=False, json=True)),
+    ("pair", cli._pair, SimpleNamespace(server_url="https://widget.example.ts.net:8788", label="t", json=True)),
     ("publish", cli._publish, SimpleNamespace(widget_id=WIDGET, layout_json=None, layout_file=None, json=True)),
 ]
 for name, fn, ns in verb_cases:

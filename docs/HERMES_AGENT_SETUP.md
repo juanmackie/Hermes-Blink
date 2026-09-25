@@ -87,12 +87,19 @@ manual diagnostics:
 
     hermes widget serve --host 127.0.0.1 --port 8788
 
-The default loopback bind is intentional. Expose it through Tailscale Serve or
-a private HTTPS reverse proxy rather than binding every interface. A systemd
-user unit is generated only when `systemctl --user` is available; Docker and
-TrueNAS SCALE installations use the generated `gateway:startup` hook instead.
-Both paths preserve the same `<Hermes home>/widget/` data and do not duplicate
-the process.
+Omitted `--host`/`--port` keep whatever is saved in `widget/server.json`, so a
+rerun never clobbers a deliberate binding; a first install defaults to
+`127.0.0.1:8788`. A malformed `server.json` is reported instead of replaced.
+
+A direct host install should stay on loopback and expose it through Tailscale
+Serve or a private HTTPS reverse proxy rather than binding every interface.
+
+A TrueNAS/container install is the exception: a runtime-published port cannot
+reach a loopback-only listener, so bind `0.0.0.0` *inside the container* and let
+the host publish that port to loopback only (see step 4). A systemd user unit is
+generated only when `systemctl --user` is available; Docker and TrueNAS SCALE
+installations use the generated `gateway:startup` hook instead. Both paths
+preserve the same `<Hermes home>/widget/` data and do not duplicate the process.
 
 ---
 
@@ -106,10 +113,27 @@ This terminates private HTTPS on the tailnet and forwards unchanged bearer
 headers to the loopback server. Preserve any existing Serve paths. Do not add a
 second `/v1` path prefix: the server routes already include `/v1`.
 
-**If Hermes runs in a TrueNAS container:** keep the widget server on the container's private
-interface or loopback, publish only the private port required by the host's Tailscale Serve
-configuration, and persist the Hermes home on the container dataset. Tailscale Serve must run
-in a namespace that can reach that published port. Do not publish the raw widget port publicly.
+**If Hermes runs in a TrueNAS container:** bind the widget server to `0.0.0.0`
+*inside the container* and publish that port to the host's loopback only; persist
+the Hermes home on the container dataset. Do not bind the host to `0.0.0.0`.
+Tailscale Serve must run in a namespace that can reach that published port.
+
+    bash scripts/bootstrap-linux.sh --host 0.0.0.0 --port 8788 --json
+
+Paired Compose settings keep the host side on loopback:
+
+    services:
+      hermes:
+        ports:
+          - "127.0.0.1:8788:8788"   # host loopback -> container 0.0.0.0:8788
+
+Verify the host-side binding, because the container's `--host` is not the host's
+binding:
+
+    docker port <container> | grep 8788   # must show 127.0.0.1:8788
+    ss -ltnp | grep 8788                  # no 0.0.0.0 or :: listener on the host
+
+Do not publish the raw widget port publicly.
 
 The Android release app requires HTTPS. Do not use the old `http://`/LAN workaround: cleartext
 traffic is disabled in release builds. Tailscale provides the private network path; Tailscale
@@ -223,7 +247,9 @@ render gap.
 
 **Cannot connect at all / health check hangs.**
 - Wrong IP: re-check `tailscale ip -4` or your LAN IP; Tailscale addresses are `100.x.y.z`.
-- Firewall: allow TCP 8788 inbound (Windows Defender Firewall → Inbound Rules).
+- Firewall: no inbound rule is needed for a direct loopback install. For a
+  container, publish only to the host loopback as above; never open the widget
+  port to the internet.
 - Server not running or the gateway hook did not restore it: run
   `bash scripts/bootstrap-linux.sh --json`, then inspect
   `<Hermes home>/widget/server.log`; keep loopback and proxy with Tailscale Serve.

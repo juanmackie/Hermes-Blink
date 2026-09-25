@@ -120,6 +120,9 @@ WIDGET_SETUP = {
         "properties": {
             "widget_id": {"type": "string", "description": "Widget id, default hermes-brief."},
             "schedule": {"type": "string", "description": "Cron schedule, default every 6h."},
+            "host": {"type": "string", "description": "Interface to bind; omitted preserves the saved binding."},
+            "port": {"type": "integer", "description": "Port to bind; omitted preserves the saved binding."},
+            "server_url": {"type": "string", "description": "Private HTTPS URL the phone will use (reported as a hint only)."},
         },
         "required": [],
     },
@@ -202,8 +205,9 @@ WIDGET_MINT_PAIRING_CODE = {
     "name": "widget_mint_pairing_code",
     "description": (
         "Create a short-lived single-use pairing code and show the user the code and its "
-        "expiry. Pass server_url as well when the device should scan a QR code instead of "
-        "typing: the result then also carries qrPayload and samePhoneLink."
+        "expiry. The Android app has no QR or link handler: pairing is manual. An optional "
+        "server_url must be a private HTTPS URL the phone can reach and is echoed for manual "
+        "entry."
     ),
     "parameters": {
         "type": "object",

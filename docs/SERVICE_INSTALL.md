@@ -47,13 +47,40 @@ these paths on the persistent dataset:
 
 Set the container's Hermes home/profile explicitly if autodetection would point
 at an ephemeral layer. The bootstrap report prints the exact home it used.
-Expose TCP `8788` only to the private host/tailnet. The default server bind is
-`127.0.0.1`, which is intended for Tailscale Serve or a local reverse proxy.
+
+A direct host install keeps the default `127.0.0.1` bind and puts Tailscale Serve
+(or another private HTTPS proxy) in front of it. A container install binds
+`0.0.0.0` *inside the container* and the host publishes the port to loopback
+only, because a runtime-published port cannot reach a loopback-only listener:
+
+```sh
+bash scripts/bootstrap-linux.sh --host 0.0.0.0 --port 8788 --json
+```
+
+```yaml
+services:
+  hermes:
+    ports:
+      - "127.0.0.1:8788:8788"   # host loopback -> container 0.0.0.0:8788
+```
+
+Verify the host side yourself; the container's `--host` is not the host's port
+binding:
+
+```sh
+docker port <container> | grep 8788   # must show 127.0.0.1:8788, not 0.0.0.0:8788
+ss -ltnp | grep 8788                  # no 0.0.0.0 or :: listener on the host
+```
+
+`--host` and `--port` are independent: an omitted flag keeps the value saved in
+`widget/server.json`, and a first install defaults to `127.0.0.1:8788`. A
+malformed `server.json` is reported instead of overwritten. Never expose the raw
+widget port publicly.
 
 ## Verification
 
 ```sh
-hermes widget status
+hermes widget status                        # configured bind vs health-probe address
 hermes widget serve --host 127.0.0.1 --port 8788   # diagnostic/manual path
 python scripts/bootstrap.py --dry-run --json       # detection only
 ```

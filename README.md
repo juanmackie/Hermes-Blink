@@ -41,8 +41,13 @@ Useful options:
 ```sh
 bash scripts/bootstrap-linux.sh --restart-gateway --json
 bash scripts/bootstrap-linux.sh --skip-start       # install without launching now
+bash scripts/bootstrap-linux.sh --host 0.0.0.0 --port 8788 --json  # container bind
 bash scripts/install-service.sh                    # compatibility entry point
 ```
+
+`--host` and `--port` are independent: an omitted flag keeps the value already
+saved in `widget/server.json`, and a first install defaults to
+`127.0.0.1:8788`. A malformed `server.json` is reported instead of overwritten.
 
 Set `HERMES_BIN` when Hermes is not on `PATH`. Set `HERMES_HOME` only when the
 Hermes command's detected home is not the persistent volume you intend to use;
@@ -57,17 +62,48 @@ stable across recreation. The phone does not need to be on the same LAN as the
 host: both devices join the same Tailscale tailnet, and the phone pulls content
 from the host over private HTTPS.
 
-The server binds loopback by default. If Hermes runs in a TrueNAS container,
-run Tailscale Serve in the host/network namespace that can reach the container's
-published private port, or use another private HTTPS proxy. Do not expose the raw
-widget port publicly and do not give the phone the operator token.
-
-For a private Tailscale HTTPS URL, use Tailscale Serve in front of the bound
-port, for example:
+The server binds loopback by default. Leave it on loopback for a direct host
+install and run Tailscale Serve (or another private HTTPS proxy) in front of it:
 
 ```sh
 tailscale serve --bg --https=8788 tcp://127.0.0.1:8788
 ```
+
+**TrueNAS/container:** a port published by the container runtime cannot reach a
+loopback-only listener, so bind the server to `0.0.0.0` *inside the container*
+while the host publishes that port to its own loopback only. Pass the container
+binding to the bootstrap:
+
+```sh
+bash scripts/bootstrap-linux.sh --host 0.0.0.0 --port 8788 --json
+```
+
+The paired Compose settings keep the host side on loopback:
+
+```yaml
+services:
+  hermes:
+    ports:
+      - "127.0.0.1:8788:8788"   # host loopback -> container 0.0.0.0:8788
+```
+
+Then run Tailscale Serve on the host (or the namespace that owns the published
+port):
+
+```sh
+tailscale serve --bg --https=8788 tcp://127.0.0.1:8788
+```
+
+Verify the host-side binding yourself; the container's `--host` value is not the
+host's port binding:
+
+```sh
+docker port <container> | grep 8788   # must show 127.0.0.1:8788, not 0.0.0.0:8788
+ss -ltnp | grep 8788                  # no 0.0.0.0 or :: listener on the host
+```
+
+Do not expose the raw widget port publicly and do not give the phone the
+operator token.
 
 Preserve the `Authorization` header through any reverse proxy. The phone uses
 the Tailscale HTTPS URL and a short-lived code created with:

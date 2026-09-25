@@ -22,6 +22,8 @@ REPO = Path(__file__).resolve().parents[1]
 PLUGIN_SOURCE = REPO / "hermes-plugin" / "hermes-widget"
 PLUGIN_NAME = "hermes-widget"
 HOOK_NAME = "hermes-widget-startup"
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8788
 
 
 class BootstrapError(RuntimeError):
@@ -197,22 +199,58 @@ def install_hook(home: Path) -> Path:
     return target
 
 
-def write_server_config(home: Path, hermes: Path, host: str, port: int) -> Path:
+def read_server_config(home: Path) -> dict[str, Any]:
+    """Return the saved server config; raise when it exists but is unusable."""
     target = home / "widget" / "server.json"
+    if not target.is_file():
+        return {}
+    try:
+        value = json.loads(target.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise BootstrapError(f"{target} is not valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise BootstrapError(f"{target} must contain a JSON object")
+    return value
+
+
+def _port_or_default(raw: Any, default: int = DEFAULT_PORT) -> int:
+    if isinstance(raw, bool):
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if 1 <= value <= 65535 else default
+
+
+def resolve_binding(
+    home: Path, host: str | None, port: int | None
+) -> tuple[str, int, dict[str, Any]]:
+    """Explicit flags win; omitted fields keep saved values; first install is loopback."""
+    saved = read_server_config(home)
+    resolved_host = host or str(saved.get("host") or DEFAULT_HOST)
+    resolved_port = _port_or_default(port) if port else _port_or_default(saved.get("port"))
+    return str(resolved_host), resolved_port, saved
+
+
+def write_server_config(
+    home: Path, hermes: Path, host: str | None, port: int | None
+) -> Path:
+    resolved_host, resolved_port, saved = resolve_binding(home, host, port)
+    target = home / "widget" / "server.json"
+    saved_home = str(saved.get("home") or home)
+    if Path(saved_home).resolve() != home.resolve():
+        # This installer owns the home it detected; a saved path from another home
+        # would point the startup hook at the wrong directory.
+        saved_home = str(home)
     value = {
-        "hermesBin": str(hermes),
-        "home": str(home),
-        "host": host,
-        "port": port,
+        "hermesBin": str(saved.get("hermesBin") or hermes),
+        "home": saved_home,
+        "host": resolved_host,
+        "port": resolved_port,
     }
-    changed = True
-    if target.is_file():
-        try:
-            changed = json.loads(target.read_text(encoding="utf-8")) != value
-        except (OSError, ValueError, TypeError):
-            changed = True
     atomic_write(target, json.dumps(value, indent=2, sort_keys=True) + "\n")
-    return target if changed else target
+    return target
 
 
 def port_open(host: str, port: int) -> bool:
@@ -336,8 +374,8 @@ def install_routine(hermes: Path, schedule: str) -> None:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--hermes-bin")
-    parser.add_argument("--host", default="127.0.0.1")
-    parser.add_argument("--port", type=int, default=8788)
+    parser.add_argument("--host", default=None, help="Interface to bind (default: saved config or 127.0.0.1).")
+    parser.add_argument("--port", type=int, default=None, help="Port to bind (default: saved config or 8788).")
     parser.add_argument("--schedule", default="every 6h")
     parser.add_argument("--skip-start", action="store_true")
     parser.add_argument("--skip-routine", action="store_true")
@@ -345,19 +383,18 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
-    if not 1 <= args.port <= 65535:
+    if args.port is not None and not 1 <= args.port <= 65535:
         parser.error("--port must be between 1 and 65535")
 
     report: dict[str, Any] = {
         "ok": False,
         "dryRun": args.dry_run,
-        "host": args.host,
-        "port": args.port,
     }
     try:
         hermes = discover_hermes(args.hermes_bin)
         profile = detect_profile(hermes)
         home = detect_home(hermes)
+        host, port, _saved = resolve_binding(home, args.host, args.port)
         capabilities = detect_capabilities(hermes)
         report.update(
             {
@@ -365,6 +402,8 @@ def main(argv: list[str] | None = None) -> int:
                 "version": capabilities["version"],
                 "profile": profile,
                 "home": str(home),
+                "host": host,
+                "port": port,
                 "toolsetEnabledBefore": capabilities["toolsetEnabled"],
                 "capabilities": capabilities["commands"],
             }
@@ -386,9 +425,9 @@ def main(argv: list[str] | None = None) -> int:
             if not args.skip_routine:
                 install_routine(hermes, args.schedule)
                 report["routine"] = args.schedule
-            report["systemd"] = install_systemd(hermes, home, args.host, args.port)
+            report["systemd"] = install_systemd(hermes, home, host, port)
             if not args.skip_start:
-                report["server"] = start_server(home, hermes, args.host, args.port)
+                report["server"] = start_server(home, hermes, host, port)
             if args.restart_gateway:
                 run_command([str(hermes), "gateway", "restart"], timeout=60)
                 report["gatewayRestarted"] = True
@@ -405,7 +444,7 @@ def main(argv: list[str] | None = None) -> int:
             if key in report:
                 print(f"{key}: {report[key]}")
         if "server" in report:
-            print(f"server: {report['server']['state']} on {args.host}:{args.port}")
+            print(f"server: {report['server']['state']} on {report.get('host')}:{report.get('port')}")
         if report.get("systemd", {}).get("available"):
             print(f"systemd: {report['systemd']['state']}")
         if report["ok"]:

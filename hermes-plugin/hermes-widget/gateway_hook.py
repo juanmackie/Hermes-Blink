@@ -106,9 +106,14 @@ except OSError:
 """
 
 
+def _is_windows() -> bool:
+    """Patchable platform decision so both detachment branches stay testable."""
+    return os.name == "nt"
+
+
 def _popen_kwargs(*, breakaway: bool = True) -> dict[str, Any]:
     """Return platform-appropriate detachment flags for a long-lived child."""
-    if os.name != "nt":
+    if not _is_windows():
         return {"start_new_session": True}
     flags = (
         getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
@@ -136,7 +141,7 @@ def _spawn_server(
     """
     target = [binary, "widget", "serve", "--host", host, "--port", str(port)]
     env = {**os.environ, "HERMES_HOME": str(home)}
-    if os.name != "nt":
+    if not _is_windows():
         process = subprocess.Popen(
             target,
             cwd=home,

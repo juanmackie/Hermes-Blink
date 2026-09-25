@@ -37,16 +37,28 @@ hermes widget status
 curl http://127.0.0.1:8788/v1/health
 ```
 
-A healthy host reports a listening server and an existing widget database. A status of
-`degraded` or `Server: not listening` means the host is not ready for phone pairing; inspect
-`<Hermes home>/widget/server.log`, rerun the bootstrap, or use the diagnostic command:
+A healthy host reports a listening probe and an existing widget database. `status` prints the
+configured bind and the address its health probe actually used, plus whether a restart is
+pending, so a saved binding is never mistaken for the live one:
+
+```text
+Configured:   0.0.0.0:8788
+Probe:        127.0.0.1:8788 (listening)
+Restart:      not required
+```
+
+A status of `degraded`, `Probe: not listening`, or `Restart: required` means the host is not
+ready for phone pairing; inspect `<Hermes home>/widget/server.log`, restart the server to apply
+the configured binding, rerun the bootstrap, or use the diagnostic command:
 
 ```sh
 hermes widget serve --host 127.0.0.1 --port 8788
 ```
 
-The server binds loopback by default. Do not bind it to `0.0.0.0` merely to reach a phone.
-Expose it through Tailscale Serve or another private HTTPS proxy.
+A direct host binds loopback and exposes it through Tailscale Serve or another private HTTPS
+proxy; do not bind the host to `0.0.0.0`. A TrueNAS/container install is the exception: it
+binds `0.0.0.0` *inside the container* and the host publishes that port to loopback only (see
+`SERVICE_INSTALL.md`).
 
 ## Remote phone path
 
@@ -56,6 +68,10 @@ Expose it through Tailscale Serve or another private HTTPS proxy.
    ```sh
    tailscale serve --bg --https=8788 tcp://127.0.0.1:8788
    ```
+
+   For a container, this fronts the host's published loopback port (for example
+   `127.0.0.1:8788` from `docker port`); verify that host-side binding before relying on it,
+   because the container's `--host 0.0.0.0` is not the host's port binding.
 
 3. From another tailnet-connected machine, verify:
 

@@ -373,5 +373,7 @@ Host integration and remote-phone end-to-end setup:
 
 The phone joins the same Tailscale tailnet, pairs with the short-lived code,
 and pulls the publication over private HTTPS. It never receives the agent
-token and does not need to share a LAN with the host. Do not bind the widget
-server to `0.0.0.0` for this flow.
+token and does not need to share a LAN with the host. A direct host install
+keeps the widget server on loopback (`127.0.0.1`); only a container binds
+`0.0.0.0` inside the container behind a host-side loopback port publish, so the
+host itself is never listening on `0.0.0.0`.

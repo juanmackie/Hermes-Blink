@@ -1,5 +1,30 @@
 # Hermes Widget — Release notes
 
+## v3.0.1 — truthful binding and pairing guidance
+
+- Binding precedence is consistent across the bootstrap, `setup`, `up`, `serve`,
+  the `widget_setup` agent tool, and `status`: an explicit `--host`/`--port` wins,
+  an omitted flag keeps the saved `widget/server.json` value independently, and a
+  first install defaults to `127.0.0.1:8788`. A binding update preserves the saved
+  Hermes executable and home, and a malformed `server.json` is reported instead of
+  silently replaced.
+- A binding change never restarts the server or claims the new bind is live. `up`
+  and `status` report `restart_required`/`restartRequired`, and `status` prints the
+  configured bind separately from the address its health probe actually used, in
+  both text and JSON.
+- `setup` and `up` no longer infer an HTTP phone URL. Operators are directed to
+  their private HTTPS proxy URL and a short-lived code. `pair` now requires an
+  explicit, usable HTTPS `--server-url`, prints the URL and code for manual entry,
+  and no longer offers an unsupported QR/same-phone link or `--qr` option.
+- `up` keeps `pairing_url_hint` `null` unless a usable HTTPS URL was supplied, and
+  returns actionable pairing instructions.
+- The Windows launcher test patches a platform decision inside the gateway hook
+  instead of mutating Python's process-wide `os.name`; both branches are covered on
+  Linux, and CI runs the suite on Windows and on Ubuntu with Python 3.11 and 3.13.
+- Public guides now state the container rule precisely: direct hosts bind loopback,
+  while a container binds `0.0.0.0` inside the container behind a host-side loopback
+  port publish, with paired Compose settings and a required host-side port check.
+
 ## v3.0.0 — personal visual channel
 
 - Added the authenticated `widget_publish` path for accessible text, constrained static SVG,

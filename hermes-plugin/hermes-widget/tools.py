@@ -131,10 +131,11 @@ def widget_read_events(args: dict[str, Any] | None = None, **_kwargs: Any) -> st
 
 
 def widget_mint_pairing_code(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    """Mint a short-lived pairing code, and a QR payload when a server URL is given.
+    """Mint a short-lived pairing code for manual entry on the phone.
 
-    One tool for one job: [server_url] only decides whether the caller also gets the
-    QR string and the same-phone link for Android's QR scanner. It never changes the code.
+    The Android app has no QR or link handler, so this never returns a QR payload
+    or a same-phone link. An optional [server_url] is validated as a private HTTPS
+    URL and echoed for manual entry; it never changes the code.
     """
     args = args or {}
     label = args.get("device_label") or "unknown"
@@ -167,12 +168,17 @@ def widget_mint_pairing_code(args: dict[str, Any] | None = None, **_kwargs: Any)
         ),
     }
     if server_url:
-        payload["serverUrl"] = server_url
-        payload["qrPayload"] = json.dumps(
-            {"url": server_url, "code": minted.get("code", ""), "ttl": ttl * 60},
-            separators=(",", ":"),
-        )
-        payload["samePhoneLink"] = f"{server_url.rstrip('/')}/v1/pair?code={minted.get('code', '')}"
+        try:
+            from . import cli as _cli  # type: ignore
+        except ImportError:  # pragma: no cover - direct import from tests/scripts
+            import cli as _cli  # type: ignore
+        usable = _cli._valid_server_url(server_url)
+        if usable is None:
+            return _error(
+                "invalid_server_url",
+                "server_url must be a private HTTPS URL the phone can reach",
+            )
+        payload["serverUrl"] = usable
     return _dumps(payload)
 
 
@@ -226,11 +232,22 @@ def widget_setup(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
         from . import cli as _cli  # type: ignore
     except ImportError:
         import cli as _cli  # type: ignore
+    host = args.get("host")
+    raw_port = args.get("port")
+    try:
+        port = int(raw_port) if raw_port is not None else None
+    except (TypeError, ValueError):
+        port = None
+    resolved_host = host if isinstance(host, str) and host else None
+    resolved_port = port
+
     class _A:
         widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
         schedule = args.get("schedule") or "every 6h"
-        host = "127.0.0.1"
-        port = 8788
+        # Omitted host/port preserve the saved binding; never clobber it here.
+        host = resolved_host
+        port = resolved_port
+        server_url = args.get("server_url")
         json = True
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):

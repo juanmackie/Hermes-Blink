@@ -118,7 +118,7 @@ class PublicationContract(unittest.TestCase):
         self.assertIn("does not prove", reminder["context"])
         self.assertTrue(callable(self.tools.widget_publish))
 
-    def test_windows_gateway_hook_uses_a_short_lived_launcher(self):
+    def test_gateway_hook_branches_do_not_touch_global_platform_state(self):
         calls = []
 
         class FakePopen:
@@ -135,20 +135,36 @@ class PublicationContract(unittest.TestCase):
             def poll(self):
                 return 0
 
+        real_name = os.name
         with tempfile.TemporaryDirectory(prefix="hermes-launcher-test-") as temp, patch.object(
-            self.gateway_hook.os, "name", "nt"
+            self.gateway_hook, "_is_windows", return_value=True
         ), patch.object(self.gateway_hook.subprocess, "Popen", FakePopen):
             process, server_pid = self.gateway_hook._spawn_server(
                 "fake-hermes", "127.0.0.1", 8788, Path(temp), io.BytesIO()
             )
-
-        self.assertEqual(process.pid, 4321)
-        self.assertEqual(server_pid, 1234)
+        self.assertEqual((process.pid, server_pid), (4321, 1234))
         self.assertEqual(len(calls), 1)
         self.assertIn("-c", calls[0].argv)
         self.assertIn("widget", calls[0].argv)
         self.assertIn("serve", calls[0].argv)
+        self.assertEqual(calls[0].argv[-4:], ["--host", "127.0.0.1", "--port", "8788"])
         self.assertIn("creationflags", calls[0].kwargs)
+        self.assertEqual(os.name, real_name)
+
+        calls.clear()
+        with tempfile.TemporaryDirectory(prefix="hermes-launcher-test-") as temp, patch.object(
+            self.gateway_hook, "_is_windows", return_value=False
+        ), patch.object(self.gateway_hook.subprocess, "Popen", FakePopen):
+            process, server_pid = self.gateway_hook._spawn_server(
+                "fake-hermes", "127.0.0.1", 8788, Path(temp), io.BytesIO()
+            )
+        self.assertEqual((process.pid, server_pid), (4321, 4321))
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("-c", calls[0].argv)
+        self.assertEqual(calls[0].argv[0], "fake-hermes")
+        self.assertNotIn("creationflags", calls[0].kwargs)
+        self.assertTrue(calls[0].kwargs.get("start_new_session"))
+        self.assertEqual(os.name, real_name)
 
     def test_startup_hook_and_server_config_are_idempotent(self):
         with tempfile.TemporaryDirectory(prefix="hermes-install-test-") as temp:

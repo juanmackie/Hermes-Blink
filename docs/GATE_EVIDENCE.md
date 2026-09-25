@@ -8,9 +8,12 @@ must be recorded separately.
 
 ### Passing local checks
 
-- `python -m unittest discover -s hermes-plugin/hermes-widget/tests -v` — **48/48 passed**.
-- `python -m compileall -q hermes-plugin/hermes-widget scripts` — **passed**.
+- `python -m unittest discover -s hermes-plugin/hermes-widget/tests -v` — **61/61 passed**
+  on CPython 3.11.15 (Windows); the same suite is **61/61 passed** on CPython 3.13.14.
+- `python -m compileall -q hermes-plugin/hermes-widget scripts` — **passed** on 3.11 and 3.13.
 - `python scripts/check-contract-parity.py` — **passed**.
+- `python scripts/verify-cli-local.py` — **0 failures** (CLI verbs, redaction,
+  upgrade/rollback, contract parity).
 - Android with JDK 21:
 
   ```sh
@@ -37,6 +40,22 @@ Server:       not listening on 127.0.0.1:8788
 The plugin database, token, routine, and device records exist, but the live server must be
 started or restored before the phone path can be accepted. Rerun the capability-based bootstrap
 and verify `/v1/health` before pairing.
+
+### Binding, restart, and pairing fixes — verified 2026-09-25
+
+- 13 new regression tests in `hermes-plugin/hermes-widget/tests/test_binding.py` cover:
+  omitted-flag preservation, independent partial overrides, first-install default,
+  malformed `server.json` rejection without rewrite, saved executable/home preservation,
+  agent-tool reruns, restart-required reporting, `status` configured-vs-probe output,
+  `pair` HTTPS validation, and manual-only pairing (no QR/link payloads).
+- The launcher test now patches `gateway_hook._is_windows` and asserts both the Windows
+  launcher and POSIX `start_new_session` branches, without mutating Python's process-wide
+  `os.name`.
+- `.github/workflows/ci.yml` now runs the suite on Ubuntu 24.04 with Python 3.11 and 3.13,
+  on `windows-latest` with Python 3.11, plus the secret scan and Android unit tests. CI was
+  configured in this change but **not executed in this environment**.
+- The container/TrueNAS binding and host-side port publish described in the guides were
+  **not executed here**; `scripts/gate-*.sh` and the real container remain the evidence path.
 
 ### Verification caveats
 

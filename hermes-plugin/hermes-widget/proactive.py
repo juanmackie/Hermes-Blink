@@ -11,6 +11,7 @@ running Hermes process (unit tests, the Android build, a bare Python shell).
 from __future__ import annotations
 
 import contextlib
+import importlib
 import json
 import logging
 import os
@@ -28,6 +29,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_SCHEDULE = "every 6h"
 ROUTINE_NAME = "hermes-widget-refresh"
 SKILL_NAME = "hermes-widget"
+DEFAULT_HOST = "127.0.0.1"
+DEFAULT_PORT = 8788
 
 PLUGIN_DIR = Path(__file__).resolve().parent
 BUNDLED_SKILL = PLUGIN_DIR / "skills" / "widget" / "SKILL.md"
@@ -48,7 +51,8 @@ def _atomic_text(path: Path, text: str, mode: int = 0o600) -> Path:
 
 def _hermes_home() -> Path:
     try:
-        from hermes_constants import get_hermes_home
+        # Optional Hermes-host module; absent in tests, scripts, and the Android build.
+        get_hermes_home = importlib.import_module("hermes_constants").get_hermes_home
         return Path(get_hermes_home())
     except Exception:
         configured_home = os.environ.get("HERMES_HOME")
@@ -93,12 +97,80 @@ def install_startup_hook() -> Path:
     return target
 
 
-def write_server_config(host: str = "127.0.0.1", port: int = 8788) -> Path:
-    """Write the non-secret runtime config consumed by the startup hook."""
+class ServerConfigError(RuntimeError):
+    """The saved non-secret server config exists but cannot be trusted."""
+
+
+def server_config_path() -> Path:
+    return _hermes_home() / "widget" / "server.json"
+
+
+def read_server_config() -> dict[str, Any] | None:
+    """Return the saved server config, or None when it has not been written.
+
+    Raises ServerConfigError when the file exists but is not a JSON object, so a
+    binding update fails loudly instead of silently replacing operator settings.
+    """
+    path = server_config_path()
+    if not path.is_file():
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise ServerConfigError(f"{path} is not valid JSON: {exc}") from exc
+    if not isinstance(value, dict):
+        raise ServerConfigError(f"{path} must contain a JSON object")
+    return value
+
+
+def _port_or_default(raw: Any, default: int = DEFAULT_PORT) -> int:
+    if isinstance(raw, bool):
+        return default
+    try:
+        value = int(raw)
+    except (TypeError, ValueError):
+        return default
+    return value if 1 <= value <= 65535 else default
+
+
+def resolve_server_binding(
+    host: str | None = None, port: int | None = None
+) -> tuple[str, int, dict[str, Any]]:
+    """Resolve the effective bind from explicit flags and the saved config.
+
+    Explicit values always win; an omitted field keeps the saved value
+    independently; a first install falls back to 127.0.0.1:8788. The saved
+    config is returned so callers can tell whether an explicit change needs a
+    restart.
+    """
+    saved = read_server_config() or {}
+    resolved_host = str(host) if host else str(saved.get("host") or DEFAULT_HOST)
+    resolved_port = _port_or_default(port) if port else _port_or_default(saved.get("port"))
+    return resolved_host, resolved_port, saved
+
+
+def write_server_config(host: str | None = None, port: int | None = None) -> Path:
+    """Write the non-secret runtime config consumed by the startup hook.
+
+    Omitted host/port keep the saved values; the saved Hermes executable and
+    home are preserved so a binding update never rewrites the operator's paths.
+    """
+    resolved_host, resolved_port, saved = resolve_server_binding(host, port)
     home = _hermes_home()
-    binary = os.environ.get("HERMES_BIN") or shutil.which("hermes") or "hermes"
-    target = home / "widget" / "server.json"
-    value = {"hermesBin": binary, "home": str(home), "host": host, "port": port}
+    binary = str(
+        saved.get("hermesBin")
+        or os.environ.get("HERMES_BIN")
+        or shutil.which("hermes")
+        or "hermes"
+    )
+    saved_home = str(saved.get("home") or home)
+    target = server_config_path()
+    value = {
+        "hermesBin": binary,
+        "home": saved_home,
+        "host": resolved_host,
+        "port": resolved_port,
+    }
     _atomic_text(target, json.dumps(value, indent=2, sort_keys=True) + "\n")
     return target
 
@@ -121,12 +193,13 @@ def routine_prompt(widget_id: str = store.DEFAULT_WIDGET_ID) -> str:
 
 def _cron_jobs() -> Any:
     try:
-        from cron import jobs
+        # Optional Hermes-host module; deferred so importing this module never fails
+        # outside a running Hermes process (unit tests, the Android build, a bare shell).
+        return importlib.import_module("cron").jobs
     except Exception as exc:  # pragma: no cover - only outside a Hermes install
         raise RuntimeError(
             "the Hermes cron module is unavailable; run this from a Hermes installation"
         ) from exc
-    return jobs
 
 
 def find_routine(name: str = ROUTINE_NAME) -> dict[str, Any] | None:

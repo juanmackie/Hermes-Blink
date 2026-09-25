@@ -17,6 +17,7 @@ import sys
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 try:  # normal path: imported as part of the hermes-widget plugin package
     from . import proactive, store
@@ -53,10 +54,9 @@ def _placeholder_layout(widget_id: str) -> dict[str, Any]:
     }
 
 
-def _reachable_url(bind_host: str, port: int) -> str:
-    if bind_host in _WILDCARD_HOSTS:
-        return f"http://<this-machine-ip>:{port}"
-    return f"http://{bind_host}:{port}"
+def _probe_host(bind_host: str) -> str:
+    """Address the health probe connects to; wildcard binds are probed on loopback."""
+    return "127.0.0.1" if bind_host in _WILDCARD_HOSTS else bind_host
 
 
 def _port_listening(port: int, host: str = "127.0.0.1", timeout: float = 0.5) -> bool:
@@ -65,6 +65,62 @@ def _port_listening(port: int, host: str = "127.0.0.1", timeout: float = 0.5) ->
             return True
     except OSError:
         return False
+
+
+def _binding_listening(bind_host: str, port: int) -> bool:
+    return _port_listening(port, host=_probe_host(bind_host))
+
+
+_LOOPBACK_HOSTNAMES = frozenset({"localhost", "127.0.0.1", "::1"}) | _WILDCARD_HOSTS
+
+
+def _valid_server_url(value: Any) -> str | None:
+    """Return a usable private HTTPS base URL, or None.
+
+    The phone reaches the host through a private HTTPS proxy, so cleartext,
+    relative, and loopback URLs cannot work from the device.
+    """
+    if not isinstance(value, str) or not value.strip():
+        return None
+    parsed = urlsplit(value.strip())
+    if parsed.scheme != "https" or not parsed.hostname:
+        return None
+    if parsed.hostname.lower() in _LOOPBACK_HOSTNAMES:
+        return None
+    return value.strip().rstrip("/")
+
+
+def _running_binding() -> tuple[str, int] | None:
+    """Binding recorded for the running server, when the startup hook wrote it."""
+    path = proactive.server_config_path().parent / "server-process.json"
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(record, dict):
+        return None
+    host, port = record.get("host"), record.get("port")
+    if isinstance(host, str) and host and isinstance(port, int) and not isinstance(port, bool):
+        return host, port
+    return None
+
+
+def _restart_required(
+    configured: tuple[str, int],
+    prior: tuple[str, int] | None,
+    running: tuple[str, int] | None,
+) -> bool:
+    """Whether a running server still uses a binding other than the configured one.
+
+    A recorded process binding is authoritative. Without one, only report a
+    pending restart when this call changed the saved binding while the old
+    binding still answers.
+    """
+    if running is not None:
+        return running != configured
+    if prior is None or prior == configured:
+        return False
+    return _binding_listening(*prior)
 
 
 def _print_usage(verbs: Iterable[str] = ()) -> None:
@@ -172,15 +228,16 @@ def add_parser(parser: Any) -> None:
     commands = parser.add_subparsers(dest="widget_command")
 
     serve = commands.add_parser("serve", help="Run the widget HTTP server.")
-    serve.add_argument("--host", default="127.0.0.1", help="Interface to bind (default 127.0.0.1).")
-    serve.add_argument("--port", type=int, default=DEFAULT_PORT, help="Port to bind (default 8788).")
+    serve.add_argument("--host", default=None, help="Interface to bind (default: saved config or 127.0.0.1).")
+    serve.add_argument("--port", type=int, default=None, help="Port to bind (default: saved config or 8788).")
     serve.add_argument("--certfile", default=None, help="TLS certificate for HTTPS.")
     serve.add_argument("--keyfile", default=None, help="TLS private key for HTTPS.")
     serve.add_argument("--quiet", action="store_true", help="Do not print the listen URL.")
 
     setup = commands.add_parser("setup", help="Create the agent token, skill, and a pairing code.")
-    setup.add_argument("--host", default="127.0.0.1")
-    setup.add_argument("--port", type=int, default=DEFAULT_PORT)
+    setup.add_argument("--host", default=None, help="Interface to bind (default: saved config or 127.0.0.1).")
+    setup.add_argument("--port", type=int, default=None, help="Port to bind (default: saved config or 8788).")
+    setup.add_argument("--server-url", default=None, help="Private HTTPS URL the phone will use (printed for manual entry).")
     setup.add_argument("--widget-id", default=store.DEFAULT_WIDGET_ID)
     setup.add_argument("--routine", action="store_true", help="Also install the background refresh job.")
     setup.add_argument("--schedule", default=proactive.DEFAULT_SCHEDULE)
@@ -188,8 +245,8 @@ def add_parser(parser: Any) -> None:
     commands.add_parser("code", help="Mint a pairing code for a new device.")
 
     status = commands.add_parser("status", help="Show widget, device, and server status.")
-    status.add_argument("--port", type=int, default=DEFAULT_PORT)
-    status.add_argument("--host", default="127.0.0.1")
+    status.add_argument("--port", type=int, default=None)
+    status.add_argument("--host", default=None)
     status.add_argument("--json", action="store_true", help="Machine-readable JSON.")
 
     routine = commands.add_parser("routine", help="Install or remove the background refresh job.")
@@ -202,15 +259,15 @@ def add_parser(parser: Any) -> None:
 
     up = commands.add_parser("up", help="Idempotent setup: configure, start services, install routine, prepare pairing, and return structured progress.")
     up.add_argument("--json", action="store_true", help="Output machine-readable JSON only.")
-    up.add_argument("--host", default="127.0.0.1")
-    up.add_argument("--port", type=int, default=DEFAULT_PORT)
+    up.add_argument("--host", default=None, help="Interface to bind (default: saved config or 127.0.0.1).")
+    up.add_argument("--port", type=int, default=None, help="Port to bind (default: saved config or 8788).")
+    up.add_argument("--server-url", default=None, help="Private HTTPS URL the phone will use; reported as a hint only.")
     up.add_argument("--widget-id", default=store.DEFAULT_WIDGET_ID)
     up.add_argument("--schedule", default=proactive.DEFAULT_SCHEDULE)
 
-    pair = commands.add_parser("pair", help="Generate a single-use pairing code with QR payload and same-phone link.")
-    pair.add_argument("--server-url", default="http://127.0.0.1:8788", help="Server URL for QR payload.")
+    pair = commands.add_parser("pair", help="Mint a single-use pairing code for manual entry in the Android app.")
+    pair.add_argument("--server-url", default=None, help="Private HTTPS URL the phone will use (required).")
     pair.add_argument("--label", default="unknown", help="Device label.")
-    pair.add_argument("--qr", action="store_true", help="Print QR payload for scanning.")
     pair.add_argument("--json", action="store_true", help="Machine-readable JSON.")
 
     doc = commands.add_parser("doctor", help="Run diagnostics with redaction; report protocol metadata.")
@@ -317,12 +374,20 @@ def _preview(args: Any) -> int:
 
 def _serve(args: Any) -> int:
     try:
+        host, port, _saved = proactive.resolve_server_binding(
+            getattr(args, "host", None), getattr(args, "port", None)
+        )
+    except proactive.ServerConfigError as exc:
+        print(f"Invalid widget server config: {exc}")
+        print("Fix or remove the saved server.json, then retry.")
+        return 2
+    try:
         from . import server
     except ImportError:  # pragma: no cover - direct import from tests/scripts
         import server  # type: ignore
     server.run_server(
-        args.host,
-        args.port,
+        host,
+        port,
         certfile=args.certfile,
         keyfile=args.keyfile,
         quiet=args.quiet,
@@ -336,6 +401,17 @@ def _setup(args: Any) -> int:
         print(f"Unsupported environment: {reason}")
         print("Aborting before any changes. Install on Ubuntu 24.04 LTS or WSL2 with Ubuntu 24.04.")
         return 2
+    try:
+        host, port, _saved = proactive.resolve_server_binding(args.host, args.port)
+        raw_server_url = getattr(args, "server_url", None)
+        server_url = _valid_server_url(raw_server_url)
+        if raw_server_url and server_url is None:
+            print("Invalid --server-url: enter a private HTTPS URL the phone can reach (not loopback).")
+            return 2
+    except proactive.ServerConfigError as exc:
+        print(f"Invalid widget server config: {exc}")
+        print("Fix or remove the saved server.json, then retry.")
+        return 2
     store.get_agent_token()
     skill_path = proactive.install_skill_file()
     hook_path = proactive.install_startup_hook()
@@ -344,7 +420,7 @@ def _setup(args: Any) -> int:
     if store.get_widget(widget_id) is None:
         store.put_widget(widget_id, _placeholder_layout(widget_id))
     pairing = store.get_or_mint_pairing_code()
-    _ensure_systemd_service(args.host, args.port)
+    _ensure_systemd_service(host, port)
 
     print()
     print("Hermes widget setup complete")
@@ -355,15 +431,17 @@ def _setup(args: Any) -> int:
     print(f"Hook:       {hook_path}")
     print(f"Config:     {config_path}")
     print()
-    print("1. Start the server and keep it running:")
-    print(f"     hermes widget serve --host {args.host} --port {args.port}")
+    print("1. Start or restart the server to apply this binding:")
+    print(f"     hermes widget serve --host {host} --port {port}")
     print()
-    print("2. On the phone, open Hermes Widget > Pair or update and enter:")
-    print(f"     Hermes widget URL: {_reachable_url(args.host, args.port)}")
-    print("     Pairing code:     (short-lived; never the agent token)")
+    print("2. Publish the server through a private HTTPS proxy (for example Tailscale Serve):")
+    print(f"     tailscale serve --bg --https={port} tcp://{_probe_host(host)}:{port}")
+    print("   Do not expose the raw widget port publicly.")
     print()
-    print("3. If the app asks for a pairing code instead, use:")
-    print(f"     {pairing['code']}   (expires {pairing['expiresAt']})")
+    print("3. On the phone, open Hermes Widget > Pair and enter:")
+    print(f"     Server URL:   {server_url or '<your private HTTPS proxy URL>'}")
+    print(f"     Pairing code: {pairing['code']}   (expires {pairing['expiresAt']})")
+    print("   The code is short-lived; never enter the agent token on the phone.")
     print()
     if args.routine:
         _install_routine_or_report(args.schedule, widget_id)
@@ -391,8 +469,44 @@ def _up(args: Any) -> int:
     # Now it is safe to touch the filesystem
     steps: list[dict[str, Any]] = []
     state = "starting"
-    port = getattr(args, "port", DEFAULT_PORT)
-    bind_host = getattr(args, "host", "127.0.0.1")
+    try:
+        host, port, saved = proactive.resolve_server_binding(
+            getattr(args, "host", None), getattr(args, "port", None)
+        )
+    except proactive.ServerConfigError as exc:
+        payload = {
+            "state": "needs_user_action",
+            "error": "invalid_server_config",
+            "detail": str(exc),
+            "steps": [],
+            "next_actions": [
+                "Fix or remove <Hermes home>/widget/server.json, then rerun hermes widget up."
+            ],
+        }
+        if getattr(args, "json", False):
+            print(json.dumps(payload, indent=2))
+        else:
+            print(f"Invalid widget server config: {exc}")
+        return 2
+    raw_server_url = getattr(args, "server_url", None)
+    server_url = _valid_server_url(raw_server_url)
+    if raw_server_url and server_url is None:
+        detail = "--server-url must be a private HTTPS URL the phone can reach (not loopback)."
+        if getattr(args, "json", False):
+            print(json.dumps({
+                "state": "needs_user_action",
+                "error": "invalid_server_url",
+                "detail": detail,
+                "steps": [],
+                "next_actions": ["Pass your private HTTPS proxy URL, e.g. https://<tailnet-host>."],
+            }, indent=2))
+        else:
+            print(detail)
+        return 2
+    prior: tuple[str, int] | None = None
+    if saved:
+        prior_host, prior_port, _ = proactive.resolve_server_binding()
+        prior = (prior_host, prior_port)
 
     # 1. prerequisites / agent token (idempotent)
     store.get_agent_token()
@@ -410,7 +524,7 @@ def _up(args: Any) -> int:
     # 3. startup hook and non-secret server config (idempotent)
     try:
         hook_path = proactive.install_startup_hook()
-        config_path = proactive.write_server_config(bind_host, port)
+        config_path = proactive.write_server_config(host, port)
         steps.append({"step": "startup_hook", "ok": True, "path": str(hook_path)})
         steps.append({"step": "server_config", "ok": True, "path": str(config_path)})
     except Exception as exc:
@@ -423,7 +537,7 @@ def _up(args: Any) -> int:
     steps.append({"step": "widget", "ok": True, "widget_id": widget_id})
 
     # 4. systemd service (idempotent: no duplicate units)
-    service_ok, service_path = _ensure_systemd_service(bind_host, port)
+    service_ok, service_path = _ensure_systemd_service(host, port)
     steps.append({"step": "service", "ok": service_ok, "path": service_path if service_ok else service_path})
 
     # 5. pairing code (idempotent: reuse valid, prune expired)
@@ -441,10 +555,10 @@ def _up(args: Any) -> int:
             steps.append({"step": "routine", "ok": False, "error": str(exc)})
 
     # Derive structured state — never "ready" from port alone
-    listening = _port_listening(port, host=bind_host)
-    # also probe 127.0.0.1 if bound to 0.0.0.0
-    if not listening and bind_host in _WILDCARD_HOSTS:
-        listening = _port_listening(port, host="127.0.0.1")
+    probe_host = _probe_host(host)
+    listening = _port_listening(port, host=probe_host)
+    running = _running_binding()
+    restart_required = _restart_required((host, port), prior, running)
     token_present = store.get_agent_token(create=False) is not None
     widget_present = store.get_widget(widget_id) is not None
     device_count = len(store.list_devices())
@@ -455,18 +569,48 @@ def _up(args: Any) -> int:
         device_count=device_count,
         routine_ok=routine_ok,
     )
+    if restart_required:
+        state = "degraded"
 
     counts_after = _counts_snapshot()
+    pairing_instructions = [
+        "Publish the widget server through a private HTTPS proxy (for example Tailscale Serve).",
+        "On the phone, open Hermes Widget > Pair and enter the private HTTPS URL and the short-lived code.",
+        "Never enter the agent token on the phone.",
+    ]
+    if restart_required:
+        pairing_instructions.insert(
+            0, "Restart the widget server to apply the configured binding before pairing."
+        )
     payload = {
         "state": state,
         "widgetId": widget_id,
         "steps": steps,
         "counts": counts_after,
         "listening": listening,
-        "pairing_url_hint": _reachable_url(bind_host, port),
+        "host": host,
+        "port": port,
+        "configuredHost": host,
+        "configuredPort": port,
+        "configured_host": host,
+        "configured_port": port,
+        "probeHost": probe_host,
+        "probePort": port,
+        "probe_host": probe_host,
+        "probe_port": port,
+        "restart_required": restart_required,
+        "pairing_url_hint": server_url,
+        "pairing": {
+            "code": pairing["code"],
+            "expiresAt": pairing["expiresAt"],
+            "url": server_url,
+            "instructions": pairing_instructions,
+        },
         "next_actions": [
-            f"hermes widget serve --host {bind_host} --port {port}",
-            "pair device with pairing code",
+            f"hermes widget serve --host {host} --port {port}"
+            + ("  # restart required to apply the configured binding" if restart_required else ""),
+            "publish the server through a private HTTPS proxy and give the phone that HTTPS URL",
+            "on the phone, enter the private HTTPS URL and the short-lived pairing code",
         ],
     }
     # For B's idempotency verification, include before/after counts delta
@@ -518,29 +662,50 @@ def _code(_args: Any) -> int:
 
 
 def _pair(args: Any) -> int:
-    """Generate a single-use pairing code with QR payload and same-phone link."""
+    """Mint one single-use pairing code for manual entry in the Android app."""
+    server_url = _valid_server_url(getattr(args, "server_url", None))
+    if server_url is None:
+        print("A private HTTPS --server-url is required, for example:")
+        print("  hermes widget pair --server-url https://<tailnet-host>:<port>")
+        print("Loopback and cleartext URLs cannot be used from the phone.")
+        return 2
     pairing = store.mint_pairing_code()
     code = pairing["code"]
-    server_url = args.server_url
-    qr_payload = json.dumps({"url": server_url, "code": code, "ttl": 600}, separators=(",", ":"))
-    same_phone_link = f"{server_url}/v1/pair?code={code}"
+    instructions = [
+        "Open the Hermes Widget app, tap Pair or update, and enter the server URL and code below.",
+        "The code is short-lived and single-use; never enter the agent token on the phone.",
+    ]
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "serverUrl": server_url,
+            "code": code,
+            "expiresAt": pairing["expiresAt"],
+            "instructions": instructions,
+        }, indent=2))
+        return 0
+    print(f"Server URL:   {server_url}")
     print(f"Pairing code: {code}")
     print(f"Expires:      {pairing['expiresAt']}")
-    print(f"QR payload:   {qr_payload}")
-    print(f"Same-phone:   {same_phone_link}")
-    print("Scan the QR payload or visit the same-phone link to pair.")
+    for line in instructions:
+        print(f"  - {line}")
     return 0
 
 
 def _status(args: Any) -> int:
+    try:
+        host, port, _saved = proactive.resolve_server_binding(
+            getattr(args, "host", None), getattr(args, "port", None)
+        )
+    except proactive.ServerConfigError as exc:
+        print(f"Invalid widget server config: {exc}")
+        return 2
     widgets = store.list_widgets()
     devices = store.list_devices()
     token_present = store.get_agent_token(create=False) is not None
-    port = getattr(args, "port", DEFAULT_PORT)
-    host = getattr(args, "host", "127.0.0.1")
-    listening = _port_listening(port, host=host)
-    if not listening and host in _WILDCARD_HOSTS:
-        listening = _port_listening(port, host="127.0.0.1")
+    probe_host = _probe_host(host)
+    listening = _port_listening(port, host=probe_host)
+    running = _running_binding()
+    restart_required = _restart_required((host, port), None, running)
     widget_id = store.DEFAULT_WIDGET_ID
     widget_present = store.get_widget(widget_id) is not None
     try:
@@ -554,6 +719,8 @@ def _status(args: Any) -> int:
         device_count=len(devices),
         routine_ok=routine_ok,
     )
+    if restart_required:
+        state = "degraded"
     if getattr(args, "json", False):
         payload = {
             "state": state,
@@ -564,6 +731,16 @@ def _status(args: Any) -> int:
             "routine": routine_ok,
             "port": port,
             "host": host,
+            "configuredHost": host,
+            "configuredPort": port,
+            "configured_host": host,
+            "configured_port": port,
+            "probeHost": probe_host,
+            "probePort": port,
+            "probe_host": probe_host,
+            "probe_port": port,
+            "restartRequired": restart_required,
+            "restart_required": restart_required,
         }
         print(json.dumps(payload, indent=2))
         return 0
@@ -576,9 +753,14 @@ def _status(args: Any) -> int:
     print(f"Widgets:      {', '.join(widgets) if widgets else '(none)'}")
     print(f"Devices:      {len(devices)}")
     if listening:
-        print(f"Server:       listening on {host}:{port}")
+        print(f"Probe:        {probe_host}:{port} (listening)")
     else:
-        print(f"Server:       not listening on {host}:{port} (start with: hermes widget serve)")
+        print(f"Probe:        {probe_host}:{port} (not listening; start with: hermes widget serve)")
+    print(f"Configured:   {host}:{port}")
+    if restart_required:
+        print("Restart:      required - the running server still uses a different binding")
+    else:
+        print("Restart:      not required")
     print(f"Routine:      {'installed' if routine_ok else 'not installed (run hermes widget up)'}")
     for device in devices:
         st = "revoked" if device.get("revoked") else "active"
@@ -645,9 +827,13 @@ def _doctor(args: Any) -> int:
     routine_ok = False
     with contextlib.suppress(Exception):
         routine_ok = proactive.find_routine() is not None
-    host = getattr(args, "host", "127.0.0.1") if hasattr(args, "host") else "127.0.0.1"
-    port = getattr(args, "port", DEFAULT_PORT) if hasattr(args, "port") else DEFAULT_PORT
-    listening = _port_listening(port, host=host)
+    try:
+        host, port, _saved = proactive.resolve_server_binding(
+            getattr(args, "host", None), getattr(args, "port", None)
+        )
+    except proactive.ServerConfigError:
+        host, port = proactive.DEFAULT_HOST, proactive.DEFAULT_PORT
+    listening = _port_listening(port, host=_probe_host(host))
     data_dir = str(store.data_dir())
     db_path = str(store.db_path())
     # Incompatible version check: client version header vs server VERSION
@@ -660,7 +846,7 @@ def _doctor(args: Any) -> int:
         "ok": True,
         "state": _derive_state(token_present=token_present, widget_present=bool(widgets), listening=listening, device_count=len(devices), routine_ok=routine_ok),
         "protocol": {"transport_version": "v1", "layout_contract": "v2", "server_version": server_version},
-        "capabilities": ["hermes-widget.v2", "pairing-qr", "6h-brief"],
+        "capabilities": ["hermes-widget.v2", "pairing-code", "6h-brief"],
         "dataDir": data_dir,
         "database": db_path,
         "token_present": token_present,
