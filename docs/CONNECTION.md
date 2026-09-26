@@ -130,7 +130,9 @@ The Android client already speaks this contract. Do not change paths.
 
     POST /v1/widgets/<widget_id>/events
          Auth: DEVICE or AGENT token.
-         Body: {"event":"toggle_focus","payload":{...}} or
+         Body: {"event":"request_update","clientEventId":"..."} records a generic poke and
+               triggers the existing refresh routine; it does not prescribe publication content.
+             {"event":"toggle_focus","payload":{...}} or
                {"event":"approve","itemId":"task-1","revision":7,
                 "actionClass":"reversible","clientEventId":"..."}
          -> 200 {"ok":true,"id":<int>} for an event, or

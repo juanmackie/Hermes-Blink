@@ -25,9 +25,10 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 try:  # normal path: imported as part of the hermes-widget plugin package
-    from . import preview, store
+    from . import preview, proactive, store
 except ImportError:  # pragma: no cover - direct import from tests/scripts
     import preview  # type: ignore
+    import proactive  # type: ignore
     import store  # type: ignore
 
 VERSION = "1.0.0"
@@ -817,6 +818,24 @@ class _Handler(BaseHTTPRequestHandler):
             payload = None
         if store.get_widget(widget_id) is None and store.get_publication(widget_id) is None:
             raise _HttpError(404, "unknown_widget", f"no widget with id {widget_id!r}")
+        if event == "request_update":
+            if not device_id:
+                raise _HttpError(403, "device_required", "update requests require a paired device token")
+            client_event_id = body.get("clientEventId", payload.get("clientEventId") if isinstance(payload, dict) else None)
+            event_id = store.post_event(widget_id, device_id, "request_update", payload)
+            request = store.request_update(widget_id, device_id, client_event_id)
+            trigger = (
+                proactive.trigger_refresh()
+                if request.get("status") != "triggered"
+                else {"triggered": False, "duplicate": True}
+            )
+            if request.get("status") != "triggered" and not trigger.get("triggered"):
+                store.mark_update_request_triggered(request["requestId"], error=trigger.get("error"))
+                request = store.list_update_requests(widget_id, limit=1)[0]
+            elif request.get("status") != "triggered":
+                request = store.mark_update_request_triggered(request["requestId"]) or request
+            self._json(200, {"ok": True, "eventId": event_id, "request": request, "trigger": trigger})
+            return
         if event == "answer":
             if not device_id:
                 raise _HttpError(403, "device_required", "answers require a paired device token")

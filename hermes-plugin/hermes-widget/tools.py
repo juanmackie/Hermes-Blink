@@ -590,6 +590,7 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             "warnings": publication.get("warnings", []),
             "wake": publication.get("wake", {"devices": [], "registeredCount": 0}),
             "attention": publication.get("attention", {}),
+            "updateRequests": publication.get("updateRequests", []),
             "delivery": publication.get("delivery", []),
             "deliveryState": delivery_state,
             "inventory": publication.get("inventory", []),

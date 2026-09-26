@@ -264,12 +264,15 @@ URLs, and event-handler attributes. `text` is allowed; only generic `font-family
 ### Events and polling
 
 The event vocabulary is `refresh`, `dismiss`, `review`, `event` (a caller-named event with its
-own `payload`), plus the queue-only action kinds `approve`, `snooze`, and `open`. Emission points:
+own `payload`), the generic `request_update` poke, and the queue-only action kinds `approve`,
+`snooze`, and `open`. Emission points:
 
 - `refresh` — tapping the publication fetches now; also a v2 `button` with `kind=refresh`.
 - `dismiss` / `event` — v2 button actions.
 - `approve` / `snooze` / `open` — v2/publication actions that enqueue an intent.
 - `review` — opening the publication zoom view.
+- `request_update` — a widget tap that records a generic poke and triggers the existing refresh
+  routine; the agent decides whether and what to publish.
 
 The phone polls on a `PeriodicWorkRequest` of 15 minutes (`capabilities.pollIntervalSeconds`
 = 900), on app open, and after a tap. Android WorkManager batches and defers work, so the

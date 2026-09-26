@@ -96,6 +96,10 @@ class PublicationActivity : Activity() {
             })
         }
         root.addView(android.widget.Button(this).apply {
+            text = "Request update"
+            setOnClickListener { requestUpdate() }
+        })
+        root.addView(android.widget.Button(this).apply {
             text = "Previous states"
             setOnClickListener { showHistory() }
         })
@@ -130,6 +134,25 @@ class PublicationActivity : Activity() {
         }
         Thread {
             HermesApi.reportAttention(baseUrl, token, publication.widgetId, publication.revision, dwellBucket = bucket)
+        }.start()
+    }
+
+    private fun requestUpdate() {
+        val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this) ?: return
+        val token = SecureStore.token(this) ?: return
+        Thread {
+            val result = HermesApi.postEventWithFields(
+                baseUrl, Config.getWidgetId(this), "request_update",
+                org.json.JSONObject().put("clientEventId", UUID.randomUUID().toString()),
+                token,
+            )
+            runOnUiThread {
+                Toast.makeText(
+                    this,
+                    if (result.code in 200..299) "Update requested" else "Update request unavailable",
+                    Toast.LENGTH_LONG,
+                ).show()
+            }
         }.start()
     }
 

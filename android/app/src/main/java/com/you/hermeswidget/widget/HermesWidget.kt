@@ -12,6 +12,8 @@ import androidx.glance.Image
 import androidx.glance.ImageProvider
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.action.actionRunCallback
+import androidx.glance.action.actionParametersOf
 import androidx.glance.appwidget.action.actionStartActivity
 import androidx.glance.appwidget.provideContent
 import androidx.glance.background
@@ -174,6 +176,23 @@ private fun PublicationSurface(snapshot: WidgetSnapshot) {
             text = deliveryLabel(publication, snapshot.connectionState),
             modifier = GlanceModifier.fillMaxWidth().padding(top = 6.dp),
             style = Typo.textStyle("caption", colorOverride = secondary),
+            maxLines = 1,
+        )
+        Text(
+            text = "Request update",
+            modifier = GlanceModifier
+                .fillMaxWidth()
+                .padding(top = 6.dp)
+                .clickable(
+                    actionRunCallback<ActionCallbacks.EventAction>(
+                        actionParametersOf(
+                            WidgetParams.eventKey to "request_update",
+                            WidgetParams.kindKey to "request_update",
+                            WidgetParams.payloadKey to "{}",
+                        )
+                    )
+                ),
+            style = Typo.textStyle("caption", colorOverride = if (publication.darkPalette) "#7C3AED" else "#7C3AED"),
             maxLines = 1,
         )
     }

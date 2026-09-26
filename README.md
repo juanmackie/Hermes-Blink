@@ -172,6 +172,10 @@ server. The phone keeps a bounded retry outbox when the private path is unavaila
 agent reads intents with `widget_read_intents` before recording a terminal decision with
 `widget_resolve_intent`. Destructive/external actions wait for explicit confirmation.
 
+The widget has a small **Request update** action. It records a generic poke and triggers the
+existing refresh routine; it does not prescribe content to the agent, which decides from its own
+current context whether a new publication is warranted.
+
 Low-stakes updates can be published as an independent `ticker` while the hero is retained.
 Standing `widget_watch` rules, bounded `widget_ask` questions, provenance labels, dark
 palettes, and size-keyed text variants are also available. Attention status contains

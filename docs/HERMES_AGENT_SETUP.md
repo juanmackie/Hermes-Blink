@@ -220,6 +220,9 @@ server configuration, and this proactive routine. On current Hermes hosts the pl
 bounded proactive-guidance section after memory, rendered once per session rather than injecting
 a reminder into every turn.
 
+The widget's **Request update** action is a generic poke: it records a request and triggers
+the existing refresh routine. The agent decides from current context whether to publish.
+
 Standing watches are evaluated by the routine before an ordinary publish. The agent creates
 them with `widget_watch_create`, supplies bounded source snapshots to `widget_watch_tick`, and
 uses `widget_watch_pause`/`widget_watch_list` for control. A low-stakes `ticker` publication

@@ -52,7 +52,7 @@ ACTION_CLASSES = (
 )
 PROVENANCE_LEVELS = ("verified", "from_price", "estimate")
 SENSITIVE_ACTION_CLASSES = frozenset({"destructive", "external", "irreversible"})
-EVENT_VOCABULARY = ("refresh", "dismiss", "review", "event", "answer") + ACTION_KINDS
+EVENT_VOCABULARY = ("refresh", "dismiss", "review", "event", "answer", "request_update") + ACTION_KINDS
 EVENT_EMISSION_POINTS = {
     "refresh": "publication tap fetches now; v2 button action kind=refresh",
     "dismiss": "v2 button action kind=dismiss",
@@ -61,6 +61,7 @@ EVENT_EMISSION_POINTS = {
     "approve": "queue a validated, allowlisted approval intent",
     "snooze": "queue a validated, allowlisted snooze intent",
     "open": "queue a validated, allowlisted open intent",
+    "request_update": "generic user poke; the agent decides whether and what to publish",
 }
 
 SUPPORTED_MEDIA_TYPES = ("image/png", "image/jpeg", "image/webp")

@@ -1,7 +1,7 @@
 ---
 name: hermes-widget
 description: "Proactive widget publishing, previews, delivery, actions."
-version: 3.3.0
+version: 3.4.0
 author: Hermes Widget contributors
 license: MIT
 metadata:
@@ -236,6 +236,9 @@ Call widget_read_events (optionally `since`, `widget_id`, `limit`) to see taps a
 Events are newest first and carry the widget id, device id, event name, and payload. Close the
 loop: if the user tapped "refresh", push an updated layout; if "dismiss" or "review", update
 that item's state and push the revised layout.
+
+The widget's **Request update** action is a generic poke. It records the request and triggers
+this routine; the agent decides from current context whether anything should change.
 
 Action taps are a queue, not an authorisation. Publications may carry stable `itemId`s and
 `approve`/`snooze`/`open` actions. Read them with `widget_read_intents`, perform only the

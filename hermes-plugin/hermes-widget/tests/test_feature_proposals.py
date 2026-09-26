@@ -46,6 +46,7 @@ class FeatureProposals(unittest.TestCase):
         cls.tools = importlib.import_module("hermes_plugins.hermes_widget.tools")
         cls.preview = importlib.import_module("hermes_plugins.hermes_widget.preview")
         cls.watches = importlib.import_module("hermes_plugins.hermes_widget.watches")
+        cls.proactive = importlib.import_module("hermes_plugins.hermes_widget.proactive")
         cls.cli = importlib.import_module("hermes_plugins.hermes_widget.cli")
         cls.server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
         cls.server = cls.server_module.make_server("127.0.0.1", 0)
@@ -131,6 +132,20 @@ class FeatureProposals(unittest.TestCase):
         self.assertEqual(result["variants"]["2x2"]["text"], "compact")
         rendered = self.preview.render_publication_previews(result, sizes=["2x2"])
         self.assertEqual(rendered[0]["renderer"], "pillow-text")
+
+    def test_request_update_pokes_the_existing_refresh_routine(self):
+        self.store.put_publication("poke", title="A", summary="S", text="body")
+        with patch.object(self.server_module, "proactive") as host:
+            host.trigger_refresh.return_value = {"triggered": True, "pid": 123}
+            status, body = self.request(
+                "POST", "/v1/widgets/poke/events",
+                {"event": "request_update", "clientEventId": "poke-1"},
+                self.device["token"],
+            )
+        self.assertEqual(status, 200, body)
+        host.trigger_refresh.assert_called_once_with()
+        self.assertEqual(body["request"]["status"], "triggered")
+        self.assertEqual(self.store.publication_status("poke")["updateRequests"][0]["status"], "triggered")
 
     def test_bounded_question_is_answered_through_authenticated_path(self):
         self.store.put_publication("questions", title="Q", summary="S", text="body")

@@ -913,6 +913,7 @@ def _status(args: Any) -> int:
             "warnings": publication.get("warnings", []),
             "wake": publication.get("wake", {"devices": [], "registeredCount": 0}),
             "attention": publication.get("attention", {}),
+            "updateRequests": publication.get("updateRequests", []),
             "delivery": publication.get("delivery", []),
             "inventory": publication.get("inventory", []),
             "intents": publication.get("intents", []),
@@ -960,6 +961,8 @@ def _status(args: Any) -> int:
             f"{attention.get('rendersPerPublish', 0)} taps/10={attention.get('tapsPer10Publishes', 0)} "
             f"superseded-before-fetch={attention.get('supersededBeforeFetchRate', 0)}"
         )
+    if publication.get("updateRequests"):
+        print(f"Update reqs:  {len(publication['updateRequests'])} recorded")
     print(f"Instances:    {len(publication.get('inventory', []))} registered")
     print(f"Intents:      {len(publication.get('intents', []))} recorded")
     if publication.get("anomalies"):

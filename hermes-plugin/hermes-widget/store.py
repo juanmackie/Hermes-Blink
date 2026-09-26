@@ -356,6 +356,16 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             "expires_at TEXT NOT NULL, UNIQUE (event_id))"
         )
         conn.execute(
+            "CREATE TABLE IF NOT EXISTS widget_update_requests ("
+            "request_id TEXT PRIMARY KEY, widget_id TEXT NOT NULL, device_id TEXT, "
+            "client_event_id TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, "
+            "triggered_at TEXT, trigger_error TEXT, UNIQUE (widget_id, client_event_id))"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS widget_update_requests_status_idx "
+            "ON widget_update_requests(widget_id, status, created_at)"
+        )
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS attention_aggregates ("
             "device_id TEXT NOT NULL, widget_id TEXT NOT NULL, revision INTEGER NOT NULL, "
             "rendered INTEGER NOT NULL DEFAULT 0, dwell_lt5 INTEGER NOT NULL DEFAULT 0, "
@@ -1866,6 +1876,7 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
             "registeredCount": sum(1 for item in push_states if item["registered"]),
         },
         "attention": attention_summary(widget_id),
+        "updateRequests": list_update_requests(widget_id),
         "delivery": delivery,
         "inventory": list_widget_instances(widget_id),
         "anomalies": anomalies,
@@ -2409,6 +2420,81 @@ def report_widget_instances(device_id: str, widget_id: str, instances: Any) -> l
         finally:
             conn.close()
     return list_widget_instances(widget_id, device_id=device_id)
+
+
+def request_update(widget_id: str, device_id: str | None, client_event_id: str | None = None) -> dict:
+    """Record one generic 'poke'; the existing refresh routine decides the content."""
+    now = _now()
+    request_id = "update_request_" + uuid.uuid4().hex[:24]
+    with _LOCK:
+        conn = _connect()
+        try:
+            if client_event_id:
+                existing = conn.execute(
+                    "SELECT * FROM widget_update_requests WHERE widget_id = ? AND client_event_id = ?",
+                    (widget_id, client_event_id),
+                ).fetchone()
+                if existing is not None:
+                    return _update_request_row(existing)
+            conn.execute(
+                "INSERT INTO widget_update_requests (request_id, widget_id, device_id, client_event_id, status, created_at) "
+                "VALUES (?, ?, ?, ?, 'pending', ?)",
+                (request_id, widget_id, device_id, client_event_id, now),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM widget_update_requests WHERE request_id = ?", (request_id,)).fetchone()
+            return _update_request_row(row)
+        finally:
+            conn.close()
+
+
+def mark_update_request_triggered(request_id: str, *, error: str | None = None) -> dict | None:
+    with _LOCK:
+        conn = _connect()
+        try:
+            status = "failed" if error else "triggered"
+            conn.execute(
+                "UPDATE widget_update_requests SET status = ?, triggered_at = ?, trigger_error = ? WHERE request_id = ?",
+                (status, _now(), error, request_id),
+            )
+            conn.commit()
+            row = conn.execute("SELECT * FROM widget_update_requests WHERE request_id = ?", (request_id,)).fetchone()
+            return _update_request_row(row) if row else None
+        finally:
+            conn.close()
+
+
+def list_update_requests(widget_id: str | None = None, *, limit: int = 50) -> list[dict]:
+    try:
+        limit = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        limit = 50
+    with _LOCK:
+        conn = _connect()
+        try:
+            if widget_id:
+                rows = conn.execute(
+                    "SELECT * FROM widget_update_requests WHERE widget_id = ? ORDER BY created_at DESC LIMIT ?",
+                    (widget_id, limit),
+                ).fetchall()
+            else:
+                rows = conn.execute("SELECT * FROM widget_update_requests ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+        finally:
+            conn.close()
+    return [_update_request_row(row) for row in rows]
+
+
+def _update_request_row(row: Any) -> dict:
+    return {
+        "requestId": row["request_id"],
+        "widgetId": row["widget_id"],
+        "deviceId": row["device_id"],
+        "clientEventId": row["client_event_id"],
+        "status": row["status"],
+        "createdAt": row["created_at"],
+        "triggeredAt": row["triggered_at"],
+        "error": row["trigger_error"],
+    }
 
 
 def report_attention(device_id: str, widget_id: str, payload: Any) -> dict:

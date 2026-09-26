@@ -114,6 +114,8 @@ publication endpoint is the only device-visible channel.
 - `GET /v1/capabilities` reports the active format, size, priority, inventory, and action limits.
 - `hermes widget wake-test` sends one content-free UnifiedPush fetch to registered device
   endpoints and prints the wake receipt chain; it does not create a publication revision.
+- The widget's **Request update** button records a generic poke and triggers the existing
+  refresh routine; it gives the agent no prescribed content.
 - `widget_status` reports host state separately from ordered `nudge_sent`, `fetched`,
   `downloaded`, and `render_submitted` receipts.
 

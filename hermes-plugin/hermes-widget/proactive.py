@@ -16,6 +16,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -208,6 +209,24 @@ def _cron_jobs() -> Any:
         raise RuntimeError(
             "the Hermes cron module is unavailable; run this from a Hermes installation"
         ) from exc
+
+
+def trigger_refresh() -> dict[str, Any]:
+    """Ask the existing widget routine to run now; the agent chooses the content."""
+    binary = os.environ.get("HERMES_BIN") or shutil.which("hermes")
+    if not binary:
+        return {"triggered": False, "error": "hermes executable is not available"}
+    try:
+        process = subprocess.Popen(
+            [str(binary), "cron", "run", ROUTINE_NAME],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=(os.name != "nt"),
+        )
+        return {"triggered": True, "pid": process.pid, "job": ROUTINE_NAME}
+    except OSError as exc:
+        return {"triggered": False, "error": str(exc)}
 
 
 def find_routine(name: str = ROUTINE_NAME) -> dict[str, Any] | None:

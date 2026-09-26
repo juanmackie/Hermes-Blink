@@ -1,5 +1,13 @@
 # Hermes Widget — Release notes
 
+## v3.4.0 — one-tap update request
+
+- Added a compact **Request update** action to the widget and zoom view. It records a generic,
+  authenticated poke and triggers the existing refresh routine; the agent decides from its own
+  context what to publish, including the option to do nothing.
+- Request rows are idempotent, bounded, and visible in status. No publication content is put in
+  the poke or in any push payload.
+
 ## v3.3.0 — regions, watches, questions, and attention signal
 
 - Publications now support an independent `ticker` region that retains the hero, with its own
