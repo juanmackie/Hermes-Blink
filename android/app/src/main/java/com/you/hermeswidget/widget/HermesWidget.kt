@@ -49,16 +49,18 @@ private data class WidgetSnapshot(
     val bitmap: android.graphics.Bitmap?,
     val paired: Boolean,
     val connectionState: ConnectionState,
+    val compact: Boolean,
 )
 
 class HermesWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val snapshot = withContext(Dispatchers.IO) { loadSnapshot(context) }
         provideContent {
+            val dark = snapshot.publication?.darkPalette == true
             Box(
                 modifier = GlanceModifier
                     .fillMaxSize()
-                    .background(WIDGET_SCRIM)
+                    .background(if (dark) Color(0xFF1C1C1E) else WIDGET_SCRIM)
             ) {
                 when {
                     !snapshot.paired -> EmptyState(
@@ -96,12 +98,16 @@ class HermesWidget : GlanceAppWidget() {
         val token = SecureStore.token(appContext)
         val paired = !baseUrl.isNullOrBlank() && !token.isNullOrBlank()
         val publication = if (paired) PublicationRepository.loadCached(appContext) else null
+        val (widthPx, heightPx) = WidgetDimensions.fromContext(appContext)
+        val density = appContext.resources.displayMetrics.density
+        val compact = (widthPx / density) < 200f && (heightPx / density) < 200f
         return WidgetSnapshot(
             publication = publication,
             legacyLayout = if (publication == null) loadLegacyLayout(appContext) else null,
             bitmap = publication?.let { PublicationImages.load(appContext, it) },
             paired = paired,
             connectionState = Config.getConnectionState(appContext),
+            compact = compact,
         )
     }
 
@@ -114,6 +120,16 @@ class HermesWidget : GlanceAppWidget() {
 @Composable
 private fun PublicationSurface(snapshot: WidgetSnapshot) {
     val publication = snapshot.publication ?: return
+    val ink = if (publication.darkPalette) "#F2F2F7" else "#000000"
+    val secondary = if (publication.darkPalette) "#AEAEB2" else "#8E8E93"
+    val variant = if (snapshot.compact) {
+        publication.variants["2x2"]
+    } else {
+        publication.variants["4x2"] ?: publication.variants["4x4"]
+    }
+    val title = variant?.title ?: publication.title
+    val summary = variant?.summary ?: publication.summary
+    val body = variant?.let { PublicationContent.Text(it.text) } ?: publication.content
     val intent = Intent(LocalContext.current, PublicationActivity::class.java)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
     Column(
@@ -123,22 +139,41 @@ private fun PublicationSurface(snapshot: WidgetSnapshot) {
             .padding(12.dp)
     ) {
         Text(
-            text = publication.title,
+            text = provenanceLabel(publication, title),
             modifier = GlanceModifier.fillMaxWidth(),
-            style = Typo.textStyle("title"),
+            style = Typo.textStyle("title", colorOverride = ink),
             maxLines = 2,
         )
         Text(
-            text = publication.summary,
+            text = summary,
             modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp),
-            style = Typo.textStyle("caption"),
+            style = Typo.textStyle("caption", colorOverride = secondary),
             maxLines = 2,
         )
-        PublicationBody(publication.content, snapshot.bitmap, publication.summary)
+        PublicationBody(body, snapshot.bitmap, summary, ink)
+        publication.question?.takeIf { it.status == "open" }?.let { question ->
+            Text(
+                text = "Tap to answer: ${question.prompt}",
+                modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp),
+                style = Typo.textStyle("caption", colorOverride = "#7C3AED"),
+                maxLines = 1,
+            )
+        }
+        if (!snapshot.compact) {
+            publication.ticker?.takeUnless { it.decayed }?.let { ticker ->
+                val rotating = ticker.rotation.firstOrNull { !it.pinned }
+                Text(
+                    text = "${ticker.title} · ${rotating?.summary ?: ticker.summary}",
+                    modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp),
+                    style = Typo.textStyle("caption", colorOverride = secondary),
+                    maxLines = 1,
+                )
+            }
+        }
         Text(
             text = deliveryLabel(publication, snapshot.connectionState),
             modifier = GlanceModifier.fillMaxWidth().padding(top = 6.dp),
-            style = Typo.textStyle("caption"),
+            style = Typo.textStyle("caption", colorOverride = secondary),
             maxLines = 1,
         )
     }
@@ -149,12 +184,13 @@ private fun ColumnScope.PublicationBody(
     content: PublicationContent,
     bitmap: android.graphics.Bitmap?,
     summary: String,
+    ink: String = "#000000",
 ) {
     when (content) {
         is PublicationContent.Text -> Text(
             text = content.text,
             modifier = GlanceModifier.fillMaxWidth().defaultWeight().padding(top = 8.dp),
-            style = Typo.textStyle("body"),
+            style = Typo.textStyle("body", colorOverride = ink),
         )
         is PublicationContent.Image -> {
             if (bitmap == null) {
@@ -192,6 +228,13 @@ private fun EmptyState(title: String, message: String) {
             style = Typo.textStyle("body"),
         )
     }
+}
+
+private fun provenanceLabel(publication: Publication, title: String = publication.title): String = when (publication.provenance) {
+    "verified" -> "✓ $title"
+    "from_price" -> "~price $title"
+    "estimate" -> "est. $title"
+    else -> title
 }
 
 private fun deliveryLabel(publication: Publication, state: ConnectionState): String {

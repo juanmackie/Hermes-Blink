@@ -8,7 +8,7 @@ to the same Tailscale tailnet and use Tailscale Serve HTTPS rather than exposing
 
 ## What it registers
 
-- Tools: widget_publish, widget_preview, widget_status, widget_update, widget_validate (dry run), widget_list, widget_read_events, widget_read_intents, widget_resolve_intent, widget_wake_test, widget_set_quiet_hours, widget_mint_pairing_code, widget_setup
+- Tools: widget_publish, widget_preview, widget_status, widget_update, widget_validate (dry run), widget_list, widget_read_events, widget_read_intents, widget_resolve_intent, widget_ask, widget_read_questions, widget_watch_create, widget_watch_list, widget_watch_pause, widget_watch_tick, widget_wake_test, widget_set_quiet_hours, widget_mint_pairing_code, widget_setup
 - Slash command: /widget (status)
 - CLI: hermes widget serve | setup | code | status | wake-test | routine | devices | install-skill | preview
 - Bundled skill: hermes-widget:widget (layout authoring, design tokens, proactive refresh)

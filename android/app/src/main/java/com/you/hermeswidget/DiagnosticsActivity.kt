@@ -60,9 +60,12 @@ class DiagnosticsActivity : Activity() {
             else -> distributor.toString()
         }
         val failure = push?.optString("failureReason").orEmpty().takeIf { it.isNotEmpty() }
+        val lastWake = Config.getLastPushWake(this)
         pushState.text = buildString {
             append("UnifiedPush: $state (distributor $present)")
             if (failure != null) append("; failure: $failure")
+            append("\nLast wake received: ")
+            append(lastWake?.let { format.format(Date(it)) } ?: "never")
         }
     }
 

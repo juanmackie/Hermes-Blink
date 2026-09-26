@@ -13,6 +13,7 @@ import tempfile
 import threading
 import types
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -44,6 +45,7 @@ class FeatureProposals(unittest.TestCase):
         cls.store = importlib.import_module("hermes_plugins.hermes_widget.store")
         cls.tools = importlib.import_module("hermes_plugins.hermes_widget.tools")
         cls.preview = importlib.import_module("hermes_plugins.hermes_widget.preview")
+        cls.watches = importlib.import_module("hermes_plugins.hermes_widget.watches")
         cls.cli = importlib.import_module("hermes_plugins.hermes_widget.cli")
         cls.server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
         cls.server = cls.server_module.make_server("127.0.0.1", 0)
@@ -107,6 +109,67 @@ class FeatureProposals(unittest.TestCase):
         status = self.store.publication_status("feature")
         self.assertTrue(status["wake"]["devices"][0]["registered"])
         self.assertEqual(status["wake"]["registeredCount"], 1)
+
+    def test_ticker_update_keeps_hero_and_gets_independent_expiry(self):
+        self.store.put_publication("regions", title="Hero", summary="Hero summary", text="hero body")
+        result = self.store.put_ticker(
+            "regions", title="Ticker", summary="countdown", text="12:00", max_age_seconds=60
+        )
+        self.assertEqual(result["content"]["text"], "hero body")
+        self.assertEqual(result["regions"]["ticker"]["summary"], "countdown")
+        self.assertEqual(result["ticker"]["summary"], "countdown")
+        self.assertEqual(result["regions"]["ticker"]["maxAgeSeconds"], 60)
+
+    def test_publication_carries_provenance_dark_and_variants(self):
+        result = self.store.put_publication(
+            "polish", title="Estimate", summary="S", text="base",
+            provenance="estimate", dark_palette=True,
+            variants={"2x2": {"title": "Small", "summary": "S", "text": "compact"}},
+        )
+        self.assertEqual(result["provenance"], "estimate")
+        self.assertTrue(result["darkPalette"])
+        self.assertEqual(result["variants"]["2x2"]["text"], "compact")
+        rendered = self.preview.render_publication_previews(result, sizes=["2x2"])
+        self.assertEqual(rendered[0]["renderer"], "pillow-text")
+
+    def test_bounded_question_is_answered_through_authenticated_path(self):
+        self.store.put_publication("questions", title="Q", summary="S", text="body")
+        question = self.store.ask_question("questions", "Which option?")
+        self.assertEqual(self.store.get_publication("questions")["question"]["prompt"], "Which option?")
+        answer = self.store.answer_question(self.device["deviceId"], question["questionId"], "first")
+        self.assertEqual(answer["status"], "answered")
+        self.assertIsNone(self.store.get_publication("questions").get("question"))
+
+    def test_attention_report_is_aggregate_only_and_scorecard_visible(self):
+        self.store.put_publication("attention", title="A", summary="S", text="body")
+        self.store.report_attention(self.device["deviceId"], "attention", {
+            "revision": 1, "rendered": 1, "dwellLt5": 1, "taps": 2,
+        })
+        summary = self.store.publication_status("attention")["attention"]
+        self.assertEqual(summary["rendered"], 1)
+        self.assertEqual(summary["dwell_lt5"], 1)
+        self.assertEqual(summary["taps"], 2)
+        with self.assertRaises(self.store.StoreError):
+            self.store.report_attention(self.device["deviceId"], "attention", {
+                "revision": 1, "rendered": 1, "content": "secret",
+            })
+
+    def test_watch_publishes_only_on_transition_and_clears_when_resolved(self):
+        self.store.put_publication("watch-widget", title="Hero", summary="hero", text="hero")
+        watch = self.watches.create_watch(
+            "watch-widget", name="receipt",
+            condition={"type": "source_equals", "source": "receipt", "equals": True},
+            payload={"title": "Receipt", "summary": "ready", "text": "done"},
+            cadence_seconds=60,
+        )
+        base = datetime.now(timezone.utc)
+        first = self.watches.tick_watches(sources={"receipt": True}, now=base)
+        self.assertEqual(first[0]["state"], "published")
+        second = self.watches.tick_watches(sources={"receipt": True}, now=base + timedelta(seconds=61))
+        self.assertEqual(second, [])
+        cleared = self.watches.tick_watches(sources={"receipt": False}, now=base + timedelta(seconds=122))
+        self.assertEqual(cleared[0]["state"], "cleared")
+        self.assertFalse(self.watches.get_watch(watch["watchId"])["enabled"])
 
     def test_priority_wake_is_content_free_and_receipted(self):
         self.store.set_device_push_endpoint(self.device["deviceId"], "https://ntfy.example/up/device")

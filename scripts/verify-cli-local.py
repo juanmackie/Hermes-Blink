@@ -116,7 +116,9 @@ check("rollback_keeps_device", store.device_for_token(device_token) is not None
 tools_src = (REPO / "hermes-plugin" / "hermes-widget" / "tools.py").read_text(encoding="utf-8")
 expected_tools = ["widget_update", "widget_validate", "widget_list", "widget_read_events",
                   "widget_mint_pairing_code", "widget_setup", "widget_publish", "widget_preview",
-                  "widget_read_intents", "widget_resolve_intent", "widget_wake_test",
+                  "widget_read_intents", "widget_resolve_intent", "widget_ask",
+                  "widget_read_questions", "widget_watch_create", "widget_watch_list",
+                  "widget_watch_pause", "widget_watch_tick", "widget_wake_test",
                   "widget_set_quiet_hours",
                   "widget_status"]
 missing = [t for t in expected_tools if f"def {t}" not in tools_src]

@@ -6,6 +6,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Matrix
 import android.os.Bundle
+import android.os.SystemClock
 import android.text.method.ScrollingMovementMethod
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
@@ -29,6 +30,8 @@ import java.util.UUID
 import kotlin.math.min
 
 class PublicationActivity : Activity() {
+    private val openedAt = SystemClock.elapsedRealtime()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val publication = PublicationRepository.loadCached(this)
@@ -77,6 +80,25 @@ class PublicationActivity : Activity() {
                 }
             }
         }
+        publication.question?.takeIf { it.status == "open" }?.let { question ->
+            root.addView(android.widget.Button(this).apply {
+                text = "Answer: ${question.prompt}"
+                setOnClickListener { showQuestionDialog(question.questionId, question.prompt) }
+            })
+        }
+        publication.ticker?.takeUnless { it.decayed }?.let { ticker ->
+            val rotating = ticker.rotation.firstOrNull { !it.pinned }
+            root.addView(TextView(this).apply {
+                text = "${ticker.title} · ${rotating?.summary ?: ticker.summary}"
+                setTextColor(Color.rgb(150, 150, 155))
+                textSize = 14f
+                setPadding(0, dp(12), 0, dp(4))
+            })
+        }
+        root.addView(android.widget.Button(this).apply {
+            text = "Previous states"
+            setOnClickListener { showHistory() }
+        })
         publication.actions.forEach { action ->
             val state = publication.actionStates[action.itemId]?.status
             val label = if (state == null || state == "queued") action.label else "${action.label} ($state)"
@@ -95,6 +117,70 @@ class PublicationActivity : Activity() {
      * fetches now and reports the tap. Delivery states stay server-side; this
      * never claims the user read the content.
      */
+    override fun onStop() {
+        super.onStop()
+        val publication = PublicationRepository.loadCached(this) ?: return
+        val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this) ?: return
+        val token = SecureStore.token(this) ?: return
+        val seconds = (SystemClock.elapsedRealtime() - openedAt) / 1000
+        val bucket = when {
+            seconds < 5 -> "lt5"
+            seconds < 60 -> "5to60"
+            else -> "gt60"
+        }
+        Thread {
+            HermesApi.reportAttention(baseUrl, token, publication.widgetId, publication.revision, dwellBucket = bucket)
+        }.start()
+    }
+
+    private fun showHistory() {
+        val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this) ?: return
+        val token = SecureStore.token(this) ?: return
+        Thread {
+            val result = HermesApi.fetchHistory(baseUrl, Config.getWidgetId(this), token)
+            runOnUiThread {
+                if (result.code !in 200..299 || result.body == null) {
+                    Toast.makeText(this, "History unavailable", Toast.LENGTH_SHORT).show()
+                    return@runOnUiThread
+                }
+                val revisions = org.json.JSONObject(result.body).optJSONArray("revisions")
+                val text = buildString {
+                    for (index in 0 until (revisions?.length() ?: 0)) {
+                        val item = revisions?.optJSONObject(index) ?: continue
+                        append("r${item.optInt("revision")} · ${item.optString("title")}\n")
+                    }
+                }
+                AlertDialog.Builder(this).setTitle("Previous states").setMessage(text.ifBlank { "No history" }).show()
+            }
+        }.start()
+    }
+
+    private fun showQuestionDialog(questionId: String, prompt: String) {
+        val input = android.widget.EditText(this).apply {
+            hint = "Your answer"
+            maxLines = 3
+            setPadding(dp(12), dp(8), dp(12), dp(8))
+        }
+        AlertDialog.Builder(this)
+            .setTitle(prompt)
+            .setView(input)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Send") { _, _ ->
+                val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this) ?: return@setPositiveButton
+                val token = SecureStore.token(this) ?: return@setPositiveButton
+                Thread {
+                    HermesApi.postEventWithFields(
+                        baseUrl, Config.getWidgetId(this), "answer",
+                        org.json.JSONObject()
+                            .put("questionId", questionId)
+                            .put("answer", input.text.toString().trim()),
+                        token,
+                    )
+                }.start()
+            }
+            .show()
+    }
+
     private fun confirmAndSend(action: PublicationAction) {
         val sensitive = action.confirmOnDevice || action.actionClass in setOf("destructive", "external", "irreversible")
         if (!sensitive) {

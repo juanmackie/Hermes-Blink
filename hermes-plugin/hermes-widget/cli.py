@@ -733,6 +733,7 @@ def _up(args: Any) -> int:
         "Publish the widget server through a private HTTPS proxy (for example Tailscale Serve).",
         "On the phone, open Hermes Widget > Pair and enter the private HTTPS URL and the short-lived code.",
         "Never enter the agent token on the phone.",
+        "For high-priority wakes, install a UnifiedPush distributor (self-hosted ntfy is fine), pair, then run hermes widget wake-test; Diagnostics shows the live state.",
     ]
     if restart_required:
         pairing_instructions.insert(
@@ -767,6 +768,7 @@ def _up(args: Any) -> int:
             + ("  # restart required to apply the configured binding" if restart_required else ""),
             "publish the server through a private HTTPS proxy and give the phone that HTTPS URL",
             "on the phone, enter the private HTTPS URL and the short-lived pairing code",
+            "for high-priority wakes, install/configure a UnifiedPush distributor and run hermes widget wake-test",
         ],
     }
     # For B's idempotency verification, include before/after counts delta
@@ -910,6 +912,7 @@ def _status(args: Any) -> int:
             "revisionHistory": publication.get("revisionHistory", {}),
             "warnings": publication.get("warnings", []),
             "wake": publication.get("wake", {"devices": [], "registeredCount": 0}),
+            "attention": publication.get("attention", {}),
             "delivery": publication.get("delivery", []),
             "inventory": publication.get("inventory", []),
             "intents": publication.get("intents", []),
@@ -949,6 +952,13 @@ def _status(args: Any) -> int:
             f"Wake:         {item.get('label') or item.get('deviceId')} "
             f"{state} (distributor={item.get('distributorPresent')}, "
             f"registered={item.get('registered')}){detail}"
+        )
+    attention = publication.get("attention", {})
+    if attention.get("revisions"):
+        print(
+            "Attention:    renders/publish="
+            f"{attention.get('rendersPerPublish', 0)} taps/10={attention.get('tapsPer10Publishes', 0)} "
+            f"superseded-before-fetch={attention.get('supersededBeforeFetchRate', 0)}"
         )
     print(f"Instances:    {len(publication.get('inventory', []))} registered")
     print(f"Intents:      {len(publication.get('intents', []))} recorded")

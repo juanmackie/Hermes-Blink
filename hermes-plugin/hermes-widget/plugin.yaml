@@ -1,5 +1,5 @@
 name: hermes-widget
-version: 3.2.1
+version: 3.3.0
 description: >-
   Hermes personal visual channel: accessible text, safe static SVG, validated
   local raster media, legacy v2 layouts, private authenticated delivery,
@@ -19,6 +19,12 @@ provides_tools:
   - widget_preview
   - widget_read_intents
   - widget_resolve_intent
+  - widget_ask
+  - widget_read_questions
+  - widget_watch_create
+  - widget_watch_list
+  - widget_watch_pause
+  - widget_watch_tick
   - widget_wake_test
   - widget_set_quiet_hours
   - widget_status

@@ -29,10 +29,15 @@ data class Publication(
     val expiresAt: String?,
     val expired: Boolean,
     val priority: String,
+    val provenance: String?,
+    val darkPalette: Boolean,
     val itemId: String?,
     val actions: List<PublicationAction>,
     val actionStates: Map<String, PublicationActionState>,
     val content: PublicationContent,
+    val ticker: PublicationRegion?,
+    val question: PublicationQuestion?,
+    val variants: Map<String, PublicationVariant>,
 ) {
     fun isExpired(nowMillis: Long = System.currentTimeMillis()): Boolean {
         if (expired) return true
@@ -64,6 +69,11 @@ data class Publication(
             val expired = json.optBoolean("expired", false)
             val priority = json.optString("priority", "normal")
             require(priority == "normal" || priority == "high") { "invalid publication priority" }
+            val provenance = json.optionalString("provenance")
+            val darkPalette = json.optBoolean("darkPalette", false)
+            require(provenance == null || provenance in setOf("verified", "from_price", "estimate")) {
+                "invalid publication provenance"
+            }
             val itemId = json.optionalString("itemId")
             val actionsJson = json.optJSONArray("actions") ?: JSONArray()
             val actions = buildList {
@@ -124,39 +134,34 @@ data class Publication(
             }
             runCatching { Instant.parse(publishedAt) }.getOrThrow()
 
-            val content = when (kind) {
-                "text" -> PublicationContent.Text(
-                    text = contentJson.requiredString("text").also {
-                        require(it.toByteArray(Charsets.UTF_8).size in 1..MAX_TEXT_BYTES) {
-                            "invalid publication text"
-                        }
+            val content = parseContent(kind, contentJson)
+
+            val regionJson = json.optJSONObject("ticker")
+                ?: json.optJSONObject("regions")?.optJSONObject("ticker")
+            val ticker = regionJson?.let { parseRegion(it, "ticker") }
+            val questionJson = json.optJSONObject("question")
+            val variants = buildMap {
+                val variantsJson = json.optJSONObject("variants")
+                if (variantsJson != null) {
+                    val keys = variantsJson.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        val item = variantsJson.optJSONObject(key) ?: continue
+                        put(key, PublicationVariant(
+                            title = item.optString("title", ""),
+                            summary = item.optString("summary", ""),
+                            text = item.optString("text", ""),
+                        ))
                     }
-                )
-                "image" -> PublicationContent.Image(
-                    assetId = contentJson.requiredString("assetId").also {
-                        require(ASSET_ID_PATTERN.matches(it)) { "invalid asset id" }
-                    },
-                    mediaType = contentJson.requiredString("mediaType").also {
-                        require(it in setOf("image/png", "image/jpeg", "image/webp", "image/svg+xml")) {
-                            "unsupported image type"
-                        }
-                    },
-                    width = contentJson.optInt("width", -1),
-                    height = contentJson.optInt("height", -1),
-                    bytes = contentJson.optLong("bytes", -1L),
-                    sha256 = contentJson.requiredString("sha256").also {
-                        require(it.matches(Regex("[a-f0-9]{64}"))) { "invalid asset digest" }
-                    },
-                )
-                else -> throw IllegalArgumentException("invalid publication kind")
-            }
-            if (content is PublicationContent.Image) {
-                require(content.width in 1..MAX_RASTER_DIMENSION) { "invalid image width" }
-                require(content.height in 1..MAX_RASTER_DIMENSION) { "invalid image height" }
-                require(content.width.toLong() * content.height <= MAX_RASTER_PIXELS) {
-                    "image is too large"
                 }
-                require(content.bytes in 1..MAX_RASTER_BYTES) { "invalid image size" }
+            }
+            val question = questionJson?.let {
+                PublicationQuestion(
+                    questionId = it.requiredString("questionId"),
+                    itemId = it.optionalString("itemId"),
+                    prompt = it.requiredString("prompt"),
+                    status = it.optString("status", "open"),
+                )
             }
 
             return Publication(
@@ -171,14 +176,53 @@ data class Publication(
                 expiresAt = expiresAt,
                 expired = expired,
                 priority = priority,
+                provenance = provenance,
+                darkPalette = darkPalette,
                 itemId = itemId,
                 actions = actions,
                 actionStates = actionStates,
                 content = content,
+                ticker = ticker,
+                question = question,
+                variants = variants,
             )
         }
     }
 }
+
+data class PublicationRegion(
+    val title: String,
+    val summary: String,
+    val content: PublicationContent,
+    val priority: String,
+    val expiresAt: String?,
+    val maxAgeSeconds: Int?,
+    val itemId: String?,
+    val provenance: String?,
+    val pinned: Boolean,
+    val rotate: Boolean,
+    val rotation: List<PublicationRotationItem>,
+    val decayed: Boolean,
+)
+
+data class PublicationVariant(
+    val title: String,
+    val summary: String,
+    val text: String,
+)
+
+data class PublicationRotationItem(
+    val title: String,
+    val summary: String,
+    val pinned: Boolean,
+)
+
+data class PublicationQuestion(
+    val questionId: String,
+    val itemId: String?,
+    val prompt: String,
+    val status: String,
+)
 
 data class PublicationAction(
     val kind: String,
@@ -231,6 +275,70 @@ fun Publication.freshness(nowMillis: Long = System.currentTimeMillis()): Publica
         age < 24 * 60 * 60 * 1000L -> PublicationFreshness.AGED
         else -> PublicationFreshness.STALE
     }
+}
+
+private fun parseContent(kind: String, contentJson: JSONObject, allowEmptyText: Boolean = false): PublicationContent {
+    return when (kind) {
+        "text" -> PublicationContent.Text(
+            text = contentJson.optString("text", "").also {
+                require((allowEmptyText || it.isNotEmpty()) && it.toByteArray(Charsets.UTF_8).size <= MAX_TEXT_BYTES) {
+                    "invalid publication text"
+                }
+            }
+        )
+        "image" -> PublicationContent.Image(
+            assetId = contentJson.requiredString("assetId").also {
+                require(ASSET_ID_PATTERN.matches(it)) { "invalid asset id" }
+            },
+            mediaType = contentJson.requiredString("mediaType").also {
+                require(it in setOf("image/png", "image/jpeg", "image/webp", "image/svg+xml")) {
+                    "unsupported image type"
+                }
+            },
+            width = contentJson.optInt("width", -1),
+            height = contentJson.optInt("height", -1),
+            bytes = contentJson.optLong("bytes", -1L),
+            sha256 = contentJson.requiredString("sha256").also {
+                require(it.matches(Regex("[a-f0-9]{64}"))) { "invalid asset digest" }
+            },
+        ).also {
+            require(it.width in 1..MAX_RASTER_DIMENSION) { "invalid image width" }
+            require(it.height in 1..MAX_RASTER_DIMENSION) { "invalid image height" }
+            require(it.width.toLong() * it.height <= MAX_RASTER_PIXELS) { "image is too large" }
+            require(it.bytes in 1..MAX_RASTER_BYTES) { "invalid image size" }
+        }
+        else -> throw IllegalArgumentException("invalid publication kind")
+    }
+}
+
+private fun parseRegion(region: JSONObject, slot: String): PublicationRegion {
+    val content = region.optJSONObject("content")
+        ?: throw IllegalArgumentException("region $slot content is missing")
+    val kind = content.optString("type", "")
+    return PublicationRegion(
+        title = region.optString("title", ""),
+        summary = region.optString("summary", ""),
+        content = parseContent(kind, content, allowEmptyText = true),
+        priority = region.optString("priority", "normal"),
+        expiresAt = region.optionalString("expiresAt"),
+        maxAgeSeconds = region.optInt("maxAgeSeconds", -1).takeIf { it >= 0 },
+        itemId = region.optionalString("itemId"),
+        provenance = region.optionalString("provenance"),
+        pinned = region.optBoolean("pinned", false),
+        rotate = region.optBoolean("rotate", false),
+        rotation = buildList {
+            val items = region.optJSONArray("rotation") ?: JSONArray()
+            for (index in 0 until items.length()) {
+                val item = items.optJSONObject(index) ?: continue
+                add(PublicationRotationItem(
+                    title = item.optString("title", ""),
+                    summary = item.optString("summary", ""),
+                    pinned = item.optBoolean("pinned", false),
+                ))
+            }
+        },
+        decayed = region.optBoolean("decayed", false),
+    )
 }
 
 private fun JSONObject.requiredString(name: String): String {

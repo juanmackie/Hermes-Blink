@@ -241,6 +241,8 @@ class _Handler(BaseHTTPRequestHandler):
             return "device", None
         if path == "/v1/device/instances":
             return "device-instances", None
+        if path == "/v1/device/attention":
+            return "device-attention", None
         if path == "/v1/intents":
             return "intents", None
         if path.startswith("/v1/assets/"):
@@ -251,6 +253,8 @@ class _Handler(BaseHTTPRequestHandler):
         prefix = "/v1/widgets/"
         if path.startswith(prefix):
             rest = path[len(prefix):]
+            if rest.endswith("/history") and rest[: -len("/history")]:
+                return "history", unquote(rest[: -len("/history")])
             if rest.endswith("/publication/ack") and rest[: -len("/publication/ack")]:
                 return "publication-ack", unquote(rest[: -len("/publication/ack")])
             if rest.endswith("/settings") and rest[: -len("/settings")]:
@@ -274,11 +278,13 @@ class _Handler(BaseHTTPRequestHandler):
         "events": ("GET",),
         "device": ("PATCH",),
         "device-instances": ("PUT",),
+        "device-attention": ("PUT",),
         "intents": ("GET", "POST"),
         "settings": ("GET", "PUT"),
         "asset": ("GET", "HEAD"),
         "publication": ("GET", "POST", "PUT"),
         "publication-ack": ("POST",),
+        "history": ("GET",),
         "preview": ("POST",),
         "widget": ("GET", "PUT"),
         "widget-events": ("POST",),
@@ -370,25 +376,44 @@ class _Handler(BaseHTTPRequestHandler):
             body = self._read_json_body()
             if not isinstance(body, dict):
                 raise _HttpError(400, "invalid_publication", "publication must be a JSON object")
-            title = body.get("title")
-            summary = body.get("summary")
+            file_path = body.get("file_path", body.get("image_path", body.get("path")))
+            ticker = body.get("ticker")
+            ticker_only = isinstance(ticker, dict) and body.get("text") is None and body.get("svg") is None and file_path is None
+            title = body.get("title") or (ticker.get("title") if ticker_only else None)
+            summary = body.get("summary") or (ticker.get("summary") if ticker_only else None)
             if not isinstance(title, str) or not isinstance(summary, str):
                 raise _HttpError(400, "invalid_publication", "title and summary are required strings")
-            file_path = body.get("file_path", body.get("image_path", body.get("path")))
-            result = store.put_publication(
-                widget_id,
-                title=title,
-                summary=summary,
-                text=body.get("text"),
-                svg=body.get("svg"),
-                file_path=file_path,
-                expires_at=body.get("expires_at"),
-                ttl_seconds=body.get("ttl_seconds"),
-                max_age_seconds=body.get("max_age_seconds", body.get("maxAgeSeconds")),
-                priority=body.get("priority", "normal"),
-                item_id=body.get("item_id", body.get("itemId")),
-                actions=body.get("actions"),
-            )
+            if ticker_only:
+                result = store.put_ticker(
+                    widget_id, title=title, summary=summary, text=ticker.get("text"),
+                    svg=ticker.get("svg"),
+                    file_path=ticker.get("file_path", ticker.get("filePath")),
+                    expires_at=ticker.get("expires_at", ticker.get("expiresAt")),
+                    ttl_seconds=ticker.get("ttl_seconds", ticker.get("ttlSeconds")),
+                    max_age_seconds=ticker.get("max_age_seconds", ticker.get("maxAgeSeconds")),
+                    priority=ticker.get("priority", "normal"),
+                    item_id=ticker.get("item_id", ticker.get("itemId")),
+                    actions=ticker.get("actions"), provenance=ticker.get("provenance"),
+                    pinned=bool(ticker.get("pinned", False)), rotate=bool(ticker.get("rotate", False)),
+                )
+            else:
+                result = store.put_publication(
+                    widget_id,
+                    title=title,
+                    summary=summary,
+                    text=body.get("text"),
+                    svg=body.get("svg"),
+                    file_path=file_path,
+                    expires_at=body.get("expires_at"),
+                    ttl_seconds=body.get("ttl_seconds"),
+                    max_age_seconds=body.get("max_age_seconds", body.get("maxAgeSeconds")),
+                    priority=body.get("priority", "normal"),
+                    item_id=body.get("item_id", body.get("itemId")),
+                    actions=body.get("actions"),
+                    provenance=body.get("provenance"),
+                    dark_palette=bool(body.get("darkPalette", body.get("dark_palette", False))),
+                    variants=body.get("variants"),
+                )
             self._json(200, result)
             return
 
@@ -555,6 +580,29 @@ class _Handler(BaseHTTPRequestHandler):
             raise _HttpError(400, "bad_request", "widgetId is required")
         instances = store.report_widget_instances(device_id, widget_id, body.get("instances"))
         self._json(200, {"ok": True, "widgetId": widget_id, "instances": instances})
+
+    def _history(self, widget_id: str | None) -> None:
+        if widget_id is None:
+            raise _HttpError(404, "not_found", "widget id is required")
+        self._authorize(allow_device=True)
+        query = parse_qs(urlsplit(self.path).query, keep_blank_values=False)
+        try:
+            limit = int(query.get("limit", ["20"])[0])
+        except (TypeError, ValueError):
+            limit = 20
+        self._json(200, {"widgetId": widget_id, "revisions": store.publication_history(widget_id, limit)})
+
+    def _device_attention(self, _widget_id: str | None) -> None:
+        role, device_id = self._authorize(allow_device=True)
+        if role != "device" or not device_id:
+            raise _HttpError(403, "device_required", "attention reports require a paired device token")
+        body = self._read_json_body()
+        if not isinstance(body, dict):
+            raise _HttpError(400, "bad_request", "body must be a JSON object")
+        widget_id = body.get("widgetId", body.get("widget_id"))
+        if not isinstance(widget_id, str) or not widget_id:
+            raise _HttpError(400, "bad_request", "widgetId is required")
+        self._json(200, {"ok": True, "attention": store.report_attention(device_id, widget_id, body)})
 
     def _settings(self, widget_id: str | None) -> None:
         if widget_id is None:
@@ -769,6 +817,14 @@ class _Handler(BaseHTTPRequestHandler):
             payload = None
         if store.get_widget(widget_id) is None and store.get_publication(widget_id) is None:
             raise _HttpError(404, "unknown_widget", f"no widget with id {widget_id!r}")
+        if event == "answer":
+            if not device_id:
+                raise _HttpError(403, "device_required", "answers require a paired device token")
+            question_id = body.get("questionId", payload.get("questionId") if isinstance(payload, dict) else None)
+            text = body.get("answer", payload.get("answer") if isinstance(payload, dict) else None)
+            result = store.answer_question(device_id, question_id, text)
+            self._json(200, {"ok": True, **result})
+            return
         intent_event = event
         if event == "event" and isinstance(payload, dict):
             candidate = payload.get("intent", payload.get("action", body.get("action", body.get("kind"))))

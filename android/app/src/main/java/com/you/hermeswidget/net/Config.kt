@@ -24,6 +24,8 @@ object Config {
     private const val KEY_BATTERY_EXEMPTION = "battery_exemption"
     private const val KEY_PENDING_ACTIONS = "pending_actions"
     private const val KEY_PUSH_STATE = "push_state"
+    private const val KEY_ATTENTION_RENDERED_REVISION = "attention_rendered_revision"
+    private const val KEY_LAST_PUSH_WAKE = "last_push_wake"
 
     private fun prefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -223,4 +225,18 @@ object Config {
     fun getPushState(context: Context): JSONObject? = runCatching {
         JSONObject(prefs(context).getString(KEY_PUSH_STATE, "{}") ?: "{}")
     }.getOrNull()
+
+    fun setLastPushWake(context: Context, at: Long = System.currentTimeMillis()) {
+        prefs(context).edit().putLong(KEY_LAST_PUSH_WAKE, at).apply()
+    }
+
+    fun getLastPushWake(context: Context): Long? = prefs(context).getLong(KEY_LAST_PUSH_WAKE, 0L).takeIf { it > 0L }
+
+    fun markAttentionRendered(context: Context, revision: Int): Boolean {
+        val key = prefs(context)
+        val previous = key.getInt(KEY_ATTENTION_RENDERED_REVISION, 0)
+        if (previous == revision) return false
+        key.edit().putInt(KEY_ATTENTION_RENDERED_REVISION, revision).apply()
+        return true
+    }
 }

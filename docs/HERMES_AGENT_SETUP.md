@@ -220,6 +220,12 @@ server configuration, and this proactive routine. On current Hermes hosts the pl
 bounded proactive-guidance section after memory, rendered once per session rather than injecting
 a reminder into every turn.
 
+Standing watches are evaluated by the routine before an ordinary publish. The agent creates
+them with `widget_watch_create`, supplies bounded source snapshots to `widget_watch_tick`, and
+uses `widget_watch_pause`/`widget_watch_list` for control. A low-stakes `ticker` publication
+retains the hero; `widget_ask` creates a bounded user question answered into the widget without
+executing work. `widget_status` reports aggregate-only attention numbers and bounded history.
+
 For a genuinely time-sensitive update, publish with `priority: "high"`. To validate the wake
 lane without inventing content or a publication revision, run:
 

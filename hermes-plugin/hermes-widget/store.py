@@ -36,6 +36,8 @@ try:  # normal path: imported as part of the hermes-widget plugin package
         PRIORITY_HIGH_MAX_PER_HOUR,
         SENSITIVE_ACTION_CLASSES,
         PublicationInputError,
+        PreparedRegion,
+        prepare_region,
         prepare_publication,
     )
     from .publication import PublicationTooLarge as _PublicationInputTooLarge
@@ -53,6 +55,8 @@ except ImportError:  # pragma: no cover - direct import from tests/scripts
         PRIORITY_HIGH_MAX_PER_HOUR,
         SENSITIVE_ACTION_CLASSES,
         PublicationInputError,
+        PreparedRegion,
+        prepare_region,
         prepare_publication,
     )
     from publication import (  # type: ignore
@@ -352,6 +356,36 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             "expires_at TEXT NOT NULL, UNIQUE (event_id))"
         )
         conn.execute(
+            "CREATE TABLE IF NOT EXISTS attention_aggregates ("
+            "device_id TEXT NOT NULL, widget_id TEXT NOT NULL, revision INTEGER NOT NULL, "
+            "rendered INTEGER NOT NULL DEFAULT 0, dwell_lt5 INTEGER NOT NULL DEFAULT 0, "
+            "dwell_5_60 INTEGER NOT NULL DEFAULT 0, dwell_gt60 INTEGER NOT NULL DEFAULT 0, "
+            "taps INTEGER NOT NULL DEFAULT 0, superseded_before_fetch INTEGER NOT NULL DEFAULT 0, "
+            "updated_at TEXT NOT NULL, PRIMARY KEY (device_id, widget_id, revision))"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS widget_questions ("
+            "question_id TEXT PRIMARY KEY, widget_id TEXT NOT NULL, revision INTEGER NOT NULL, "
+            "item_id TEXT, prompt TEXT NOT NULL, status TEXT NOT NULL, answer TEXT, "
+            "created_at TEXT NOT NULL, answered_at TEXT, updated_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS widget_questions_open_idx "
+            "ON widget_questions(widget_id, status, created_at)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS widget_watches ("
+            "watch_id TEXT PRIMARY KEY, widget_id TEXT NOT NULL, name TEXT NOT NULL, "
+            "condition_json TEXT NOT NULL, payload_json TEXT NOT NULL, cadence_seconds INTEGER NOT NULL, "
+            "quiet_start TEXT, quiet_end TEXT, max_per_day INTEGER NOT NULL, enabled INTEGER NOT NULL, "
+            "last_state INTEGER, last_fired_at TEXT, next_check_at TEXT, created_at TEXT NOT NULL, "
+            "updated_at TEXT NOT NULL, expires_at TEXT)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS widget_watches_due_idx "
+            "ON widget_watches(enabled, next_check_at)"
+        )
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS action_audit ("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, intent_id TEXT, widget_id TEXT NOT NULL, "
             "device_id TEXT NOT NULL, item_id TEXT NOT NULL, action_class TEXT NOT NULL, "
@@ -582,6 +616,11 @@ def _publication_semantics(publication: dict) -> dict:
         "requestedPriority": publication.get("requestedPriority", publication.get("priority", "normal")),
         "itemId": publication.get("itemId"),
         "actions": publication.get("actions", []),
+        "regions": publication.get("regions", {}),
+        "watchId": publication.get("watchId"),
+        "provenance": publication.get("provenance"),
+        "darkPalette": publication.get("darkPalette", False),
+        "variants": publication.get("variants", {}),
         "content": content,
     }
 
@@ -830,6 +869,96 @@ def _record_nudge(
             conn.close()
 
 
+def _region_specs(regions: Any = None, hero: Any = None, ticker: Any = None) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    if regions is not None:
+        if isinstance(regions, dict):
+            result.update(regions)
+        elif isinstance(regions, list):
+            for index, item in enumerate(regions):
+                if not isinstance(item, dict) or item.get("slot") not in {"hero", "ticker"}:
+                    raise PublicationError(f"regions[{index}] must name slot hero or ticker")
+                result[str(item["slot"])] = item
+        else:
+            raise PublicationError("regions must be an object or a slot array")
+    if hero is not None:
+        result["hero"] = hero
+    if ticker is not None:
+        result["ticker"] = ticker
+    for slot in result:
+        if slot not in {"hero", "ticker"}:
+            raise PublicationError("region slot must be hero or ticker")
+    return result
+
+
+def _legacy_region(payload: dict, slot: str = "hero") -> dict:
+    existing = payload.get("regions", {}).get(slot) if isinstance(payload.get("regions"), dict) else None
+    if isinstance(existing, dict):
+        return dict(existing)
+    return {
+        "slot": slot,
+        "title": payload.get("title", ""),
+        "summary": payload.get("summary", ""),
+        "priority": payload.get("priority", "normal"),
+        "expiresAt": payload.get("expiresAt"),
+        "maxAgeSeconds": payload.get("maxAgeSeconds"),
+        "itemId": payload.get("itemId"),
+        "actions": payload.get("actions", []),
+        "content": payload.get("content", {}),
+    }
+
+
+def _region_payload(region: PreparedRegion, asset_id: str | None = None) -> dict:
+    return region.metadata(asset_id)
+
+
+def _region_expired(region: dict, now: datetime | None = None) -> bool:
+    current = now or datetime.now(timezone.utc)
+    resolve_on = region.get("resolveOn")
+    if isinstance(resolve_on, str):
+        try:
+            if current >= datetime.fromisoformat(resolve_on.replace("Z", "+00:00")):
+                return True
+        except ValueError:
+            return True
+    expires = region.get("expiresAt")
+    if isinstance(expires, str):
+        try:
+            if datetime.fromisoformat(expires.replace("Z", "+00:00")) <= current.astimezone(timezone.utc):
+                return True
+        except ValueError:
+            return True
+    max_age = region.get("maxAgeSeconds")
+    if isinstance(max_age, int) and not isinstance(max_age, bool) and max_age > 0:
+        published = region.get("publishedAt")
+        if isinstance(published, str):
+            try:
+                stamp = datetime.fromisoformat(published.replace("Z", "+00:00"))
+                if current.astimezone(timezone.utc) - stamp.astimezone(timezone.utc) > timedelta(seconds=max_age):
+                    return True
+            except ValueError:
+                return True
+    return False
+
+
+def _publication_regions_for_device(publication: dict, now: datetime | None = None) -> dict:
+    regions = publication.get("regions")
+    if not isinstance(regions, dict):
+        return {}
+    result: dict[str, Any] = {}
+    for slot, raw in regions.items():
+        if not isinstance(raw, dict):
+            continue
+        value = dict(raw)
+        if _region_expired(value, now):
+            content = value.get("content")
+            if isinstance(content, dict):
+                value["content"] = {"type": "text", "mediaType": "text/plain; charset=utf-8", "text": ""}
+            value["decayed"] = True
+        result[slot] = value
+    return result
+
+
 def put_publication(
     widget_id: str,
     *,
@@ -844,6 +973,14 @@ def put_publication(
     priority: str = "normal",
     item_id: str | None = None,
     actions: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    regions: Any = None,
+    hero: Any = None,
+    ticker: Any = None,
+    watch_id: str | None = None,
+    preserve_regions: bool = False,
+    provenance: str | None = None,
+    dark_palette: bool = False,
+    variants: Any = None,
 ) -> dict:
     """Validate, store, and atomically publish one text or visual revision."""
     if not isinstance(widget_id, str) or not widget_id or len(widget_id) > 128:
@@ -861,6 +998,9 @@ def put_publication(
             priority=priority,
             item_id=item_id,
             actions=actions,
+            provenance=provenance,
+            dark_palette=dark_palette,
+            variants=variants,
         )
     except _PublicationInputTooLarge as exc:
         raise PublicationTooLarge(str(exc)) from exc
@@ -910,6 +1050,10 @@ def put_publication(
                     "priorityDegradedReason": degraded_reason,
                     "itemId": prepared.item_id,
                     "actions": list(prepared.actions),
+                    "watchId": watch_id,
+                    "provenance": prepared.provenance,
+                    "darkPalette": prepared.dark_palette,
+                    "variants": prepared.variants or {},
                     "content": content,
                 }
                 if (
@@ -942,6 +1086,10 @@ def put_publication(
                 "priorityDegradedReason": degraded_reason,
                 "itemId": prepared.item_id,
                 "actions": list(prepared.actions),
+                "watchId": watch_id,
+                "provenance": prepared.provenance,
+                "darkPalette": prepared.dark_palette,
+                "variants": prepared.variants or {},
                 "content": content,
             }
             conn.execute(
@@ -985,12 +1133,32 @@ def put_publication(
                 "VALUES (?, ?, ?, ?, ?, ?)",
                 (widget_id, revision, prepared.priority, effective_priority, degraded_reason, now),
             )
+            newly_superseded = [
+                int(row["revision"])
+                for row in conn.execute(
+                    "SELECT revision FROM publication_revisions WHERE widget_id = ? AND revision < ? AND superseded_at IS NULL",
+                    (widget_id, revision),
+                ).fetchall()
+            ]
             conn.execute(
                 "UPDATE publication_revisions SET superseded_at = ?, "
                 "superseded_reason = COALESCE(superseded_reason, 'superseded_by_revision_' || ?) "
                 "WHERE widget_id = ? AND revision < ? AND superseded_at IS NULL",
                 (now, revision, widget_id, revision),
             )
+            for device in conn.execute("SELECT device_id FROM devices WHERE revoked = 0").fetchall():
+                for old_revision in newly_superseded if not preserve_regions else []:
+                    fetched = conn.execute(
+                        "SELECT 1 FROM publication_fetches WHERE widget_id = ? AND device_id = ? AND revision = ?",
+                        (widget_id, device["device_id"], old_revision),
+                    ).fetchone()
+                    if fetched is None:
+                        conn.execute(
+                            "INSERT INTO attention_aggregates (device_id, widget_id, revision, superseded_before_fetch, updated_at) "
+                            "VALUES (?, ?, ?, 1, ?) ON CONFLICT(device_id, widget_id, revision) DO UPDATE SET "
+                            "superseded_before_fetch=superseded_before_fetch+1, updated_at=excluded.updated_at",
+                            (device["device_id"], widget_id, old_revision, now),
+                        )
             for device in conn.execute("SELECT device_id FROM devices WHERE revoked = 0").fetchall():
                 conn.execute(
                     "INSERT OR IGNORE INTO widget_devices (widget_id, device_id) VALUES (?, ?)",
@@ -1067,6 +1235,216 @@ def set_widget_settings(widget_id: str, quiet_hours: Any) -> dict:
     return get_widget_settings(widget_id)
 
 
+def put_ticker(
+    widget_id: str,
+    *,
+    title: str,
+    summary: str,
+    text: str | None = None,
+    svg: str | None = None,
+    file_path: str | os.PathLike[str] | None = None,
+    expires_at: str | datetime | None = None,
+    ttl_seconds: int | None = None,
+    max_age_seconds: int | None = None,
+    priority: str = "normal",
+    item_id: str | None = None,
+    actions: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    provenance: str | None = None,
+    pinned: bool = False,
+    rotate: bool = False,
+) -> dict:
+    """Publish an independent ticker while retaining the current hero content."""
+    current = get_publication(widget_id)
+    if current is None:
+        raise PublicationError("a ticker requires an existing hero publication")
+    spec: dict[str, Any] = {
+        "title": title, "summary": summary, "priority": priority,
+        "maxAgeSeconds": max_age_seconds, "expiresAt": expires_at,
+        "ttlSeconds": ttl_seconds, "itemId": item_id, "actions": actions,
+        "provenance": provenance, "pinned": pinned, "rotate": rotate,
+    }
+    if text is not None:
+        spec["text"] = text
+    if svg is not None:
+        spec["svg"] = svg
+    if file_path is not None:
+        spec["file_path"] = file_path
+    try:
+        prepared = prepare_region("ticker", spec, now=datetime.now(timezone.utc))
+    except _PublicationInputTooLarge as exc:
+        raise PublicationTooLarge(str(exc)) from exc
+    except PublicationInputError as exc:
+        raise PublicationError(str(exc)) from exc
+    asset_id: str | None = None
+    if prepared.asset is not None:
+        with _LOCK:
+            conn = _connect()
+            try:
+                asset_id, _ = _write_immutable_asset(conn, prepared.asset)
+                conn.commit()
+            finally:
+                conn.close()
+    content = current.get("content") or {}
+    hero_kwargs: dict[str, Any] = {
+        "title": current.get("title", ""),
+        "summary": current.get("summary", ""),
+        "expires_at": current.get("expiresAt"),
+        "max_age_seconds": current.get("maxAgeSeconds"),
+        "priority": prepared.priority,
+        "item_id": current.get("itemId"),
+        "actions": current.get("actions", []),
+        "provenance": current.get("provenance"),
+        "dark_palette": bool(current.get("darkPalette", False)),
+        "variants": current.get("variants", {}),
+    }
+    if content.get("type") == "text":
+        hero_kwargs["text"] = content.get("text", "")
+    else:
+        asset = content.get("assetId")
+        if not isinstance(asset, str):
+            raise PublicationError("current hero image asset is unavailable")
+        hero_kwargs["file_path"] = str(asset_path(asset))
+    revision = put_publication(widget_id, preserve_regions=True, **hero_kwargs)
+    region = prepared.metadata(asset_id)
+    region["publishedAt"] = revision.get("publishedAt")
+    region["revision"] = revision.get("revision")
+    revision = dict(revision)
+    revision["regions"] = {"ticker": region}
+    revision["ticker"] = region
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                "UPDATE publications SET payload_json = ? WHERE widget_id = ?",
+                (json.dumps(revision, separators=(",", ":"), ensure_ascii=False), widget_id),
+            )
+            conn.execute(
+                "UPDATE publication_revisions SET payload_json = ? WHERE widget_id = ? AND revision = ?",
+                (json.dumps(revision, separators=(",", ":"), ensure_ascii=False), widget_id, int(revision["revision"])),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return revision
+
+
+def _publication_asset_ids(publication: dict) -> set[str]:
+    ids: set[str] = set()
+    content = publication.get("content")
+    if isinstance(content, dict) and isinstance(content.get("assetId"), str):
+        ids.add(content["assetId"])
+    regions = publication.get("regions")
+    if isinstance(regions, dict):
+        for region in regions.values():
+            if isinstance(region, dict) and isinstance(region.get("content"), dict):
+                value = region["content"].get("assetId")
+                if isinstance(value, str):
+                    ids.add(value)
+    return ids
+
+
+def ask_question(
+    widget_id: str,
+    prompt: Any,
+    *,
+    item_id: str | None = None,
+    revision: int | None = None,
+) -> dict:
+    publication = get_publication(widget_id)
+    if publication is None:
+        raise StoreError("a question requires a current publication")
+    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 500:
+        raise StoreError("question prompt must be 1-500 characters")
+    selected_revision = int(revision or publication.get("revision", 0))
+    if selected_revision < 1:
+        raise StoreError("question revision is invalid")
+    now = _now()
+    question_id = "question_" + uuid.uuid4().hex[:24]
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                "INSERT INTO widget_questions (question_id, widget_id, revision, item_id, prompt, status, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, 'open', ?, ?)",
+                (question_id, widget_id, selected_revision, item_id, prompt.strip(), now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return {"questionId": question_id, "widgetId": widget_id, "revision": selected_revision, "itemId": item_id, "prompt": prompt.strip(), "status": "open", "createdAt": now}
+
+
+def answer_question(device_id: str, question_id: str, text: Any) -> dict:
+    if not device_id:
+        raise ActionIntentError("a device token is required to answer")
+    if not isinstance(text, str) or not text.strip() or len(text) > 500:
+        raise StoreError("answer must be 1-500 characters")
+    now = _now()
+    with _LOCK:
+        conn = _connect()
+        try:
+            device = conn.execute("SELECT device_id FROM devices WHERE device_id = ? AND revoked = 0", (device_id,)).fetchone()
+            if device is None:
+                raise ActionIntentError("device is revoked or unknown")
+            row = conn.execute("SELECT * FROM widget_questions WHERE question_id = ?", (question_id,)).fetchone()
+            if row is None:
+                raise StoreError("question does not exist")
+            if row["status"] != "open":
+                return {"questionId": question_id, "status": row["status"], "answer": row["answer"]}
+            conn.execute(
+                "UPDATE widget_questions SET status='answered', answer=?, answered_at=?, updated_at=? WHERE question_id=?",
+                (text.strip(), now, now, question_id),
+            )
+            conn.execute(
+                "INSERT INTO action_audit (intent_id, widget_id, device_id, item_id, action_class, revision, event, outcome, detail, created_at) "
+                "VALUES (NULL, ?, ?, ?, 'read_only', ?, 'answer', 'answered', ?, ?)",
+                (row["widget_id"], device_id, row["item_id"] or question_id, row["revision"], text.strip()[:200], now),
+            )
+            conn.commit()
+            return {"questionId": question_id, "status": "answered", "answer": text.strip(), "answeredAt": now}
+        finally:
+            conn.close()
+
+
+def list_questions(widget_id: str | None = None, *, status: str | None = None, limit: int = 100) -> list[dict]:
+    try:
+        limit = max(1, min(int(limit), 500))
+    except (TypeError, ValueError):
+        limit = 100
+    clauses: list[str] = []
+    params: list[Any] = []
+    if widget_id:
+        clauses.append("widget_id = ?")
+        params.append(widget_id)
+    if status:
+        clauses.append("status = ?")
+        params.append(status)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    params.append(limit)
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(f"SELECT * FROM widget_questions{where} ORDER BY created_at DESC LIMIT ?", params).fetchall()
+        finally:
+            conn.close()
+    return [
+        {
+            "questionId": row["question_id"], "widgetId": row["widget_id"], "revision": row["revision"],
+            "itemId": row["item_id"], "prompt": row["prompt"], "status": row["status"], "answer": row["answer"],
+            "createdAt": row["created_at"], "answeredAt": row["answered_at"],
+        }
+        for row in rows
+    ]
+
+
+def _open_question_for_publication(widget_id: str, revision: int) -> dict | None:
+    rows = list_questions(widget_id, status="open", limit=10)
+    for row in rows:
+        if int(row["revision"]) == int(revision):
+            return row
+    return rows[0] if rows else None
+
+
 def get_publication(widget_id: str) -> dict | None:
     with _LOCK:
         conn = _connect()
@@ -1086,6 +1464,17 @@ def get_publication(widget_id: str) -> dict | None:
         raise StoreError("stored publication is corrupt")
     publication["expired"] = _publication_expired(publication)
     publication["stale"] = _publication_stale(publication)
+    device_regions = _publication_regions_for_device(publication)
+    if device_regions:
+        publication["regions"] = device_regions
+    question = _open_question_for_publication(widget_id, int(publication.get("revision", 0)))
+    if question is not None:
+        publication["question"] = {
+            "questionId": question["questionId"],
+            "itemId": question["itemId"],
+            "prompt": question["prompt"],
+            "status": question["status"],
+        }
     # Add live intent outcomes without rewriting the immutable publication row.
     item_ids = {
         item for item in (
@@ -1152,7 +1541,7 @@ def record_asset_download(widget_id: str, device_id: str, revision: int, asset_i
     current_revision = _as_int(publication.get("revision", 0), "publication revision") if publication else 0
     if not publication or revision_value != current_revision:
         raise RenderNotReady("publication revision is not current")
-    if publication.get("content", {}).get("assetId") != asset_id:
+    if asset_id not in _publication_asset_ids(publication):
         raise AssetNotFound("asset does not belong to this publication")
     with _LOCK:
         conn = _connect()
@@ -1476,6 +1865,7 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
             "devices": push_states,
             "registeredCount": sum(1 for item in push_states if item["registered"]),
         },
+        "attention": attention_summary(widget_id),
         "delivery": delivery,
         "inventory": list_widget_instances(widget_id),
         "anomalies": anomalies,
@@ -1493,9 +1883,41 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
             for row in intent_rows
         ],
         "actionAudit": get_action_audit(widget_id),
+        "questions": list_questions(widget_id, limit=50),
         "pollIntervalSeconds": _publication_capabilities().get("pollIntervalSeconds"),
         "capabilities": publication_capabilities(),
     }
+
+
+def publication_history(widget_id: str, limit: int = 20) -> list[dict]:
+    try:
+        limit = max(1, min(int(limit), 100))
+    except (TypeError, ValueError):
+        limit = 20
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT revision, published_at, expires_at, kind, title, superseded_at, superseded_reason, payload_json "
+                "FROM publication_revisions WHERE widget_id = ? ORDER BY revision DESC LIMIT ?",
+                (widget_id, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+    result = []
+    for row in rows:
+        try:
+            payload = json.loads(row["payload_json"])
+        except (TypeError, ValueError):
+            payload = {}
+        result.append({
+            "revision": row["revision"], "publishedAt": row["published_at"],
+            "expiresAt": row["expires_at"], "kind": row["kind"], "title": row["title"],
+            "superseded": bool(row["superseded_at"]), "supersededAt": row["superseded_at"],
+            "supersededReason": row["superseded_reason"],
+            "summary": payload.get("summary") if isinstance(payload, dict) else None,
+        })
+    return result
 
 
 def publication_for_asset(asset_id: str) -> dict | None:
@@ -1511,7 +1933,7 @@ def publication_for_asset(asset_id: str) -> dict | None:
             publication = json.loads(row["payload_json"])
         except (TypeError, ValueError):
             continue
-        if isinstance(publication, dict) and publication.get("content", {}).get("assetId") == asset_id:
+        if isinstance(publication, dict) and asset_id in _publication_asset_ids(publication):
             publication["expired"] = _publication_expired(publication)
             return publication
     return None
@@ -1987,6 +2409,73 @@ def report_widget_instances(device_id: str, widget_id: str, instances: Any) -> l
         finally:
             conn.close()
     return list_widget_instances(widget_id, device_id=device_id)
+
+
+def report_attention(device_id: str, widget_id: str, payload: Any) -> dict:
+    """Accept only bounded aggregate counters; no content or screenshots."""
+    if not isinstance(payload, dict):
+        raise StoreError("attention report must be an object")
+    allowed = {"revision", "rendered", "dwellLt5", "dwell5To60", "dwellGt60", "taps", "supersededBeforeFetch"}
+    unknown = set(payload) - allowed
+    if unknown:
+        raise StoreError("attention reports must not contain content or unknown fields")
+    revision = payload.get("revision")
+    if isinstance(revision, bool) or not isinstance(revision, int) or revision < 1:
+        raise StoreError("attention revision must be a positive integer")
+    fields = {
+        "rendered": payload.get("rendered", 0),
+        "dwellLt5": payload.get("dwellLt5", 0),
+        "dwell5To60": payload.get("dwell5To60", 0),
+        "dwellGt60": payload.get("dwellGt60", 0),
+        "taps": payload.get("taps", 0),
+        "supersededBeforeFetch": payload.get("supersededBeforeFetch", 0),
+    }
+    for name, value in fields.items():
+        if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 1_000_000:
+            raise StoreError(f"attention {name} must be a bounded non-negative integer")
+    with _LOCK:
+        conn = _connect()
+        try:
+            device = conn.execute("SELECT device_id FROM devices WHERE device_id = ? AND revoked = 0", (device_id,)).fetchone()
+            if device is None:
+                raise StoreError("device is revoked or unknown")
+            conn.execute(
+                "INSERT INTO attention_aggregates (device_id, widget_id, revision, rendered, dwell_lt5, dwell_5_60, dwell_gt60, taps, superseded_before_fetch, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(device_id, widget_id, revision) DO UPDATE SET "
+                "rendered=rendered+excluded.rendered, dwell_lt5=dwell_lt5+excluded.dwell_lt5, "
+                "dwell_5_60=dwell_5_60+excluded.dwell_5_60, dwell_gt60=dwell_gt60+excluded.dwell_gt60, "
+                "taps=taps+excluded.taps, superseded_before_fetch=superseded_before_fetch+excluded.superseded_before_fetch, "
+                "updated_at=excluded.updated_at",
+                (device_id, widget_id, revision, fields["rendered"], fields["dwellLt5"], fields["dwell5To60"], fields["dwellGt60"], fields["taps"], fields["supersededBeforeFetch"], _now()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return attention_summary(widget_id)
+
+
+def attention_summary(widget_id: str | None = None) -> dict:
+    clauses = []
+    params: list[Any] = []
+    if widget_id:
+        clauses.append("widget_id = ?")
+        params.append(widget_id)
+    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(f"SELECT * FROM attention_aggregates{where}", params).fetchall()
+        finally:
+            conn.close()
+    totals = {key: sum(int(row[key]) for row in rows) for key in ("rendered", "dwell_lt5", "dwell_5_60", "dwell_gt60", "taps", "superseded_before_fetch")}
+    return {
+        "widgetId": widget_id,
+        "revisions": len(rows),
+        **totals,
+        "rendersPerPublish": round(totals["rendered"] / max(1, len(rows)), 3),
+        "tapsPer10Publishes": round(totals["taps"] * 10 / max(1, len(rows)), 3),
+        "supersededBeforeFetchRate": round(totals["superseded_before_fetch"] / max(1, totals["rendered"] + totals["superseded_before_fetch"]), 4),
+    }
 
 
 def list_widget_instances(widget_id: str | None = None, *, device_id: str | None = None) -> list[dict]:

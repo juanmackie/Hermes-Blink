@@ -178,7 +178,7 @@ object PublicationRepository {
         ) {
             return@withContext false
         }
-        HermesApi.acknowledgeRender(
+        val acknowledged = HermesApi.acknowledgeRender(
             baseUrl,
             publication.widgetId,
             token,
@@ -186,6 +186,12 @@ object PublicationRepository {
             width,
             height,
         ).code in 200..299
+        if (acknowledged && Config.markAttentionRendered(appContext, publication.revision)) {
+            HermesApi.reportAttention(
+                baseUrl, token, publication.widgetId, publication.revision, rendered = 1,
+            )
+        }
+        acknowledged
     }
 
     private fun assetFailure(context: Context, detail: String): RefreshResult {

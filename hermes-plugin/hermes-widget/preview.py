@@ -432,6 +432,14 @@ def _svg_text_png(publication: dict, width: int, height: int) -> tuple[bytes, st
     for line in body_lines:
         chunks.append(f'<text x="{pad}" y="{y}" font-family="sans-serif" font-size="{body_size}" fill="#111">{xml_escape(line)}</text>')
         y += body_size + 5
+    regions = publication.get("regions")
+    ticker = regions.get("ticker") if isinstance(regions, dict) else None
+    if isinstance(ticker, dict) and not ticker.get("decayed"):
+        chunks.append(
+            f'<text x="{pad}" y="{max(y + 4, height_px - pad - summary_size)}" '
+            f'font-family="sans-serif" font-size="{summary_size}" fill="#6E6E73">'
+            f'{xml_escape(str(ticker.get("title", "")) + " · " + str(ticker.get("summary", "")))}</text>'
+        )
     svg = (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width_px}" height="{height_px}" '
         f'viewBox="0 0 {width_px} {height_px}">' + "".join(chunks) + "</svg>"
@@ -619,7 +627,11 @@ def render_publication_previews(
         if width_px * height_px > _PREVIEW_MAX_PIXELS:
             raise ValueError("preview dimensions exceed the 4-megapixel safety limit")
         if kind == "text":
-            data, renderer = _svg_text_png(publication, width_px, height_px)
+            variant = (publication.get("variants") or {}).get(name) if isinstance(publication.get("variants"), dict) else None
+            render_publication = publication
+            if isinstance(variant, dict) and variant.get("text") is not None:
+                render_publication = {**publication, "title": variant.get("title", publication.get("title")), "summary": variant.get("summary", publication.get("summary")), "content": {"type": "text", "mediaType": "text/plain; charset=utf-8", "text": variant["text"]}}
+            data, renderer = _svg_text_png(render_publication, width_px, height_px)
         else:
             media_type = str(content.get("mediaType") or "image/png")
             data, renderer = _fit_image(asset_data or b"", media_type, width_px, height_px)

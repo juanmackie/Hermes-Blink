@@ -187,6 +187,20 @@ WIDGET_PUBLISH = {
                     "reported as stale instead of rendered late."
                 ),
             },
+            "dark_palette": {
+                "type": "boolean",
+                "default": False,
+                "description": "Use the explicit dark palette variant for this publication.",
+            },
+            "variants": {
+                "type": "object",
+                "description": "Optional text variants keyed by registered size class (2x2, 4x2, 2x4, 4x4).",
+            },
+            "provenance": {
+                "type": "string",
+                "enum": ["verified", "from_price", "estimate"],
+                "description": "Evidence class shown honestly on the widget surface.",
+            },
             "priority": {
                 "type": "string",
                 "enum": ["normal", "high"],
@@ -205,6 +219,20 @@ WIDGET_PUBLISH = {
                 "maxItems": 10,
                 "description": "Allowlisted, queue-not-authorise actions attached to stable itemIds.",
                 "items": {"type": "object"},
+            },
+            "ticker": {
+                "type": "object",
+                "description": "Optional independent ticker update; when supplied without a hero source, the current hero is retained.",
+                "properties": {
+                    "title": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "text": {"type": "string"},
+                    "priority": {"type": "string", "enum": ["normal", "high"]},
+                    "max_age_seconds": {"type": "integer", "minimum": 1, "maximum": 31536000},
+                    "item_id": {"type": "string", "maxLength": 128},
+                    "provenance": {"type": "string", "enum": ["verified", "from_price", "estimate"]},
+                },
+                "required": ["title", "summary"],
             },
         },
         "required": ["title", "summary"],
@@ -276,6 +304,89 @@ WIDGET_RESOLVE_INTENT = {
 }
 
 
+WIDGET_ASK = {
+    "name": "widget_ask",
+    "description": "Open one bounded free-text question on the widget for the user to answer; the answer is queued, never executed automatically.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "widget_id": {"type": "string"},
+            "prompt": {"type": "string", "minLength": 1, "maxLength": 500},
+            "item_id": {"type": "string", "maxLength": 128},
+        },
+        "required": ["prompt"],
+    },
+}
+
+WIDGET_READ_QUESTIONS = {
+    "name": "widget_read_questions",
+    "description": "Read bounded widget questions and their answers for chat mirroring or follow-up.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "widget_id": {"type": "string"},
+            "status": {"type": "string", "enum": ["open", "answered"]},
+            "limit": {"type": "integer", "minimum": 1, "maximum": 500},
+        },
+        "required": [],
+    },
+}
+
+WIDGET_WATCH_CREATE = {
+    "name": "widget_watch_create",
+    "description": "Create a bounded host-evaluated watch that publishes only on a condition transition and respects cadence, quiet hours, and max-per-day limits.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "widget_id": {"type": "string"},
+            "name": {"type": "string", "maxLength": 120},
+            "condition": {"type": "object"},
+            "payload": {"type": "object"},
+            "cadence_seconds": {"type": "integer", "minimum": 60, "maximum": 2592000},
+            "quiet_hours": {"type": ["object", "null"]},
+            "max_per_day": {"type": "integer", "minimum": 1, "maximum": 50},
+            "expires_at": {"type": ["string", "null"]},
+        },
+        "required": ["widget_id", "name", "condition", "payload"],
+    },
+}
+
+WIDGET_WATCH_LIST = {
+    "name": "widget_watch_list",
+    "description": "List standing widget watches and their enabled/last-fired state.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "widget_id": {"type": "string"},
+            "enabled": {"type": "boolean"},
+        },
+        "required": [],
+    },
+}
+
+WIDGET_WATCH_PAUSE = {
+    "name": "widget_watch_pause",
+    "description": "Pause or resume a standing widget watch without deleting its history.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "watch_id": {"type": "string"},
+            "paused": {"type": "boolean", "default": True},
+        },
+        "required": ["watch_id"],
+    },
+}
+
+WIDGET_WATCH_TICK = {
+    "name": "widget_watch_tick",
+    "description": "Evaluate due watches on the host with a bounded source snapshot; publishes only on state change and records the watch that fired.",
+    "parameters": {
+        "type": "object",
+        "properties": {"sources": {"type": "object"}},
+        "required": [],
+    },
+}
+
 WIDGET_WAKE_TEST = {
     "name": "widget_wake_test",
     "description": "Send one content-free UnifiedPush fetch wake to registered device endpoints and print the receipt chain. It does not create or claim a publication revision.",
@@ -314,10 +425,11 @@ WIDGET_SET_QUIET_HOURS = {
 WIDGET_STATUS = {
     "name": "widget_status",
     "description": (
-        "Report Hermes widget host status: publication revision and summary, ordered "
-        "nudge/fetch/download/render receipts, registered widget instances, queued action "
-        "intents/audit, connection freshness, routine, devices, and counts. None of these "
-        "states claims the user saw content. Use before pairing."
+        "Report Hermes widget host status: publication revision/regions and summary, ordered "
+        "nudge/fetch/download/render receipts, wake/distributor state, registered widget "
+        "instances, queued action intents/questions, aggregate attention, history-gap warnings, "
+        "connection freshness, routine, devices, and counts. None of these states claims the "
+        "user saw content. Use before pairing."
     ),
     "parameters": {
         "type": "object",

@@ -1,7 +1,7 @@
 ---
 name: hermes-widget
 description: "Proactive widget publishing, previews, delivery, actions."
-version: 3.2.1
+version: 3.3.0
 author: Hermes Widget contributors
 license: MIT
 metadata:
@@ -50,6 +50,10 @@ source:
 - `file_path`: one local PNG, JPEG, or WebP file on the Hermes host.
 
 Add either `expires_at` (timezone-aware ISO-8601) or `ttl_seconds`, never both. Set
+`provenance` to `verified`, `from_price`, or `estimate` when the evidence class matters; the
+device shows that label rather than presenting every value as fact. Set `dark_palette` when a
+dark presentation is intentional. `variants` may provide text variants keyed by registered
+size classes; the phone selects the variant matching its actual instance geometry.
 `priority: "high"` only for a genuinely time-sensitive update: the phone receives a
 content-free UnifiedPush wake, pulls over the existing private HTTPS path, and the server
 rate-limits the high lane (six per hour, thirty per day) with visible degradation to normal.
@@ -246,6 +250,18 @@ context you already know and call `widget_publish` only when there is a genuinel
 supported update. Never invent calendar, task, metric, chart, or image data. If nothing useful
 changed, do nothing and leave the current publication untouched. Never republish an identical
 revision merely because the routine ran.
+
+Standing watches are separate from ordinary publishes. Use `widget_watch_create` for a durable
+condition → publication rule, `widget_watch_tick` to evaluate it on the host, and
+`widget_watch_pause`/`widget_watch_list` for control. A watch publishes only on a false→true
+transition, honors cadence/quiet hours/max-per-day, records `watchId`, and self-clears when its
+condition resolves.
+
+A low-stakes update can be sent as a `ticker` with `widget_publish`; the current hero is retained.
+Regions can carry independent TTL, priority, provenance, pinned/rotating items, and a bounded
+question. `widget_ask` opens a question for the user; answers are read with
+`widget_read_questions` and never execute work. Delivery receipts and aggregate-only attention
+metrics are available in `widget_status`; do not infer attention from a render acknowledgement.
 
 After an app-open or scheduled publication, `widget_status` can report the stored publication,
 successful device download, and render submission separately. None of those states proves the

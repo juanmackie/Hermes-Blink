@@ -376,6 +376,53 @@ object HermesApi {
         }
     }
 
+    fun fetchHistory(baseUrl: String, widgetId: String, token: String, limit: Int = 20): HttpResult {
+        val conn = open(baseUrl, "/v1/widgets/${pathSegment(widgetId)}/history?limit=$limit", token)
+        return try {
+            val code = conn.responseCode
+            HttpResult(code = code, body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null)
+        } catch (e: Exception) {
+            HttpResult(-1, error = e.message ?: e.javaClass.simpleName)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
+    fun reportAttention(
+        baseUrl: String,
+        token: String,
+        widgetId: String,
+        revision: Int,
+        rendered: Int = 0,
+        dwellBucket: String? = null,
+        taps: Int = 0,
+        supersededBeforeFetch: Int = 0,
+    ): HttpResult {
+        val conn = open(baseUrl, "/v1/device/attention", token, method = "PUT")
+        return try {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val body = JSONObject()
+                .put("widgetId", widgetId)
+                .put("revision", revision)
+                .put("rendered", rendered)
+                .put("taps", taps)
+                .put("supersededBeforeFetch", supersededBeforeFetch)
+            when (dwellBucket) {
+                "lt5" -> body.put("dwellLt5", 1)
+                "5to60" -> body.put("dwell5To60", 1)
+                "gt60" -> body.put("dwellGt60", 1)
+            }
+            conn.outputStream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
+            val code = conn.responseCode
+            HttpResult(code = code, body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null)
+        } catch (e: Exception) {
+            HttpResult(-1, error = e.message ?: e.javaClass.simpleName)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     fun clearPushEndpoint(baseUrl: String, token: String): HttpResult = registerPushEndpointInternal(
         baseUrl, token, null,
     )

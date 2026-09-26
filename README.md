@@ -171,3 +171,8 @@ and `open` taps are durably queued as allowlisted intents; they never execute on
 server. The phone keeps a bounded retry outbox when the private path is unavailable, and the
 agent reads intents with `widget_read_intents` before recording a terminal decision with
 `widget_resolve_intent`. Destructive/external actions wait for explicit confirmation.
+
+Low-stakes updates can be published as an independent `ticker` while the hero is retained.
+Standing `widget_watch` rules, bounded `widget_ask` questions, provenance labels, dark
+palettes, and size-keyed text variants are also available. Attention status contains
+aggregate-only dwell/tap/supersession numbers, not content.

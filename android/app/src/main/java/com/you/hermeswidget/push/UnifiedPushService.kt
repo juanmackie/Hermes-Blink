@@ -29,6 +29,7 @@ class UnifiedPushService : PushService() {
     }
 
     override fun onMessage(message: PushMessage, instance: String) {
+        Config.setLastPushWake(applicationContext)
         RefreshWorker.scheduleWake(applicationContext)
     }
 

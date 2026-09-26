@@ -1,5 +1,20 @@
 # Hermes Widget — Release notes
 
+## v3.3.0 — regions, watches, questions, and attention signal
+
+- Publications now support an independent `ticker` region that retains the hero, with its own
+  TTL, priority, provenance, and expiry; small updates no longer need to destroy the hero.
+  Regions support bounded rotation items, and the phone hides the ticker on compact instances.
+- Added bounded host-evaluated `widget_watch` lifecycle: conditions, cadence, quiet hours,
+  per-day limits, self-clearing, control tools, and watch-attributed publications.
+- Added bounded `widget_ask` questions and authenticated `answer` events. A tap never executes
+  work; answers are read and mirrored by the agent.
+- Added aggregate-only attention reporting (rendered, dwell buckets, taps, and
+  superseded-before-fetch) with a rolling scorecard, plus bounded publication history/back-scroll.
+- Added provenance labels, dark-palette selection, and text variants keyed to registered size
+  classes.
+- The proactive routine now evaluates watches before deciding whether to publish.
+
 ## v3.2.1 — honest legacy scope, wake visibility, and preview ergonomics
 
 - Legacy `widget_update`/`hermes widget publish --layout-file` results now declare

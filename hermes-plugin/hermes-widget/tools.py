@@ -14,9 +14,10 @@ import logging
 from typing import Any
 
 try:  # normal path: imported as part of the hermes-widget plugin package
-    from . import store
+    from . import store, watches
 except ImportError:  # pragma: no cover - direct import from tests/scripts
     import store  # type: ignore
+    import watches  # type: ignore
 
 logger = logging.getLogger(__name__)
 
@@ -203,23 +204,51 @@ def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     ttl_seconds = args.get("ttl_seconds", args.get("ttlSeconds"))
     max_age_seconds = args.get("max_age_seconds", args.get("maxAgeSeconds"))
     item_id = args.get("item_id", args.get("itemId"))
-    try:
-        result = store.put_publication(
-            widget_id,
-            title=args.get("title"),
-            summary=args.get("summary"),
-            text=args.get("text"),
-            svg=args.get("svg"),
-            file_path=file_path,
-            expires_at=expires_at,
-            ttl_seconds=ttl_seconds,
-            max_age_seconds=max_age_seconds,
-            priority=args.get("priority", "normal"),
-            item_id=item_id,
-            actions=args.get("actions"),
-        )
-    except store.StoreError as exc:
-        return _store_error(exc)
+    ticker = args.get("ticker")
+    if ticker is not None and not any(args.get(name) is not None for name in ("text", "svg")) and file_path is None:
+        if not isinstance(ticker, dict):
+            return _error("invalid_publication", "ticker must be an object")
+        try:
+            result = store.put_ticker(
+                widget_id,
+                title=ticker.get("title", ""),
+                summary=ticker.get("summary", ""),
+                text=ticker.get("text"),
+                svg=ticker.get("svg"),
+                file_path=ticker.get("file_path", ticker.get("filePath")),
+                expires_at=ticker.get("expires_at", ticker.get("expiresAt")),
+                ttl_seconds=ticker.get("ttl_seconds", ticker.get("ttlSeconds")),
+                max_age_seconds=ticker.get("max_age_seconds", ticker.get("maxAgeSeconds")),
+                priority=ticker.get("priority", "normal"),
+                item_id=ticker.get("item_id", ticker.get("itemId")),
+                actions=ticker.get("actions"),
+                provenance=ticker.get("provenance"),
+                pinned=bool(ticker.get("pinned", False)),
+                rotate=bool(ticker.get("rotate", False)),
+            )
+        except store.StoreError as exc:
+            return _store_error(exc)
+    else:
+        try:
+            result = store.put_publication(
+                widget_id,
+                title=args.get("title"),
+                summary=args.get("summary"),
+                text=args.get("text"),
+                svg=args.get("svg"),
+                file_path=file_path,
+                expires_at=expires_at,
+                ttl_seconds=ttl_seconds,
+                max_age_seconds=max_age_seconds,
+                priority=args.get("priority", "normal"),
+                item_id=item_id,
+                actions=args.get("actions"),
+                provenance=args.get("provenance"),
+                dark_palette=bool(args.get("dark_palette", args.get("darkPalette", False))),
+                variants=args.get("variants"),
+            )
+        except store.StoreError as exc:
+            return _store_error(exc)
     return _dumps(
         {
             "ok": True,
@@ -418,6 +447,76 @@ def widget_resolve_intent(args: dict[str, Any] | None = None, **_kwargs: Any) ->
     return _dumps({"ok": True, "intent": result})
 
 
+def widget_ask(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    args = args or {}
+    try:
+        return _dumps({"ok": True, "question": store.ask_question(
+            args.get("widget_id", store.DEFAULT_WIDGET_ID),
+            args.get("prompt", ""),
+            item_id=args.get("item_id", args.get("itemId")),
+            revision=args.get("revision"),
+        )})
+    except store.StoreError as exc:
+        return _store_error(exc)
+
+
+def widget_read_questions(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    args = args or {}
+    try:
+        return _dumps({"questions": store.list_questions(
+            args.get("widget_id", args.get("widgetId")),
+            status=args.get("status"),
+            limit=args.get("limit", 100),
+        )})
+    except store.StoreError as exc:
+        return _store_error(exc)
+
+
+def widget_watch_create(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    args = args or {}
+    try:
+        result = watches.create_watch(
+            args.get("widget_id", store.DEFAULT_WIDGET_ID),
+            name=args.get("name", ""),
+            condition=args.get("condition"),
+            payload=args.get("payload"),
+            cadence_seconds=args.get("cadence_seconds", 3600),
+            quiet_hours=args.get("quiet_hours"),
+            max_per_day=args.get("max_per_day", 1),
+            expires_at=args.get("expires_at"),
+        )
+    except (watches.store.StoreError, ValueError) as exc:
+        return _error("invalid_watch", str(exc))
+    return _dumps({"ok": True, "watch": result})
+
+
+def widget_watch_list(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    args = args or {}
+    try:
+        return _dumps({"watches": watches.list_watches(args.get("widget_id"), enabled=args.get("enabled"))})
+    except watches.store.StoreError as exc:
+        return _store_error(exc)
+
+
+def widget_watch_pause(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    args = args or {}
+    watch_id = args.get("watch_id")
+    if not isinstance(watch_id, str) or not watch_id:
+        return _error("invalid_watch", "watch_id is required")
+    result = watches.pause_watch(watch_id, paused=args.get("paused", True))
+    if result is None:
+        return _error("unknown_watch", "watch does not exist")
+    return _dumps({"ok": True, "watch": result})
+
+
+def widget_watch_tick(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    args = args or {}
+    try:
+        return _dumps({"ok": True, "results": watches.tick_watches(sources=args.get("sources"))})
+    except watches.store.StoreError as exc:
+        return _store_error(exc)
+
+
 def widget_wake_test(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     args = args or {}
     widget_id = args.get("widget_id", args.get("widgetId")) or store.DEFAULT_WIDGET_ID
@@ -490,11 +589,13 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             "revisionHistory": publication.get("revisionHistory", {}),
             "warnings": publication.get("warnings", []),
             "wake": publication.get("wake", {"devices": [], "registeredCount": 0}),
+            "attention": publication.get("attention", {}),
             "delivery": publication.get("delivery", []),
             "deliveryState": delivery_state,
             "inventory": publication.get("inventory", []),
             "intents": publication.get("intents", []),
             "actionAudit": publication.get("actionAudit", []),
+            "questions": publication.get("questions", []),
             "pollIntervalSeconds": publication.get("pollIntervalSeconds"),
             "capabilities": publication.get("capabilities"),
             "dataDir": str(store.data_dir()),

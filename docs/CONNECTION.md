@@ -159,6 +159,16 @@ The Android client already speaks this contract. Do not change paths.
          -> 200 {"ok":true,"quietHours":...}
          Times are UTC. High-priority wakes degrade visibly to normal while quiet.
 
+    PUT  /v1/device/attention
+         Auth: paired DEVICE token.
+         Body: {"widgetId":"...","revision":7,"rendered":1,"dwellLt5":1,"taps":0}
+         -> 200 aggregate scorecard. Unknown fields/content are rejected; no raw content is stored.
+
+    GET  /v1/widgets/<widget_id>/history?limit=20
+         Auth: DEVICE or AGENT token.
+         -> 200 {"revisions":[{revision,publishedAt,title,superseded,...}]}
+         Bounded back-scroll; history gaps are reported separately by widget_status.
+
     GET  /v1/intents?widget_id=<id>&status=<queued|awaiting_confirmation|applied|declined|held|expired>
          Auth: AGENT token.
          -> 200 {"intents":[...]}
@@ -318,6 +328,11 @@ store.py:
     post_action_event(widget_id, device_id, event, payload, *, revision=None,
                       item_id=None, action_class=None, confirm_on_device=False) -> dict
     get_intents(widget_id=None, *, status=None, limit=200) -> list[dict]
+    report_attention(device_id, widget_id, payload) -> dict
+    attention_summary(widget_id=None) -> dict
+    ask_question(widget_id, prompt, *, item_id=None, revision=None) -> dict
+    answer_question(device_id, question_id, text) -> dict
+    publication_history(widget_id, limit=20) -> list[dict]
     get_action_audit(widget_id=None, *, limit=200) -> list[dict]
     resolve_intent(intent_id, outcome, *, result=None, confirmed=False) -> dict
     get_asset(asset_id: str) -> dict

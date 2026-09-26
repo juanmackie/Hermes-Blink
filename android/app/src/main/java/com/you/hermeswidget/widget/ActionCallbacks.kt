@@ -41,6 +41,10 @@ object ActionCallbacks {
                 HermesApi.postEventWithFields(url, widgetId, event, body, token)
             }
             if (result.code in 200..299) {
+                val publication = com.you.hermeswidget.net.PublicationRepository.loadCached(context)
+                if (publication != null) {
+                    HermesApi.reportAttention(url, token, widgetId, publication.revision, taps = 1)
+                }
                 RefreshWorker.schedulePostTapPoll(context)
             } else if (kind in setOf("approve", "snooze", "open") && itemId.isNotBlank()) {
                 val publication = com.you.hermeswidget.net.PublicationRepository.loadCached(context)

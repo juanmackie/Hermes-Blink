@@ -228,8 +228,10 @@ than the maximum recorded history revision, `widget_status` and `hermes widget s
 `revision_history_gap` warning instead of presenting a truncated history as complete. Each
 publication requires `title` and `summary`
 and exactly one of `text`, inline `svg`, or a local PNG/JPEG/WebP `file_path`. Optional
-`priority` is `normal` or `high`; optional `itemId` and `actions` provide stable queue-only
-interaction. The effective priority and any degradation reason are returned in the envelope.
+`priority` is `normal` or `high`; optional `itemId`, `actions`, `provenance`, `dark_palette`, and
+`variants` provide stable queue-only interaction, honest evidence labels, and size-aware
+presentation. An independent `ticker` region may be published without replacing the hero.
+The effective priority and any degradation reason are returned in the envelope.
 
 ### Freshness vs expiry
 
@@ -284,10 +286,13 @@ render_submitted` receipts. A `rendered` receipt means a render pass completed, 
 human saw the content.
 
 Action taps are queue-not-authorise: `approve`, `snooze`, and `open` create durable,
-idempotent intents with an audit row. The agent consumes them with `widget_read_intents` and
-records `applied`, `declined`, or `held` with `widget_resolve_intent`; a sensitive class
-requires confirmation. A revoked device cannot report inventory or enqueue an intent, and
-unactioned intents expire.
+idempotent intents with an audit row. `widget_ask` opens a bounded question and `answer` is an
+authenticated device event; neither path executes work. Standing `widget_watch` rules publish
+only on condition transitions and self-clear when resolved. Attention status contains only
+aggregate dwell/tap/render/supersession counts. The agent consumes intents with
+`widget_read_intents` and records `applied`, `declined`, or `held` with `widget_resolve_intent`;
+sensitive classes require confirmation. A revoked device cannot report inventory, telemetry,
+or enqueue an intent, and unactioned intents expire.
 
 ## Forward compatibility
 

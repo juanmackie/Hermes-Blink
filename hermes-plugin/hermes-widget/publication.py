@@ -50,8 +50,9 @@ ACTION_CLASSES = (
     "reversible", "read_only", "dismiss_reminder", "rerun_check", "staged_patch", "flag",
     "destructive", "external", "irreversible",
 )
+PROVENANCE_LEVELS = ("verified", "from_price", "estimate")
 SENSITIVE_ACTION_CLASSES = frozenset({"destructive", "external", "irreversible"})
-EVENT_VOCABULARY = ("refresh", "dismiss", "review", "event") + ACTION_KINDS
+EVENT_VOCABULARY = ("refresh", "dismiss", "review", "event", "answer") + ACTION_KINDS
 EVENT_EMISSION_POINTS = {
     "refresh": "publication tap fetches now; v2 button action kind=refresh",
     "dismiss": "v2 button action kind=dismiss",
@@ -135,6 +136,65 @@ class PreparedAsset:
 
 
 @dataclass(frozen=True)
+class PreparedRegion:
+    """One independently replaceable publication region."""
+
+    slot: str
+    title: str
+    summary: str
+    kind: str
+    text: str | None
+    asset: PreparedAsset | None
+    expires_at: str | None
+    max_age_seconds: int | None = None
+    priority: str = "normal"
+    item_id: str | None = None
+    actions: tuple[dict[str, Any], ...] = ()
+    pinned: bool = False
+    rotate: bool = False
+    provenance: str | None = None
+    resolve_on: str | None = None
+    rotation: tuple[dict[str, Any], ...] = ()
+
+    def content(self, asset_id: str | None = None) -> dict[str, Any]:
+        if self.kind == "text":
+            return {"type": "text", "mediaType": "text/plain; charset=utf-8", "text": self.text}
+        assert self.asset is not None
+        value: dict[str, Any] = {
+            "type": "image",
+            "mediaType": self.asset.media_type,
+            "width": self.asset.width,
+            "height": self.asset.height,
+            "bytes": len(self.asset.data),
+            "sha256": self.asset.sha256,
+        }
+        if asset_id:
+            value["assetId"] = asset_id
+        return value
+
+    def metadata(self, asset_id: str | None = None) -> dict[str, Any]:
+        value: dict[str, Any] = {
+            "slot": self.slot,
+            "title": self.title,
+            "summary": self.summary,
+            "priority": self.priority,
+            "expiresAt": self.expires_at,
+            "maxAgeSeconds": self.max_age_seconds,
+            "itemId": self.item_id,
+            "actions": list(self.actions),
+            "pinned": self.pinned,
+            "rotate": self.rotate,
+            "content": self.content(asset_id),
+            "rotation": list(self.rotation),
+        }
+        if self.provenance is not None:
+            value["provenance"] = self.provenance
+        if self.resolve_on is not None:
+            value["resolveOn"] = self.resolve_on
+        return value
+
+
+@dataclass(frozen=True)
 class PreparedPublication:
     title: str
     summary: str
@@ -146,6 +206,9 @@ class PreparedPublication:
     priority: str = "normal"
     item_id: str | None = None
     actions: tuple[dict[str, Any], ...] = ()
+    provenance: str | None = None
+    dark_palette: bool = False
+    variants: dict[str, Any] | None = None
 
 
 def capabilities() -> dict[str, Any]:
@@ -153,6 +216,15 @@ def capabilities() -> dict[str, Any]:
     return {
         "publicationVersion": PUBLICATION_VERSION,
         "kinds": ["text", "image"],
+        "regions": {
+            "slots": ["hero", "ticker"],
+            "independentTtl": True,
+            "independentPriority": True,
+            "compactFallback": "hero-only",
+        },
+        "provenance": list(PROVENANCE_LEVELS),
+        "questions": {"maxChars": 500, "execution": "never_from_tap"},
+        "watches": {"maxPerWidget": 100, "maxPerDay": 50, "conditions": ["always", "date_reached", "source_equals", "revision_gte"]},
         "text": {"mimeType": "text/plain; charset=utf-8", "maxBytes": MAX_TEXT_BYTES},
         "image": {
             "mediaTypes": list(SUPPORTED_MEDIA_TYPES),
@@ -320,6 +392,77 @@ def _normalize_max_age(max_age_seconds: int | None) -> int | None:
     return max_age_seconds
 
 
+def prepare_region(
+    slot: str,
+    spec: Any,
+    *,
+    default_item_id: str | None = None,
+    now: datetime | None = None,
+) -> PreparedRegion:
+    """Validate one hero/ticker region without coupling it to the hero slot."""
+    if slot not in {"hero", "ticker"}:
+        raise PublicationInputError("region slot must be hero or ticker")
+    if not isinstance(spec, dict):
+        raise PublicationInputError(f"{slot} region must be an object")
+    title = _bounded_text(spec.get("title", ""), f"{slot}.title", MAX_TITLE_BYTES, required=True, single_line=True)
+    summary = _bounded_text(spec.get("summary", ""), f"{slot}.summary", MAX_SUMMARY_BYTES, required=True)
+    priority = _normalize_priority(spec.get("priority", "normal"))
+    item_id = _normalize_item_id(spec.get("itemId", spec.get("item_id", default_item_id)), f"{slot}.itemId")
+    action_values = _normalize_actions(spec.get("actions"), item_id)
+    expiry = _normalize_expiry(
+        spec.get("expiresAt", spec.get("expires_at")),
+        spec.get("ttlSeconds", spec.get("ttl_seconds")),
+        now or datetime.now(timezone.utc),
+    )
+    max_age = _normalize_max_age(spec.get("maxAgeSeconds", spec.get("max_age_seconds")))
+    pinned = spec.get("pinned", False)
+    rotate = spec.get("rotate", False)
+    if not isinstance(pinned, bool) or not isinstance(rotate, bool):
+        raise PublicationInputError(f"{slot} pinned/rotate must be boolean")
+    provenance = spec.get("provenance")
+    if provenance is not None:
+        if not isinstance(provenance, str) or provenance not in PROVENANCE_LEVELS:
+            raise PublicationInputError(f"{slot}.provenance must be one of {list(PROVENANCE_LEVELS)}")
+    rotation_value = spec.get("rotation", spec.get("items", [])) or []
+    if not isinstance(rotation_value, list) or len(rotation_value) > 10:
+        raise PublicationInputError(f"{slot}.rotation must be an array of at most 10 items")
+    rotation: list[dict[str, Any]] = []
+    for index, item in enumerate(rotation_value):
+        if not isinstance(item, dict) or not isinstance(item.get("title"), str) or not isinstance(item.get("summary"), str):
+            raise PublicationInputError(f"{slot}.rotation[{index}] requires title and summary")
+        rotation.append({"title": item["title"][:200], "summary": item["summary"][:500], "pinned": bool(item.get("pinned", False))})
+    resolve_on = spec.get("resolveOn", spec.get("resolve_on"))
+    if resolve_on is not None:
+        if not isinstance(resolve_on, str) or not resolve_on.strip() or len(resolve_on) > 128:
+            raise PublicationInputError(f"{slot}.resolveOn must be a bounded string")
+    sources = [
+        ("text", spec.get("text")),
+        ("svg", spec.get("svg")),
+        ("file", spec.get("file_path", spec.get("filePath"))),
+    ]
+    supplied = [(kind, value) for kind, value in sources if value is not None]
+    if len(supplied) != 1:
+        raise PublicationInputError(f"{slot} region must provide exactly one of text, svg, or file_path")
+    kind, value = supplied[0]
+    if kind == "text":
+        text_value = _bounded_text(value, f"{slot}.text", MAX_TEXT_BYTES, required=True)
+        return PreparedRegion(slot, title, summary, kind, text_value, None, expiry, max_age, priority, item_id, action_values, pinned, rotate, provenance, resolve_on, tuple(rotation))
+    if kind == "svg":
+        if not isinstance(value, str):
+            raise PublicationInputError(f"{slot}.svg must be inline SVG text")
+        raw = value.encode("utf-8")
+        width, height = validate_svg(raw)
+        return PreparedRegion(slot, title, summary, kind, None, PreparedAsset("image/svg+xml", raw, width, height, hashlib.sha256(raw).hexdigest()), expiry, max_age, priority, item_id, action_values, pinned, rotate, provenance, resolve_on, tuple(rotation))
+    if not isinstance(value, (str, os.PathLike)):
+        raise PublicationInputError(f"{slot}.file_path must be a local filesystem path")
+    path_text = os.fspath(value)
+    if not path_text.strip() or "\x00" in path_text or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", path_text):
+        raise PublicationInputError(f"{slot}.file_path must be a local filesystem path")
+    data = _read_bounded_file(Path(path_text).expanduser())
+    media_type, width, height = validate_raster(data, Path(path_text).suffix)
+    return PreparedRegion(slot, title, summary, kind, None, PreparedAsset(media_type, data, width, height, hashlib.sha256(data).hexdigest()), expiry, max_age, priority, item_id, action_values, pinned, rotate, provenance, resolve_on, tuple(rotation))
+
+
 def prepare_publication(
     *,
     title: Any,
@@ -333,6 +476,9 @@ def prepare_publication(
     priority: str = "normal",
     item_id: str | None = None,
     actions: list[dict[str, Any]] | tuple[dict[str, Any], ...] | None = None,
+    provenance: str | None = None,
+    dark_palette: bool = False,
+    variants: Any = None,
     now: datetime | None = None,
 ) -> PreparedPublication:
     """Validate exactly one content source and return bounded publication data."""
@@ -342,6 +488,24 @@ def prepare_publication(
     priority_value = _normalize_priority(priority)
     item_id_value = _normalize_item_id(item_id, "item_id")
     action_values = _normalize_actions(actions, item_id_value)
+    if provenance is not None and provenance not in PROVENANCE_LEVELS:
+        raise PublicationInputError(f"provenance must be one of {list(PROVENANCE_LEVELS)}")
+    if not isinstance(dark_palette, bool):
+        raise PublicationInputError("dark_palette must be boolean")
+    if variants is None:
+        variant_values = None
+    else:
+        if not isinstance(variants, dict) or len(variants) > 4:
+            raise PublicationInputError("variants must be an object of at most 4 size classes")
+        variant_values = {}
+        for name, variant in variants.items():
+            if name not in {"2x2", "4x2", "2x4", "4x4"} or not isinstance(variant, dict):
+                raise PublicationInputError("variants keys must be size classes and values objects")
+            variant_values[name] = {
+                "title": _bounded_text(variant.get("title", ""), f"variants.{name}.title", MAX_TITLE_BYTES, required=True, single_line=True),
+                "summary": _bounded_text(variant.get("summary", ""), f"variants.{name}.summary", MAX_SUMMARY_BYTES, required=True),
+                "text": _bounded_text(variant.get("text"), f"variants.{name}.text", MAX_TEXT_BYTES, required=True),
+            }
 
     sources = [("text", text), ("svg", svg), ("file", file_path)]
     supplied = [(kind, value) for kind, value in sources if value is not None]
@@ -354,7 +518,7 @@ def prepare_publication(
         text_value = _bounded_text(value, "text", MAX_TEXT_BYTES, required=True)
         return PreparedPublication(
             title_value, summary_value, "text", text_value, None, expiry, max_age,
-            priority_value, item_id_value, action_values,
+            priority_value, item_id_value, action_values, provenance, dark_palette, variant_values,
         )
 
     if kind == "svg":
@@ -373,6 +537,9 @@ def prepare_publication(
             priority_value,
             item_id_value,
             action_values,
+            provenance,
+            dark_palette,
+            variant_values,
         )
 
     if not isinstance(value, (str, os.PathLike)):
@@ -396,6 +563,9 @@ def prepare_publication(
         priority_value,
         item_id_value,
         action_values,
+        provenance,
+        dark_palette,
+        variant_values,
     )
 
 
