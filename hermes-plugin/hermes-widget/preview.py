@@ -356,9 +356,9 @@ def preview_file(path: str | pathlib.Path, out: str | pathlib.Path | None = None
         raise ValueError(f"cannot render preview: {exc}") from exc
 
 
-# Nominal publication previews use the same dp classes as the Android widget.
-# The values are intentionally explicit: a caller can ask for a registered
-# custom size and the server will use its reported pixel dimensions instead.
+# Nominal publication previews are legacy fallbacks. Modern launchers can report
+# substantially larger dp geometry; when a device inventory is available the
+# renderer uses its exact reported pixel dimensions instead.
 PUBLICATION_SIZES: dict[str, tuple[int, int]] = {
     "2x2": (120, 120),
     "4x2": (270, 120),
@@ -512,7 +512,7 @@ def _fit_image(data: bytes, media_type: str, width: int, height: int) -> tuple[b
             try:
                 import cairosvg  # type: ignore
             except Exception:
-                return _fallback_png(width, height, label=b"image"), "fallback"
+                return _fallback_png(width, height, label=b"image"), "svg-renderer-unavailable"
             source = cairosvg.svg2png(bytestring=data)
             image = Image.open(io.BytesIO(source)).convert("RGBA")
         else:
@@ -553,6 +553,11 @@ def _size_names(sizes: Any, inventory: list[dict] | None = None) -> list[tuple[s
         sizes = [part.strip() for part in sizes.split(",") if part.strip()]
     if not isinstance(sizes, list) or not sizes or len(sizes) > _PREVIEW_MAX_COUNT:
         raise ValueError(f"sizes must contain at most {_PREVIEW_MAX_COUNT} size names")
+    inventory_dims: dict[str, tuple[int, int]] = {}
+    for item in inventory or []:
+        name = str(item.get("sizeClass") or "custom")
+        if isinstance(item.get("widthPx"), int) and isinstance(item.get("heightPx"), int):
+            inventory_dims.setdefault(name, (item["widthPx"], item["heightPx"]))
     result: list[tuple[str, int, int, bool]] = []
     seen: set[str] = set()
     for raw in sizes:
@@ -563,7 +568,10 @@ def _size_names(sizes: Any, inventory: list[dict] | None = None) -> list[tuple[s
             raise ValueError(f"duplicate preview size {name!r}")
         seen.add(name)
         if name in PUBLICATION_SIZES:
-            result.append((name, *PUBLICATION_SIZES[name], False))
+            if name in inventory_dims:
+                result.append((name, *inventory_dims[name], True))
+            else:
+                result.append((name, *PUBLICATION_SIZES[name], False))
             continue
         match = re.fullmatch(r"(\d{2,5})x(\d{2,5})", name)
         if not match:
@@ -603,6 +611,8 @@ def render_publication_previews(
                 asset_data = base64.b64decode(content["data"], validate=True)
             except (ValueError, TypeError):
                 asset_data = None
+    if kind == "image" and not asset_data:
+        raise ValueError("image asset bytes are unavailable; provide a local file, inline data, or a stored assetId")
     output: list[dict[str, Any]] = []
     for name, width, height, already_pixels in requested:
         width_px, height_px = (width, height) if already_pixels else (width * 2, height * 2)
@@ -615,7 +625,7 @@ def render_publication_previews(
             data, renderer = _fit_image(asset_data or b"", media_type, width_px, height_px)
         if len(data) > _PREVIEW_MAX_BYTES:
             raise ValueError("rendered preview exceeds the 2 MiB limit")
-        output.append({
+        item = {
             "size": name,
             "width": width_px if already_pixels else width,
             "height": height_px if already_pixels else height,
@@ -626,7 +636,12 @@ def render_publication_previews(
             "sha256": hashlib.sha256(data).hexdigest(),
             "data": base64.b64encode(data).decode("ascii"),
             "renderer": renderer,
-        })
+        }
+        if renderer == "svg-renderer-unavailable":
+            item["note"] = (
+                "No local SVG renderer (CairoSVG/libcairo); the connected device remains authoritative."
+            )
+        output.append(item)
     return output
 
 

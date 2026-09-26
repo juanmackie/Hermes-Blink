@@ -17,10 +17,14 @@ import org.unifiedpush.android.connector.data.PushMessage
 class UnifiedPushService : PushService() {
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {
         val context = applicationContext
+        Config.setPushState(context, "registered", true)
         val baseUrl = SecureStore.baseUrl(context) ?: Config.getBackendUrl(context) ?: return
         val token = SecureStore.token(context) ?: return
         Thread {
-            HermesApi.registerPushEndpoint(baseUrl, token, endpoint.url)
+            val result = HermesApi.registerPushEndpoint(baseUrl, token, endpoint.url)
+            if (result.code !in 200..299) {
+                Config.setPushState(context, "failed", true, "endpoint registration failed (HTTP ${result.code})")
+            }
         }.start()
     }
 
@@ -29,11 +33,17 @@ class UnifiedPushService : PushService() {
     }
 
     override fun onRegistrationFailed(reason: org.unifiedpush.android.connector.FailedReason, instance: String) {
-        // Periodic WorkManager polling remains the documented fallback.
+        val context = applicationContext
+        val reasonText = reason.name
+        Config.setPushState(context, "failed", true, reasonText)
+        val baseUrl = SecureStore.baseUrl(context) ?: Config.getBackendUrl(context) ?: return
+        val token = SecureStore.token(context) ?: return
+        Thread { HermesApi.reportPushState(baseUrl, token, "failed", true, reasonText) }.start()
     }
 
     override fun onUnregistered(instance: String) {
         val context = applicationContext
+        Config.setPushState(context, "unregistered", true)
         val baseUrl = SecureStore.baseUrl(context) ?: Config.getBackendUrl(context) ?: return
         val token = SecureStore.token(context) ?: return
         Thread { HermesApi.clearPushEndpoint(baseUrl, token) }.start()

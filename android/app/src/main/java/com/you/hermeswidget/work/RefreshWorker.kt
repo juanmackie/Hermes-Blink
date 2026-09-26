@@ -23,6 +23,7 @@ import com.you.hermeswidget.widget.HermesWidget
 import com.you.hermeswidget.widget.LayoutParser
 import com.you.hermeswidget.widget.WakeAlarmReceiver
 import com.you.hermeswidget.widget.WidgetDimensions
+import com.you.hermeswidget.widget.WidgetInstanceReporter
 import java.util.concurrent.TimeUnit
 
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
@@ -99,20 +100,7 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     }
 
     private suspend fun reportInventory() {
-        val baseUrl = SecureStore.baseUrl(applicationContext) ?: Config.getBackendUrl(applicationContext)
-        val token = SecureStore.token(applicationContext)
-        if (baseUrl.isNullOrBlank() || token.isNullOrBlank()) return
-        val instances = WidgetDimensions.allInstances(applicationContext).map {
-            mapOf(
-                "instanceId" to it.instanceId,
-                "sizeClass" to it.sizeClass,
-                "widthDp" to it.widthDp,
-                "heightDp" to it.heightDp,
-                "widthPx" to it.widthPx,
-                "heightPx" to it.heightPx,
-            )
-        }
-        HermesApi.reportInstances(baseUrl, Config.getWidgetId(applicationContext), instances, token)
+        WidgetInstanceReporter.reportBlocking(applicationContext)
     }
 
     private suspend fun refreshLegacyLayout() {

@@ -8,6 +8,7 @@ import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
+import org.json.JSONObject
 import com.you.hermeswidget.net.Config
 import java.text.DateFormat
 import java.util.Date
@@ -16,12 +17,14 @@ import java.util.Date
 class DiagnosticsActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var exemption: TextView
+    private lateinit var pushState: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_diagnostics)
         status = findViewById(R.id.diagnostics_status)
         exemption = findViewById(R.id.battery_exemption_status)
+        pushState = findViewById(R.id.push_state_status)
         findViewById<Button>(R.id.request_battery_exemption).setOnClickListener {
             requestExemption()
         }
@@ -46,6 +49,20 @@ class DiagnosticsActivity : Activity() {
             "Battery optimisation exemption: held"
         } else {
             "Battery optimisation exemption: not held. Android may delay wakeups in Doze."
+        }
+        val push = Config.getPushState(this)
+        val state = push?.optString("state", "unknown") ?: "unknown"
+        val distributor = push?.opt("distributorPresent")
+        val present = when (distributor) {
+            null, JSONObject.NULL -> "unknown"
+            true -> "present"
+            false -> "absent"
+            else -> distributor.toString()
+        }
+        val failure = push?.optString("failureReason").orEmpty().takeIf { it.isNotEmpty() }
+        pushState.text = buildString {
+            append("UnifiedPush: $state (distributor $present)")
+            if (failure != null) append("; failure: $failure")
         }
     }
 

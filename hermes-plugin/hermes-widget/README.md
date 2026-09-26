@@ -8,9 +8,9 @@ to the same Tailscale tailnet and use Tailscale Serve HTTPS rather than exposing
 
 ## What it registers
 
-- Tools: widget_publish, widget_preview, widget_status, widget_update, widget_validate (dry run), widget_list, widget_read_events, widget_read_intents, widget_resolve_intent, widget_set_quiet_hours, widget_mint_pairing_code, widget_setup
+- Tools: widget_publish, widget_preview, widget_status, widget_update, widget_validate (dry run), widget_list, widget_read_events, widget_read_intents, widget_resolve_intent, widget_wake_test, widget_set_quiet_hours, widget_mint_pairing_code, widget_setup
 - Slash command: /widget (status)
-- CLI: hermes widget serve | setup | code | status | routine | devices | install-skill | preview
+- CLI: hermes widget serve | setup | code | status | wake-test | routine | devices | install-skill | preview
 - Bundled skill: hermes-widget:widget (layout authoring, design tokens, proactive refresh)
 - A private HTTP server started with `hermes widget serve`; secure SVG parsing uses the pinned `defusedxml` dependency, and publication PNG previews use optional Pillow/CairoSVG backends with a bounded fallback.
 
@@ -69,6 +69,11 @@ It leaves the current publication unchanged when nothing useful changed and neve
 fabricates data or a visual. Manage or remove it with
 `hermes widget routine --remove`.
 
+Legacy `widget_update` and `hermes widget publish --layout-file` are compatibility APIs only:
+they store the v2 layout table and return `scope: "legacy_layout"`,
+`publicationCreated: false`, and a `legacy_layout_not_published` warning. The phone's
+publication endpoint is the only device-visible channel.
+
 ## Security
 
 - Two bearer credentials: an agent token (operator/agent) and per-device tokens.
@@ -107,6 +112,8 @@ fabricates data or a visual. Manage or remove it with
   `POST /v1/widgets/<id>/preview` renders exact current/proposed publications to bounded PNGs;
   `hermes widget preview --sizes ... --out DIR` writes the same previews locally.
 - `GET /v1/capabilities` reports the active format, size, priority, inventory, and action limits.
+- `hermes widget wake-test` sends one content-free UnifiedPush fetch to registered device
+  endpoints and prints the wake receipt chain; it does not create a publication revision.
 - `widget_status` reports host state separately from ordered `nudge_sent`, `fetched`,
   `downloaded`, and `render_submitted` receipts.
 

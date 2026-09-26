@@ -31,6 +31,13 @@
             android:layout_marginTop="20dp"
             android:textSize="15sp" />
 
+        <TextView
+            android:id="@+id/push_state_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:textSize="15sp" />
+
         <Button
             android:id="@+id/request_battery_exemption"
             android:layout_width="wrap_content"

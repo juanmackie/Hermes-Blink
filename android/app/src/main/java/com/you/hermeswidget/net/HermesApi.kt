@@ -345,6 +345,37 @@ object HermesApi {
         }
     }
 
+    fun reportPushState(
+        baseUrl: String,
+        token: String,
+        state: String,
+        distributorPresent: Boolean?,
+        failureReason: String? = null,
+    ): HttpResult {
+        val conn = open(baseUrl, "/v1/device", token, method = "PATCH")
+        return try {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            val pushState = JSONObject()
+                .put("state", state)
+                .put("distributorPresent", distributorPresent ?: JSONObject.NULL)
+            if (failureReason != null) pushState.put("failureReason", failureReason)
+            conn.outputStream.write(
+                JSONObject().put("pushState", pushState).toString().toByteArray(StandardCharsets.UTF_8)
+            )
+            val code = conn.responseCode
+            HttpResult(
+                code = code,
+                body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null,
+                retryAfterSeconds = retryAfter(conn),
+            )
+        } catch (e: Exception) {
+            HttpResult(-1, error = e.message ?: e.javaClass.simpleName)
+        } finally {
+            conn.disconnect()
+        }
+    }
+
     fun clearPushEndpoint(baseUrl: String, token: String): HttpResult = registerPushEndpointInternal(
         baseUrl, token, null,
     )

@@ -1,7 +1,7 @@
 ---
 name: hermes-widget
 description: "Proactive widget publishing, previews, delivery, actions."
-version: 3.2.0
+version: 3.2.1
 author: Hermes Widget contributors
 license: MIT
 metadata:
@@ -193,15 +193,23 @@ more or content sits against the widget border (`ROOT_PADDING_LOW` is a warning,
 
 ## Canvas sizes
 
-The widget is resizable. Android sizes cells in dp, so these are approximate content boxes
-after the safe inset — design for the shape, not a fixed pixel height.
+The widget is resizable, and modern launchers can give the same cell substantially more
+dp than the old nominal preview boxes. Treat these as **ranges**, not fixed canvases. The
+authoritative geometry is the `widget_instances` inventory reported by the phone; at density
+3.0 a 4×4 instance can be about 407×412dp (1221×1236px), not 270×270dp. Design for the shape,
+use `maxItems`/`maxLines`, and preview against the reported instance dimensions.
 
-| Shape | Roughly | What fits |
+| Shape | Typical dp range | What fits |
 | --- | --- | --- |
-| 2×2 | ~120 × 120dp | One hero (`stat` or `title` text) + one `caption`. Nothing else. |
-| 4×2 (default) | ~270 × 120dp | Hero + two or three supporting lines, or a hero `row` of two stats. |
-| 2×4 | ~120 × 270dp | One stacked column: title, then 3–4 `list_item`s. |
-| 4×4 | ~270 × 270dp | Hero row + divider + `list` of 3–5 items + a footer `caption`. |
+| 2×2 | ~110–200 × 110–200dp | One hero (`stat` or `title` text) + one `caption`. Nothing else. |
+| 4×2 (default) | ~250–420 × 110–220dp | Hero + two or three supporting lines, or a hero `row` of two stats. |
+| 2×4 | ~110–200 × 250–420dp | One stacked column: title, then 3–4 `list_item`s. |
+| 4×4 | ~300–420 × 300–420dp | Hero row + divider + `list` of 3–5 items + a footer `caption`. |
+
+Density caveat: `px = dp × device density`; the same dp class can produce very different pixel
+counts across phones. `widget_preview` and the publication endpoint use the phone's reported
+`widthDp`/`heightDp`/`widthPx`/`heightPx` when inventory is available, so do not hand-tune to
+the legacy nominal 120/270dp constants.
 
 Because the user can resize, never let the layout depend on a fixed height. `list` with
 `maxItems` and `calendar` with `maxItems` are the safety valves; that is what stops a 4×4

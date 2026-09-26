@@ -85,13 +85,14 @@ and verify `/v1/health` before pairing.
   has passed on it.
 - TrueNAS container recreation and a 72-hour phone/network soak remain pending.
 
-### v3.2 local verification — 2026-09-25
+### v3.2.1 local verification — 2026-09-25
 
 - The host suite now includes seven feature-proposal regression tests covering content-free
   priority wakes and degradation, ordered delivery receipts, Pillow-only raster previews,
   the no-Cairo text path, registered-size PNG previews, cache-safe proactive guidance,
-  revision-history gap warnings, fixture-path resolution, durable idempotent action
-  intents/audit, and revoked-device rejection: **79/79 passed** on
+  revision-history gap warnings, fixture-path resolution, push-state/wake-test reporting,
+  legacy-scope honesty, local file/SVG preview ergonomics, durable idempotent action
+  intents/audit, and revoked-device rejection: **83/83 passed** on
   CPython 3.11.
 - `python scripts/check-contract-parity.py`, `python scripts/verify-cli-local.py`, and
   `pyflakes hermes-plugin/hermes-widget/*.py` passed.

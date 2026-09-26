@@ -142,12 +142,16 @@ content-free `fetch` wake to a device-registered UnifiedPush endpoint (ntfy and 
 self-hostable distributors work); the phone then pulls over the existing private HTTPS path.
 The high lane is limited to six wakes per hour and thirty per day, with over-limit requests
 visibly degraded to normal. A per-widget UTC quiet-hours window can be set with
-`widget_set_quiet_hours`. Android requests battery-optimisation exemption only from the
+`widget_set_quiet_hours`. `hermes widget wake-test` sends one content-free wake and prints the
+per-device receipt chain without creating a publication revision. Android requests
+battery-optimisation exemption only from the
 user, then uses expedited WorkManager with an exact-alarm fallback where permitted. The app's
 **Delivery diagnostics** screen shows last poll, fetch, render, and exemption state.
 
 `widget_preview` and `POST /v1/widgets/{id}/preview` rasterise the exact proposed or current
-publication at the device's registered `2x2`, `4x2`, `2x4`, `4x4`, or custom sizes. Capacity
+publication at the device's registered `2x2`, `4x2`, `2x4`, `4x4`, or custom sizes. Modern
+launchers may report 4×4 geometry around 300–420dp per side; the reported inventory, not the
+legacy 270dp nominal box, is authoritative. Capacity
 findings are warnings, never silent truncation. Raster previews use Pillow without requiring
 libcairo; text has a built-in Pillow fallback, while SVG rasterisation still requires CairoSVG.
 The CLI writes local PNGs:

@@ -42,6 +42,7 @@ class FeatureProposals(unittest.TestCase):
     def setUpClass(cls):
         _load_plugin()
         cls.store = importlib.import_module("hermes_plugins.hermes_widget.store")
+        cls.tools = importlib.import_module("hermes_plugins.hermes_widget.tools")
         cls.preview = importlib.import_module("hermes_plugins.hermes_widget.preview")
         cls.cli = importlib.import_module("hermes_plugins.hermes_widget.cli")
         cls.server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
@@ -86,6 +87,26 @@ class FeatureProposals(unittest.TestCase):
                 resolved = self.cli._resolve_input_file("fixtures/brief-v2.json", label="layout file")
         self.assertTrue(resolved.is_file())
         self.assertEqual(resolved.name, "brief-v2.json")
+
+    def test_push_state_and_wake_test_are_visible_without_a_publication(self):
+        state = self.store.set_device_push_state(
+            self.device["deviceId"], "failed", distributor_present=True, failure_reason="AUTH_FAILED"
+        )
+        self.assertEqual(state["state"], "failed")
+        self.assertEqual(state["failureReason"], "AUTH_FAILED")
+        self.store.put_widget(
+            "feature",
+            {"version": 2, "widgetId": "feature", "root": {"type": "column", "children": [{"type": "text", "value": "x"}]}},
+        )
+        self.store.set_device_push_endpoint(self.device["deviceId"], "https://ntfy.example/up/wake")
+        with patch.object(self.store._push, "wake") as wake:
+            result = self.store.wake_test("feature")
+        wake.assert_called_once_with("https://ntfy.example/up/wake")
+        self.assertTrue(result["contentFree"])
+        self.assertEqual(result["receiptChain"][0]["state"], "nudge_sent")
+        status = self.store.publication_status("feature")
+        self.assertTrue(status["wake"]["devices"][0]["registered"])
+        self.assertEqual(status["wake"]["registeredCount"], 1)
 
     def test_priority_wake_is_content_free_and_receipted(self):
         self.store.set_device_push_endpoint(self.device["deviceId"], "https://ntfy.example/up/device")
@@ -144,6 +165,32 @@ class FeatureProposals(unittest.TestCase):
         self.assertGreater(len(data), 700)
         with Image.open(io.BytesIO(data)) as preview:
             self.assertEqual(preview.size, (540, 240))
+
+    def test_preview_accepts_a_local_file_in_a_publication_envelope(self):
+        from PIL import Image
+        path = Path(self._dir) / "source.png"
+        Image.new("RGB", (40, 20), (10, 120, 200)).save(path)
+        result = json.loads(self.tools.widget_preview({
+            "widget_id": "file-preview",
+            "publication": {
+                "title": "File", "summary": "Local file",
+                "content": {"filePath": str(path)},
+            },
+            "sizes": ["2x2"],
+        }))
+        self.assertTrue(result["ok"], result)
+        self.assertEqual(result["previews"][0]["renderer"], "pillow")
+
+    def test_svg_preview_reports_missing_local_renderer(self):
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>'
+        publication = {
+            "kind": "image", "title": "Chart", "summary": "Chart",
+            "content": {"type": "image", "mediaType": "image/svg+xml", "data": __import__("base64").b64encode(svg).decode()},
+        }
+        with patch.dict(sys.modules, {"cairosvg": None}):
+            rendered = self.preview.render_publication_previews(publication, sizes=["2x2"])
+        self.assertEqual(rendered[0]["renderer"], "svg-renderer-unavailable")
+        self.assertIn("No local SVG renderer", rendered[0]["note"])
 
     def test_text_preview_keeps_a_usable_path_without_cairo(self):
         with patch.dict(sys.modules, {"cairosvg": None}):

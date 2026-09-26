@@ -23,6 +23,7 @@ object Config {
     private const val KEY_LAST_RENDER_AT = "last_render_at"
     private const val KEY_BATTERY_EXEMPTION = "battery_exemption"
     private const val KEY_PENDING_ACTIONS = "pending_actions"
+    private const val KEY_PUSH_STATE = "push_state"
 
     private fun prefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -209,4 +210,17 @@ object Config {
         }
         prefs(context).edit().putString(KEY_PENDING_ACTIONS, next.toString()).apply()
     }
+
+    fun setPushState(context: Context, state: String, distributorPresent: Boolean?, failureReason: String? = null) {
+        val value = JSONObject()
+            .put("state", state)
+            .put("distributorPresent", distributorPresent ?: JSONObject.NULL)
+            .put("failureReason", failureReason ?: JSONObject.NULL)
+            .put("updatedAt", System.currentTimeMillis())
+        prefs(context).edit().putString(KEY_PUSH_STATE, value.toString()).apply()
+    }
+
+    fun getPushState(context: Context): JSONObject? = runCatching {
+        JSONObject(prefs(context).getString(KEY_PUSH_STATE, "{}") ?: "{}")
+    }.getOrNull()
 }

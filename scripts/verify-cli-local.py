@@ -116,7 +116,8 @@ check("rollback_keeps_device", store.device_for_token(device_token) is not None
 tools_src = (REPO / "hermes-plugin" / "hermes-widget" / "tools.py").read_text(encoding="utf-8")
 expected_tools = ["widget_update", "widget_validate", "widget_list", "widget_read_events",
                   "widget_mint_pairing_code", "widget_setup", "widget_publish", "widget_preview",
-                  "widget_read_intents", "widget_resolve_intent", "widget_set_quiet_hours",
+                  "widget_read_intents", "widget_resolve_intent", "widget_wake_test",
+                  "widget_set_quiet_hours",
                   "widget_status"]
 missing = [t for t in expected_tools if f"def {t}" not in tools_src]
 check("agent_tools_present", not missing,
@@ -131,6 +132,8 @@ check("preview_verb_present", "def preview_file" in preview_src and "def render_
 cli_src = (REPO / "hermes-plugin" / "hermes-widget" / "cli.py").read_text(encoding="utf-8")
 check("preview_registered", '"preview": _preview' in cli_src and "def _preview" in cli_src,
       "hermes widget preview is wired into the dispatcher")
+check("wake_test_registered", '"wake-test": _wake_test' in cli_src and "def _wake_test" in cli_src,
+      "hermes widget wake-test is wired into the dispatcher")
 parity = subprocess.run([sys.executable, str(REPO / "scripts" / "check-contract-parity.py")],
                         capture_output=True, text=True)
 check("contract_parity", parity.returncode == 0,

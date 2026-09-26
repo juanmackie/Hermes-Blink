@@ -116,6 +116,22 @@ class DeliveryTruthfulness(unittest.TestCase):
         self.assertEqual(info["skippedRevisions"], [1])
         self.assertEqual(status["pollIntervalSeconds"], 900)
 
+    def test_legacy_layout_write_does_not_claim_device_publication(self):
+        result = self.store.put_widget(
+            "legacy-only",
+            {
+                "version": 2,
+                "widgetId": "legacy-only",
+                "updatedAt": "2026-09-16T07:30:00Z",
+                "root": {"type": "column", "children": [{"type": "text", "value": "legacy"}]},
+            },
+        )
+        self.assertEqual(result["scope"], "legacy_layout")
+        self.assertFalse(result["publicationCreated"])
+        self.assertEqual(result["layoutUpdatedAt"], "2026-09-16T07:30:00Z")
+        self.assertNotEqual(result["storedAt"], result["layoutUpdatedAt"])
+        self.assertEqual(result["warnings"][0]["code"], "legacy_layout_not_published")
+
     def test_status_surfaces_a_revision_history_gap(self):
         self.store.put_publication("hermes-brief", title="One", summary="first", text="a")
         self.store.put_publication("hermes-brief", title="Two", summary="second", text="b")

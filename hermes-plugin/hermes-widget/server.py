@@ -590,6 +590,15 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             if not isinstance(raw_publication, dict):
                 raise _HttpError(400, "invalid_preview", "publication must be a JSON object")
+            content_source = raw_publication.get("content")
+            if isinstance(content_source, dict) and (
+                content_source.get("filePath") or content_source.get("file_path")
+            ) and not any(key in raw_publication for key in ("text", "svg", "file_path", "filePath")):
+                raw_publication = {
+                    **raw_publication,
+                    "filePath": content_source.get("filePath", content_source.get("file_path")),
+                }
+                raw_publication.pop("content", None)
             if isinstance(raw_publication.get("content"), dict) and not any(
                 key in raw_publication for key in ("text", "svg", "file_path", "filePath")
             ):
@@ -651,6 +660,14 @@ class _Handler(BaseHTTPRequestHandler):
             )
         except ValueError as exc:
             raise _HttpError(400, "invalid_preview", str(exc)) from exc
+        last_render = store._last_render_metrics()
+        for item in previews:
+            if item.get("renderer") == "svg-renderer-unavailable":
+                if last_render:
+                    item["note"] = (
+                        "No local SVG renderer (CairoSVG/libcairo); "
+                        f"last device render {last_render['width']}×{last_render['height']}px"
+                    )
         self._json(200, {
             "ok": True,
             "widgetId": widget_id,
@@ -706,8 +723,22 @@ class _Handler(BaseHTTPRequestHandler):
                 device_id, body.get("pushEndpoint", body.get("push_endpoint"))
             )
             updated = {**updated, **push_result}
-        if label is None and "pushEndpoint" not in body and "push_endpoint" not in body:
-            raise _HttpError(400, "bad_request", "label or pushEndpoint is required")
+        if "pushState" in body or "push_state" in body:
+            push_state = body.get("pushState", body.get("push_state"))
+            if not isinstance(push_state, dict):
+                raise _HttpError(400, "bad_request", "pushState must be an object")
+            updated = {**updated, **store.set_device_push_state(
+                device_id,
+                push_state.get("state"),
+                distributor_present=push_state.get("distributorPresent", push_state.get("distributor_present")),
+                failure_reason=push_state.get("failureReason", push_state.get("failure_reason")),
+            )}
+        if (
+            label is None
+            and "pushEndpoint" not in body and "push_endpoint" not in body
+            and "pushState" not in body and "push_state" not in body
+        ):
+            raise _HttpError(400, "bad_request", "label, pushEndpoint, or pushState is required")
         self._json(200, updated)
 
     def _widget_events(self, widget_id: str | None) -> None:

@@ -73,8 +73,10 @@ The Android client already speaks this contract. Do not change paths.
     PATCH /v1/device
          Auth: paired DEVICE token only (a device may rename itself or register a
          UnifiedPush endpoint).
-         Body: {"label":"Kitchen tablet"} or {"pushEndpoint":"https://ntfy.example/up/..."}
-         -> 200 {"deviceId":"...","label":"Kitchen tablet","pushEndpointRegistered":true}
+         Body: {"label":"Kitchen tablet"} or {"pushEndpoint":"https://ntfy.example/up/..."} or
+               {"pushState":{"state":"failed","distributorPresent":true,"failureReason":"AUTH_FAILED"}}
+         -> 200 {"deviceId":"...","label":"Kitchen tablet","pushEndpointRegistered":true,
+                 "state":"registered","distributorPresent":true,"registered":true}
          -> 403 for an agent/operator token; 400 for an empty/missing field
 
     GET  /v1/widgets
@@ -121,7 +123,9 @@ The Android client already speaks this contract. Do not change paths.
     PUT  /v1/widgets/<widget_id>
          Auth: AGENT token.
          Body: <layout envelope>
-         -> 200 {"ok":true,"widgetId":"...","updatedAt":"<iso8601>"}
+         -> 200 {"ok":true,"scope":"legacy_layout","publicationCreated":false,
+                 "storedAt":"<iso8601>","layoutUpdatedAt":"<fixture timestamp or null>",
+                 "warnings":[{"code":"legacy_layout_not_published",...}]}
          -> 400 {"error":"invalid_layout","detail":"..."} | 413 size cap | 429 rate limit
 
     POST /v1/widgets/<widget_id>/events
@@ -165,6 +169,12 @@ The Android client already speaks this contract. Do not change paths.
          -> 200 {"ok":true,"intent":{...}}
          Resolution records an agent decision; it never executes the operation.
 
+    hermes widget wake-test [--widget-id <id>] [--json]
+         Auth: operator CLI/agent path.
+         Sends one content-free `fetch` wake to registered device endpoints and prints
+         `receiptChain` with `nudge_sent`/`failed`. It creates no publication revision
+         and does not claim device delivery.
+
     GET  /v1/events?since=<iso8601>&widget_id=<id>&limit=<int>
          Auth: AGENT token.
          -> 200 {"events":[{"id":..,"widgetId":..,"deviceId":..,"event":..,"payload":..,"createdAt":..}]}
@@ -175,7 +185,10 @@ All error bodies are JSON: `{"error":"<code>","detail":"<human text>"}`. Auth fa
 The v2 layout (`/v1/widgets/<id>`) and the publication (`/v1/widgets/<id>/publication`) are
 separate stores. Publishing to one does not update the other; the layout response carries an
 additive `publication` pointer so a raw API consumer does not mistake a stale layout for a lost
-publish. Use `hermes widget status` to see both channels and per-device revision history.
+publish. Legacy layout writes explicitly report `scope: "legacy_layout"`,
+`publicationCreated: false`, `storedAt`, and a `legacy_layout_not_published` warning; connected
+Android devices fetch the publication channel only. Use `hermes widget status` to see both
+channels and per-device revision history.
 
 ## 5. Auth model
 
@@ -209,6 +222,7 @@ or accidentally exposed listener from bypassing the credential boundary.
     publication_nudges(widget_id, revision, device_id, status, attempted_at, sent_at, detail)
     delivery_receipts(widget_id, device_id, revision, state, occurred_at, detail)
     device_push_endpoints(device_id, endpoint, endpoint_hash, updated_at)
+    device_push_state(device_id, state, distributor_present, failure_reason, updated_at)
     widget_instances(device_id, widget_id, instance_id, size_class,
                      width_dp, height_dp, width_px, height_px, reported_at)
     action_intents(intent_id, widget_id, device_id, event_id, item_id, action_class,

@@ -8,6 +8,7 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.work.WorkManager
 import com.you.hermeswidget.net.Config
+import com.you.hermeswidget.net.HermesApi
 import com.you.hermeswidget.net.ConnectionState
 import com.you.hermeswidget.net.PublicationRepository
 import com.you.hermeswidget.net.PublicationFreshness
@@ -37,7 +38,24 @@ class MainActivity : AppCompatActivity() {
         RefreshWorker.schedulePeriodic(this)
         RefreshWorker.enqueueNow(this)
         registerUnifiedPushIfAvailable()
+        reportPushAvailability()
         renderStatus()
+    }
+
+    private fun reportPushAvailability() {
+        if (SecureStore.baseUrl(this).isNullOrBlank() || SecureStore.token(this).isNullOrBlank()) return
+        val present = runCatching { UnifiedPush.getAckDistributor(applicationContext) != null }
+            .getOrDefault(false)
+        val previous = Config.getPushState(this)?.optString("state")
+        val state = when {
+            !present -> "unavailable"
+            previous == "registered" -> "registered"
+            else -> "registering"
+        }
+        Config.setPushState(this, state, present)
+        val baseUrl = SecureStore.baseUrl(this) ?: return
+        val token = SecureStore.token(this) ?: return
+        Thread { HermesApi.reportPushState(baseUrl, token, state, present) }.start()
     }
 
     private fun registerUnifiedPushIfAvailable() {

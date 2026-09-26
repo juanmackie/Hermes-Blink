@@ -1,5 +1,20 @@
 # Hermes Widget — Release notes
 
+## v3.2.1 — honest legacy scope, wake visibility, and preview ergonomics
+
+- Legacy `widget_update`/`hermes widget publish --layout-file` results now declare
+  `scope: "legacy_layout"`, `publicationCreated: false`, `storedAt`, and a
+  `legacy_layout_not_published` warning so a compatibility write cannot look phone-visible.
+- `widget_status`/`hermes widget status` now report revision-history gaps and per-device
+  UnifiedPush state; `hermes widget wake-test` sends one content-free wake and prints its
+  receipt chain without creating a publication.
+- Canvas guidance is now a range and points to reported `widget_instances` geometry; modern
+  launchers can provide substantially larger dp canvases than the legacy nominal boxes.
+- Preview output writes PNGs when `--out` is supplied even with `--json`, accepts local
+  `filePath` sources, and reports missing local SVG rendering explicitly.
+- Android `versionCode` is now 2, widget resize reports immediately, and diagnostics show
+  UnifiedPush registration state.
+
 ## v3.2.0 — proactive, cache-safe agent behavior
 
 - Aligned the plugin with Hermes' cache-safe `register_system_prompt_section` contract:

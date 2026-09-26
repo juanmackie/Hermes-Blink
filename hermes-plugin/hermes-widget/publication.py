@@ -203,6 +203,8 @@ def capabilities() -> dict[str, Any]:
             "payload": "fetch",
             "contentInPayload": False,
             "endpointRegistration": "PATCH /v1/device",
+            "stateEndpoint": "PATCH /v1/device pushState",
+            "states": ["unknown", "unavailable", "registering", "registered", "failed", "unregistered"],
             "distributor": "self-hosted ntfy or another UnifiedPush distributor",
         },
         "receipts": ["nudge_sent", "fetched", "downloaded", "render_submitted", "rendered"],

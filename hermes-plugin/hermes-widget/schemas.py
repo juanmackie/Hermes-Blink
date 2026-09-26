@@ -276,6 +276,19 @@ WIDGET_RESOLVE_INTENT = {
 }
 
 
+WIDGET_WAKE_TEST = {
+    "name": "widget_wake_test",
+    "description": "Send one content-free UnifiedPush fetch wake to registered device endpoints and print the receipt chain. It does not create or claim a publication revision.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "widget_id": {"type": "string", "description": "Widget id; defaults to hermes-brief."},
+        },
+        "required": [],
+    },
+}
+
+
 WIDGET_SET_QUIET_HOURS = {
     "name": "widget_set_quiet_hours",
     "description": "Set or clear a widget's UTC quiet-hours window; high-priority wakes degrade visibly to normal during it.",

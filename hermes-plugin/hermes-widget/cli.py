@@ -290,6 +290,10 @@ def add_parser(parser: Any) -> None:
     status.add_argument("--host", default=None)
     status.add_argument("--json", action="store_true", help="Machine-readable JSON.")
 
+    wake = commands.add_parser("wake-test", help="Send one content-free UnifiedPush wake and show receipts.")
+    wake.add_argument("--widget-id", default=store.DEFAULT_WIDGET_ID)
+    wake.add_argument("--json", action="store_true", help="Machine-readable JSON.")
+
     routine = commands.add_parser("routine", help="Install or remove the background refresh job.")
     routine.add_argument("--schedule", default=proactive.DEFAULT_SCHEDULE)
     routine.add_argument("--widget-id", default=store.DEFAULT_WIDGET_ID)
@@ -344,8 +348,8 @@ def add_parser(parser: Any) -> None:
         help="Render a layout JSON file to an HTML preview (no device needed).",
     )
     prev.add_argument("layout_file", nargs="?", help="Path to a v2 layout JSON file (legacy HTML mode).")
-    prev.add_argument("--out", default=None, help="Output HTML path or PNG output directory.")
-    prev.add_argument("--json", action="store_true", help="Print the dry-run/report JSON.")
+    prev.add_argument("--out", default=None, help="Output HTML path or PNG directory; with --json, PNGs are still written when set.")
+    prev.add_argument("--json", action="store_true", help="Print JSON; publication PNGs are written when --out is also set.")
     prev.add_argument("--widget-id", default=store.DEFAULT_WIDGET_ID, help="Widget id for publication preview.")
     prev.add_argument("--sizes", default=None, help="Comma-separated publication sizes, e.g. 2x2,4x2,4x4.")
     prev.add_argument("--publication-file", default=None, help="JSON file containing a publication to preview before publishing.")
@@ -364,6 +368,7 @@ def dispatch(args: Any) -> int:
         "code": _code,
         "pair": _pair,
         "status": _status,
+        "wake-test": _wake_test,
         "routine": _routine,
         "devices": _devices,
         "doctor": _doctor,
@@ -441,44 +446,51 @@ def _preview(args: Any) -> int:
         print("publication file must contain a JSON object")
         return 1
     try:
+        publication: dict[str, Any] | None = None
         if proposed is None:
             publication = store.get_publication(widget_id)
             if publication is None:
                 print(f"no publication for widget {widget_id!r}")
                 return 1
-        elif isinstance(proposed.get("content"), dict) and not any(
-            key in proposed for key in ("text", "svg", "file_path", "filePath")
-        ):
-            publication = {**proposed, "widgetId": widget_id}
         else:
-            prepared = store.prepare_publication(
-                title=proposed.get("title"), summary=proposed.get("summary"),
-                text=proposed.get("text"), svg=proposed.get("svg"),
-                file_path=proposed.get("file_path", proposed.get("filePath")),
-                expires_at=proposed.get("expires_at", proposed.get("expiresAt")),
-                ttl_seconds=proposed.get("ttl_seconds", proposed.get("ttlSeconds")),
-                max_age_seconds=proposed.get("max_age_seconds", proposed.get("maxAgeSeconds")),
-                priority=proposed.get("priority", "normal"),
-                item_id=proposed.get("item_id", proposed.get("itemId")),
-                actions=proposed.get("actions"),
-            )
-            if prepared.kind == "text":
-                content = {"type": "text", "mediaType": "text/plain; charset=utf-8", "text": prepared.text}
-            else:
-                assert prepared.asset is not None
-                content = {
-                    "type": "image", "mediaType": prepared.asset.media_type,
-                    "width": prepared.asset.width, "height": prepared.asset.height,
-                    "bytes": len(prepared.asset.data), "sha256": prepared.asset.sha256,
-                    "data": base64.b64encode(prepared.asset.data).decode("ascii"),
+            content_source = proposed.get("content")
+            if isinstance(content_source, dict) and not any(
+                key in proposed for key in ("text", "svg", "file_path", "filePath")
+            ):
+                if content_source.get("filePath") or content_source.get("file_path"):
+                    proposed = {**proposed, "filePath": content_source.get("filePath", content_source.get("file_path"))}
+                    proposed.pop("content", None)
+                else:
+                    publication = {**proposed, "widgetId": widget_id}
+            if publication is None:
+                prepared = store.prepare_publication(
+                    title=proposed.get("title"), summary=proposed.get("summary"),
+                    text=proposed.get("text"), svg=proposed.get("svg"),
+                    file_path=proposed.get("file_path", proposed.get("filePath")),
+                    expires_at=proposed.get("expires_at", proposed.get("expiresAt")),
+                    ttl_seconds=proposed.get("ttl_seconds", proposed.get("ttlSeconds")),
+                    max_age_seconds=proposed.get("max_age_seconds", proposed.get("maxAgeSeconds")),
+                    priority=proposed.get("priority", "normal"),
+                    item_id=proposed.get("item_id", proposed.get("itemId")),
+                    actions=proposed.get("actions"),
+                )
+                if prepared.kind == "text":
+                    content = {"type": "text", "mediaType": "text/plain; charset=utf-8", "text": prepared.text}
+                else:
+                    assert prepared.asset is not None
+                    content = {
+                        "type": "image", "mediaType": prepared.asset.media_type,
+                        "width": prepared.asset.width, "height": prepared.asset.height,
+                        "bytes": len(prepared.asset.data), "sha256": prepared.asset.sha256,
+                        "data": base64.b64encode(prepared.asset.data).decode("ascii"),
+                    }
+                publication = {
+                    "version": 1, "widgetId": widget_id, "publicationId": "preview", "revision": 0,
+                    "kind": prepared.kind, "title": prepared.title, "summary": prepared.summary,
+                    "publishedAt": store._now(), "expiresAt": prepared.expires_at,
+                    "priority": prepared.priority, "itemId": prepared.item_id,
+                    "actions": list(prepared.actions), "content": content,
                 }
-            publication = {
-                "version": 1, "widgetId": widget_id, "publicationId": "preview", "revision": 0,
-                "kind": prepared.kind, "title": prepared.title, "summary": prepared.summary,
-                "publishedAt": store._now(), "expiresAt": prepared.expires_at,
-                "priority": prepared.priority, "itemId": prepared.item_id,
-                "actions": list(prepared.actions), "content": content,
-            }
         rendered = preview.render_publication_previews(
             publication,
             sizes=getattr(args, "sizes", None),
@@ -488,15 +500,31 @@ def _preview(args: Any) -> int:
     except (ValueError, store.StoreError) as exc:
         print(f"preview failed: {exc}")
         return 1
-    if getattr(args, "json", False):
-        print(json.dumps({"ok": True, "widgetId": widget_id, "previews": rendered}, indent=2))
-        return 0
-    out_dir = Path(args.out) if args.out else Path.cwd() / "widget-previews"
-    out_dir.mkdir(parents=True, exist_ok=True)
+    last_render = store._last_render_metrics()
     for item in rendered:
-        target = out_dir / f"{widget_id}-{item['size']}.png"
-        target.write_bytes(base64.b64decode(item["data"]))
-        print(f"preview written to {target}")
+        if item.get("renderer") == "svg-renderer-unavailable" and last_render:
+            item["note"] = (
+                "No local SVG renderer (CairoSVG/libcairo); "
+                f"last device render {last_render['width']}×{last_render['height']}px"
+            )
+    out_dir = Path(args.out) if args.out else (None if getattr(args, "json", False) else Path.cwd() / "widget-previews")
+    files: list[str] = []
+    if out_dir is not None:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        for item in rendered:
+            target = out_dir / f"{widget_id}-{item['size']}.png"
+            target.write_bytes(base64.b64decode(item["data"]))
+            files.append(str(target))
+    if getattr(args, "json", False):
+        print(json.dumps({
+            "ok": True, "widgetId": widget_id, "previews": rendered, "files": files,
+            "filesWritten": bool(files),
+        }, indent=2))
+        return 0
+    for item, filename in zip(rendered, files):
+        print(f"preview written to {filename}")
+        if item.get("note"):
+            print(f"  note {item['size']}: {item['note']}")
     return 0
 
 
@@ -881,6 +909,7 @@ def _status(args: Any) -> int:
             "revisions": publication.get("revisions", []),
             "revisionHistory": publication.get("revisionHistory", {}),
             "warnings": publication.get("warnings", []),
+            "wake": publication.get("wake", {"devices": [], "registeredCount": 0}),
             "delivery": publication.get("delivery", []),
             "inventory": publication.get("inventory", []),
             "intents": publication.get("intents", []),
@@ -910,6 +939,17 @@ def _status(args: Any) -> int:
     print(f"Publication:  {publication.get('state', 'unknown')}" + (" (stale)" if publication.get("stale") else ""))
     for warning in publication.get("warnings", []):
         print(f"Warning:      {warning.get('code')}: {warning.get('detail')}")
+    wake = publication.get("wake", {"devices": [], "registeredCount": 0})
+    if not wake.get("devices"):
+        print("Wake:         no paired devices")
+    for item in wake.get("devices", []):
+        state = item.get("state", "unknown")
+        detail = f" failure={item.get('failureReason')}" if item.get("failureReason") else ""
+        print(
+            f"Wake:         {item.get('label') or item.get('deviceId')} "
+            f"{state} (distributor={item.get('distributorPresent')}, "
+            f"registered={item.get('registered')}){detail}"
+        )
     print(f"Instances:    {len(publication.get('inventory', []))} registered")
     print(f"Intents:      {len(publication.get('intents', []))} recorded")
     if publication.get("anomalies"):
@@ -928,6 +968,24 @@ def _status(args: Any) -> int:
             detail += f" superseded-unfetched={skipped}"
         print(f"  - {item.get('label')} [{st}] {item.get('state')}{detail}")
     return 0
+
+
+def _wake_test(args: Any) -> int:
+    try:
+        result = store.wake_test(getattr(args, "widget_id", store.DEFAULT_WIDGET_ID))
+    except store.StoreError as exc:
+        print(_redact(str(exc)))
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps(result, indent=2))
+    else:
+        print("UnifiedPush wake test (content-free; no publication revision created)")
+        for item in result.get("receiptChain", []):
+            detail = f" ({item['detail']})" if item.get("detail") else ""
+            print(f"  {item.get('label') or item.get('deviceId')}: {item.get('state')}{detail}")
+        if not result.get("receiptChain"):
+            print("  no registered push endpoint")
+    return 0 if result.get("ok") else 1
 
 
 def _routine(args: Any) -> int:
@@ -1125,7 +1183,12 @@ def _publish(args: Any) -> int:
     if getattr(args, "json", False):
         print(json.dumps({"ok": True, **result}, indent=2))
     else:
-        print(f"Published {widget_id} at {result.get('updatedAt')}")
+        print(
+            f"Stored legacy layout {widget_id} (scope=legacy_layout, publicationCreated=false) "
+            f"at {result.get('storedAt')}"
+        )
+        for warning in result.get("warnings", []):
+            print(f"  warning {warning.get('code')}: {warning.get('detail')}")
     return 0
 
 

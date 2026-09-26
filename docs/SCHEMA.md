@@ -159,7 +159,9 @@ contains bounded base64 PNGs; the CLI writes them with:
 
 Capacity findings (`TEXT_MAY_CLIP_2X2`, `LAYOUT_MAY_CLIP_2X2`, and image letterbox warnings)
 are advisory. A warning never silently truncates a publication; the device remains the final
-render authority.
+render authority. A missing local SVG rasterizer is reported as an explicit renderer note,
+not as a successful-looking placeholder. Relative fixture paths resolve from the checkout or
+installed plugin copy.
 
 ## Dry run and preview
 

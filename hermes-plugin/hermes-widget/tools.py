@@ -75,7 +75,13 @@ def widget_update(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     return _dumps(
         {
             **result,
-            "next": "The widget will pick this up on its next poll; use widget_read_events to see taps.",
+            "delivery": "not_published_to_devices",
+            "visibility": "not_claimed",
+            "next": (
+                "This is a legacy layout stored for API compatibility; connected devices "
+                "fetch publications. Use widget_publish for phone-visible content, and "
+                "widget_read_events for taps."
+            ),
         }
     )
 
@@ -284,6 +290,12 @@ def _preview_publication(args: dict[str, Any]) -> tuple[dict[str, Any], str]:
         return publication, widget_id
     if not isinstance(proposed, dict):
         raise store.PublicationError("publication must be a JSON object")
+    content = proposed.get("content")
+    if isinstance(content, dict) and (content.get("filePath") or content.get("file_path")) and not any(
+        key in proposed for key in ("text", "svg", "file_path", "filePath")
+    ):
+        proposed = {**proposed, "filePath": content.get("filePath", content.get("file_path"))}
+        proposed.pop("content", None)
     if isinstance(proposed.get("content"), dict) and not any(
         key in proposed for key in ("text", "svg", "file_path", "filePath")
     ):
@@ -351,6 +363,13 @@ def widget_preview(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
         )
     except (ValueError, store.StoreError) as exc:
         return _store_error(exc) if isinstance(exc, store.StoreError) else _error("invalid_preview", str(exc))
+    last_render = store._last_render_metrics()
+    for item in rendered:
+        if item.get("renderer") == "svg-renderer-unavailable" and last_render:
+            item["note"] = (
+                "No local SVG renderer (CairoSVG/libcairo); "
+                f"last device render {last_render['width']}×{last_render['height']}px"
+            )
     return _dumps({
         "ok": True,
         "widgetId": widget_id,
@@ -397,6 +416,15 @@ def widget_resolve_intent(args: dict[str, Any] | None = None, **_kwargs: Any) ->
     except store.StoreError as exc:
         return _store_error(exc)
     return _dumps({"ok": True, "intent": result})
+
+
+def widget_wake_test(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    args = args or {}
+    widget_id = args.get("widget_id", args.get("widgetId")) or store.DEFAULT_WIDGET_ID
+    try:
+        return _dumps(store.wake_test(widget_id))
+    except store.StoreError as exc:
+        return _store_error(exc)
 
 
 def widget_set_quiet_hours(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
@@ -461,6 +489,7 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             "revisions": publication.get("revisions", []),
             "revisionHistory": publication.get("revisionHistory", {}),
             "warnings": publication.get("warnings", []),
+            "wake": publication.get("wake", {"devices": [], "registeredCount": 0}),
             "delivery": publication.get("delivery", []),
             "deliveryState": delivery_state,
             "inventory": publication.get("inventory", []),

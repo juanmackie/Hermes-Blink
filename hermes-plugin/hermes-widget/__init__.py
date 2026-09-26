@@ -36,6 +36,7 @@ _TOOLS: tuple[tuple[dict[str, Any], Callable[..., str]], ...] = (
     (schemas.WIDGET_PREVIEW, tools.widget_preview),
     (schemas.WIDGET_READ_INTENTS, tools.widget_read_intents),
     (schemas.WIDGET_RESOLVE_INTENT, tools.widget_resolve_intent),
+    (schemas.WIDGET_WAKE_TEST, tools.widget_wake_test),
     (schemas.WIDGET_SET_QUIET_HOURS, tools.widget_set_quiet_hours),
     (schemas.WIDGET_STATUS, tools.widget_status),
 )

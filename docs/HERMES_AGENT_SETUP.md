@@ -220,7 +220,13 @@ server configuration, and this proactive routine. On current Hermes hosts the pl
 bounded proactive-guidance section after memory, rendered once per session rather than injecting
 a reminder into every turn.
 
-For a genuinely time-sensitive update, publish with `priority: "high"`. The Android app uses a
+For a genuinely time-sensitive update, publish with `priority: "high"`. To validate the wake
+lane without inventing content or a publication revision, run:
+
+    hermes widget wake-test --json
+
+It sends one content-free `fetch` wake and reports `nudge_sent`/`failed` per registered device.
+The Android app uses a
 user-selected UnifiedPush distributor (a self-hosted ntfy instance is suitable); the host sends
 only a `fetch` wake and the phone pulls the content over the private HTTPS path. The app's
 **Delivery diagnostics** screen shows the last poll/fetch/render timestamps and battery

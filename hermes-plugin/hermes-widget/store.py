@@ -75,6 +75,7 @@ HIGH_PRIORITY_MAX_PER_DAY = PRIORITY_HIGH_MAX_PER_DAY
 ACTION_INTENT_TTL_SECONDS = 7 * 24 * 3600
 ACTION_RATE_WINDOW_SECONDS = 3600
 ACTION_MAX_PER_WINDOW = 30
+PUSH_STATES = ("unknown", "unavailable", "registering", "registered", "failed", "unregistered")
 MAX_WIDGET_INSTANCES = 32
 PAIRING_TTL_MINUTES = 10
 DEVICE_TOKEN_PREFIX = "dvc" + "_"
@@ -331,6 +332,11 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             "updated_at TEXT NOT NULL)"
         )
         conn.execute(
+            "CREATE TABLE IF NOT EXISTS device_push_state ("
+            "device_id TEXT PRIMARY KEY, state TEXT NOT NULL, distributor_present INTEGER, "
+            "failure_reason TEXT, updated_at TEXT NOT NULL)"
+        )
+        conn.execute(
             "CREATE TABLE IF NOT EXISTS widget_instances ("
             "device_id TEXT NOT NULL, widget_id TEXT NOT NULL, instance_id TEXT NOT NULL, "
             "size_class TEXT NOT NULL, width_dp INTEGER NOT NULL, height_dp INTEGER NOT NULL, "
@@ -494,7 +500,9 @@ def put_widget(widget_id: str, layout: dict) -> dict:
     validate_layout(stored)
     check_push_rate(widget_id)
 
-    updated_at = stored.get("updatedAt") or _now()
+    layout_updated_at = stored.get("updatedAt")
+    stored_at = _now()
+    updated_at = layout_updated_at or stored_at
     stored["updatedAt"] = updated_at
     payload = json.dumps(stored, separators=(",", ":"), ensure_ascii=False)
 
@@ -504,7 +512,7 @@ def put_widget(widget_id: str, layout: dict) -> dict:
             conn.execute(
                 "INSERT OR REPLACE INTO widgets (widget_id, layout_json, updated_at) "
                 "VALUES (?, ?, ?)",
-                (widget_id, payload, updated_at),
+                (widget_id, payload, stored_at),
             )
             for row in conn.execute(
                 "SELECT device_id FROM devices WHERE revoked = 0"
@@ -521,7 +529,21 @@ def put_widget(widget_id: str, layout: dict) -> dict:
         warnings = report.get("capacityWarnings", [])
     except Exception:  # noqa: BLE001 - warnings are advisory after the write committed
         warnings = []
-    return {"ok": True, "widgetId": widget_id, "updatedAt": updated_at, "warnings": warnings}
+    warnings = list(warnings) + [{
+        "code": "legacy_layout_not_published",
+        "detail": "stored in the legacy layout store; connected devices fetch /publication and will not render this layout",
+    }]
+    return {
+        "ok": True,
+        "widgetId": widget_id,
+        "scope": "legacy_layout",
+        "publicationCreated": False,
+        "updatedAt": updated_at,
+        "layoutUpdatedAt": layout_updated_at,
+        "storedAt": stored_at,
+        "note": "Legacy layout stored; publish a text/SVG/raster publication for the phone.",
+        "warnings": warnings,
+    }
 
 
 def get_widget(widget_id: str) -> dict | None:
@@ -1433,6 +1455,7 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
         )
         and not any(owner_revision[1] == revision for owner_revision in fetches)
     ]
+    push_states = list_push_states()
     return {
         "widgetId": widget_id,
         "state": (
@@ -1449,6 +1472,10 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
         "revisions": revisions,
         "revisionHistory": revision_history,
         "warnings": history_warnings,
+        "wake": {
+            "devices": push_states,
+            "registeredCount": sum(1 for item in push_states if item["registered"]),
+        },
         "delivery": delivery,
         "inventory": list_widget_instances(widget_id),
         "anomalies": anomalies,
@@ -1726,6 +1753,13 @@ def set_device_push_endpoint(device_id: str, endpoint: Any) -> dict:
             conn = _connect()
             try:
                 conn.execute("DELETE FROM device_push_endpoints WHERE device_id = ?", (device_id,))
+                conn.execute(
+                    "INSERT INTO device_push_state "
+                    "(device_id, state, distributor_present, failure_reason, updated_at) "
+                    "VALUES (?, 'unregistered', NULL, NULL, ?) ON CONFLICT(device_id) DO UPDATE SET "
+                    "state='unregistered', failure_reason=NULL, updated_at=excluded.updated_at",
+                    (device_id, _now()),
+                )
                 conn.commit()
             finally:
                 conn.close()
@@ -1750,10 +1784,138 @@ def set_device_push_endpoint(device_id: str, endpoint: Any) -> dict:
                 "endpoint=excluded.endpoint, endpoint_hash=excluded.endpoint_hash, updated_at=excluded.updated_at",
                 (device_id, clean, endpoint_hash, now),
             )
+            conn.execute(
+                "INSERT INTO device_push_state "
+                "(device_id, state, distributor_present, failure_reason, updated_at) "
+                "VALUES (?, 'registered', 1, NULL, ?) ON CONFLICT(device_id) DO UPDATE SET "
+                "state='registered', distributor_present=1, failure_reason=NULL, updated_at=excluded.updated_at",
+                (device_id, now),
+            )
             conn.commit()
         finally:
             conn.close()
     return {"deviceId": device_id, "pushEndpointRegistered": True, "updatedAt": now}
+
+
+def set_device_push_state(
+    device_id: str,
+    state: Any,
+    *,
+    distributor_present: Any = None,
+    failure_reason: Any = None,
+) -> dict:
+    """Record what the phone's UnifiedPush registration is currently doing."""
+    if not isinstance(device_id, str) or not device_id:
+        raise StoreError("device_id is required")
+    if state not in PUSH_STATES:
+        raise StoreError(f"push state must be one of {list(PUSH_STATES)}")
+    if distributor_present is not None and not isinstance(distributor_present, bool):
+        raise StoreError("distributor_present must be boolean or null")
+    if failure_reason is not None and (not isinstance(failure_reason, str) or len(failure_reason) > 200):
+        raise StoreError("failure_reason must be a bounded string or null")
+    now = _now()
+    with _LOCK:
+        conn = _connect()
+        try:
+            active = conn.execute(
+                "SELECT device_id FROM devices WHERE device_id = ? AND revoked = 0", (device_id,)
+            ).fetchone()
+            if active is None:
+                raise StoreError("device is revoked or unknown")
+            conn.execute(
+                "INSERT INTO device_push_state "
+                "(device_id, state, distributor_present, failure_reason, updated_at) "
+                "VALUES (?, ?, ?, ?, ?) ON CONFLICT(device_id) DO UPDATE SET "
+                "state=excluded.state, distributor_present=excluded.distributor_present, "
+                "failure_reason=excluded.failure_reason, updated_at=excluded.updated_at",
+                (device_id, state, None if distributor_present is None else int(distributor_present), failure_reason, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return get_device_push_state(device_id)
+
+
+def get_device_push_state(device_id: str) -> dict:
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT d.device_id, d.label, d.revoked, p.endpoint, s.state, "
+                "s.distributor_present, s.failure_reason, s.updated_at "
+                "FROM devices d LEFT JOIN device_push_endpoints p ON p.device_id = d.device_id "
+                "LEFT JOIN device_push_state s ON s.device_id = d.device_id WHERE d.device_id = ?",
+                (device_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    if row is None:
+        raise StoreError("device is unknown")
+    registered = bool(row["endpoint"])
+    state = row["state"] or ("registered" if registered else "unknown")
+    if row["state"] is None and not registered:
+        state = "unknown"
+    return {
+        "deviceId": row["device_id"],
+        "label": row["label"],
+        "revoked": bool(row["revoked"]),
+        "state": state,
+        "distributorPresent": None if row["distributor_present"] is None else bool(row["distributor_present"]),
+        "registered": registered,
+        "failureReason": row["failure_reason"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def list_push_states() -> list[dict]:
+    with _LOCK:
+        conn = _connect()
+        try:
+            ids = [row["device_id"] for row in conn.execute("SELECT device_id FROM devices ORDER BY created_at").fetchall()]
+        finally:
+            conn.close()
+    return [get_device_push_state(device_id) for device_id in ids]
+
+
+def wake_test(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
+    """Send one content-free wake to registered device endpoints and report results.
+
+    This deliberately does not create a publication revision or delivery receipt:
+    it validates the wake lane, not publication delivery.
+    """
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT d.device_id, d.label, p.endpoint FROM devices d "
+                "JOIN device_push_endpoints p ON p.device_id = d.device_id "
+                "LEFT JOIN widget_devices wd ON wd.device_id = d.device_id AND wd.widget_id = ? "
+                "WHERE d.revoked = 0 AND (wd.widget_id IS NOT NULL OR ? = ?)",
+                (widget_id, widget_id, widget_id),
+            ).fetchall()
+        finally:
+            conn.close()
+    results = []
+    for row in rows:
+        item = {
+            "deviceId": row["device_id"],
+            "label": row["label"],
+            "state": "failed",
+            "at": _now(),
+        }
+        try:
+            _push.wake(str(row["endpoint"]))
+            item["state"] = "nudge_sent"
+        except (ValueError, _push.PushError) as exc:
+            item["detail"] = str(exc)
+        results.append(item)
+    return {
+        "ok": bool(results) and all(item["state"] == "nudge_sent" for item in results),
+        "widgetId": widget_id,
+        "contentFree": True,
+        "receiptChain": results,
+        "note": "No publication revision was created; this tests only the UnifiedPush lane.",
+    }
 
 
 def _size_class(width_dp: int, height_dp: int, declared: Any = None) -> str:
