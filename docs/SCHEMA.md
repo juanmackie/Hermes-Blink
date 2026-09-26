@@ -221,7 +221,10 @@ and `widget_status` report both channels.
 
 Every revision is retained in `publication_revisions`. A revision replaced before a device
 fetched it is marked `superseded` and appears in that device's `skippedRevisions`, so
-"waiting" and "lost" are different states. Each publication requires `title` and `summary`
+"waiting" and "lost" are different states. If the current `publications.revision` is newer
+than the maximum recorded history revision, `widget_status` and `hermes widget status` return a
+`revision_history_gap` warning instead of presenting a truncated history as complete. Each
+publication requires `title` and `summary`
 and exactly one of `text`, inline `svg`, or a local PNG/JPEG/WebP `file_path`. Optional
 `priority` is `normal` or `high`; optional `itemId` and `actions` provide stable queue-only
 interaction. The effective priority and any degradation reason are returned in the envelope.

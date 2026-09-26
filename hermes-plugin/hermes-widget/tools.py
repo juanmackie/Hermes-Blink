@@ -459,6 +459,8 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             "publicationState": publication.get("state"),
             "stale": publication.get("stale", False),
             "revisions": publication.get("revisions", []),
+            "revisionHistory": publication.get("revisionHistory", {}),
+            "warnings": publication.get("warnings", []),
             "delivery": publication.get("delivery", []),
             "deliveryState": delivery_state,
             "inventory": publication.get("inventory", []),

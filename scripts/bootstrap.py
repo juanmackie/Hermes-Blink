@@ -162,6 +162,9 @@ def install_plugin(home: Path) -> Path:
         staging,
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc", ".pytest_cache", "_testdata"),
     )
+    fixture_source = REPO / "fixtures"
+    if fixture_source.is_dir():
+        shutil.copytree(fixture_source, staging / "fixtures")
     try:
         if target.exists():
             target.replace(backup)

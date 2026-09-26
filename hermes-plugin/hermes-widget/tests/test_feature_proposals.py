@@ -43,6 +43,7 @@ class FeatureProposals(unittest.TestCase):
         _load_plugin()
         cls.store = importlib.import_module("hermes_plugins.hermes_widget.store")
         cls.preview = importlib.import_module("hermes_plugins.hermes_widget.preview")
+        cls.cli = importlib.import_module("hermes_plugins.hermes_widget.cli")
         cls.server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
         cls.server = cls.server_module.make_server("127.0.0.1", 0)
         cls.port = cls.server.server_address[1]
@@ -78,6 +79,13 @@ class FeatureProposals(unittest.TestCase):
             return response.status, json.loads(raw.decode()) if raw else {}
         finally:
             conn.close()
+
+    def test_cli_resolves_repository_fixture_from_any_cwd(self):
+        with tempfile.TemporaryDirectory(prefix="hermes-cwd-") as temp:
+            with patch("pathlib.Path.cwd", return_value=Path(temp)):
+                resolved = self.cli._resolve_input_file("fixtures/brief-v2.json", label="layout file")
+        self.assertTrue(resolved.is_file())
+        self.assertEqual(resolved.name, "brief-v2.json")
 
     def test_priority_wake_is_content_free_and_receipted(self):
         self.store.set_device_push_endpoint(self.device["deviceId"], "https://ntfy.example/up/device")

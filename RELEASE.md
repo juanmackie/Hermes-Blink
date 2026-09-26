@@ -14,6 +14,10 @@
 - Fixed Pillow-only raster previews on hosts without libcairo and added a Pillow text fallback;
   SVG rasterisation remains the only preview path that needs CairoSVG.
 - `hermes widget publish` now supports publication-mode CLI arguments including `--priority high`.
+- `widget_status` and `hermes widget status` now surface `revision_history_gap` with the
+  current/max recorded revisions instead of presenting a truncated or emptied history as truth.
+- Relative JSON fixture paths resolve from the current directory, checkout root, or the
+  fixture copy inside the installed plugin; missing paths report an actionable search list.
 
 ## v3.1.0 — priority wake, previews, and queued actions
 

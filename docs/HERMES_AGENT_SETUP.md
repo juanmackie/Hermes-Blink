@@ -254,6 +254,7 @@ the colour rule, the spacing rhythm, and the widget sizes, plus four reference l
 `fixtures/golden/`. Two commands make that loop safe and visible:
 
     hermes widget preview fixtures/golden/large-brief.json
+    # Relative fixture paths resolve from the checkout root or the installed plugin copy.
     # -> fixtures/golden/large-brief.preview.html — every widget shape, with the widget
     #    bounds outlined so you can see where Android would clip it
 

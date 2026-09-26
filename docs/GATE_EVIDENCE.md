@@ -90,7 +90,8 @@ and verify `/v1/health` before pairing.
 - The host suite now includes seven feature-proposal regression tests covering content-free
   priority wakes and degradation, ordered delivery receipts, Pillow-only raster previews,
   the no-Cairo text path, registered-size PNG previews, cache-safe proactive guidance,
-  durable idempotent action intents/audit, and revoked-device rejection: **77/77 passed** on
+  revision-history gap warnings, fixture-path resolution, durable idempotent action
+  intents/audit, and revoked-device rejection: **79/79 passed** on
   CPython 3.11.
 - `python scripts/check-contract-parity.py`, `python scripts/verify-cli-local.py`, and
   `pyflakes hermes-plugin/hermes-widget/*.py` passed.

@@ -158,6 +158,10 @@ hermes widget preview --publication-file proposal.json --out ./widget-previews
 hermes widget publish --title "Market open" --summary "Brief" --text "..." --priority high
 ```
 
+Fixture paths such as `fixtures/brief-v2.json` are resolved from the current directory, the
+checkout root, or the installed plugin's fixture copy, so the command does not require a
+particular working directory.
+
 Publication and v2 `button`/`list_item` actions may carry stable `itemId`s. `approve`, `snooze`,
 and `open` taps are durably queued as allowlisted intents; they never execute on the HTTP
 server. The phone keeps a bounded retry outbox when the private path is unavailable, and the

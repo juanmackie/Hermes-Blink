@@ -116,6 +116,21 @@ class DeliveryTruthfulness(unittest.TestCase):
         self.assertEqual(info["skippedRevisions"], [1])
         self.assertEqual(status["pollIntervalSeconds"], 900)
 
+    def test_status_surfaces_a_revision_history_gap(self):
+        self.store.put_publication("hermes-brief", title="One", summary="first", text="a")
+        self.store.put_publication("hermes-brief", title="Two", summary="second", text="b")
+        with sqlite3.connect(str(self.store.db_path())) as conn:
+            conn.execute("DELETE FROM publication_revisions WHERE widget_id = ?", ("hermes-brief",))
+            conn.commit()
+        status = self.store.publication_status("hermes-brief")
+        self.assertEqual(status["revisionHistory"]["currentRevision"], 2)
+        self.assertEqual(status["revisionHistory"]["maxRecordedRevision"], 0)
+        self.assertEqual(status["revisionHistory"]["missingRevisionCount"], 2)
+        self.assertEqual(status["revisionHistory"]["missingRevisions"], [1, 2])
+        self.assertTrue(status["revisionHistory"]["gap"])
+        self.assertEqual(status["warnings"][0]["code"], "revision_history_gap")
+        self.assertIn("cannot be treated as complete", status["warnings"][0]["detail"])
+
     def test_fetching_the_current_revision_clears_the_skipped_state(self):
         device = self.pair_device()
         self.store.put_publication("hermes-brief", title="One", summary="first", text="a")

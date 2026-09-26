@@ -1299,6 +1299,43 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
         finally:
             conn.close()
     current_revision = _as_int(publication.get("revision", 0), "publication revision") if publication else 0
+    recorded_revisions = [
+        _as_int(row["revision"], "publication revision") for row in revision_rows
+    ]
+    history_max = max(recorded_revisions, default=0)
+    recorded_set = set(recorded_revisions)
+    missing_history = (
+        [revision for revision in range(1, current_revision + 1) if revision not in recorded_set]
+        if 0 < current_revision <= 10_000
+        else []
+    )
+    history_gap = bool(
+        current_revision
+        and (current_revision > history_max or len(recorded_set) < current_revision)
+    )
+    history_warnings: list[dict[str, Any]] = []
+    if history_gap:
+        history_warnings.append({
+            "code": "revision_history_gap",
+            "detail": (
+                f"publications is at revision {current_revision}, but publication_revisions "
+                f"only reaches {history_max} ({len(recorded_revisions)} rows); revision history "
+                "may have been removed or truncated, so skipped revisions cannot be treated as complete"
+            ),
+            "currentRevision": current_revision,
+            "maxRecordedRevision": history_max,
+            "recordedCount": len(recorded_revisions),
+            "missingRevisions": missing_history[:100],
+            "missingRevisionCount": current_revision - len(recorded_set) if current_revision else 0,
+        })
+    revision_history = {
+        "currentRevision": current_revision,
+        "maxRecordedRevision": history_max,
+        "recordedCount": len(recorded_revisions),
+        "missingRevisions": missing_history[:100],
+        "missingRevisionCount": current_revision - len(recorded_set) if current_revision else 0,
+        "gap": history_gap,
+    }
     stale = bool(publication) and _publication_stale(publication)
     delivery = []
     receipt_map: dict[tuple[str, int], list[dict[str, Any]]] = {}
@@ -1410,6 +1447,8 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
         "stale": stale,
         "publication": publication,
         "revisions": revisions,
+        "revisionHistory": revision_history,
+        "warnings": history_warnings,
         "delivery": delivery,
         "inventory": list_widget_instances(widget_id),
         "anomalies": anomalies,

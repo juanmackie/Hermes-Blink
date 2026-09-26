@@ -37,6 +37,46 @@ _PLACEHOLDER_TEXT = "Your Hermes agent is connected. Ask it to update this widge
 _ALLOWED_STATES = frozenset({"needs_user_action", "starting", "awaiting_pairing", "ready", "degraded"})
 
 
+def _resolve_input_file(value: Any, *, label: str) -> Path:
+    """Resolve a user-supplied JSON path from cwd, the checkout, or Hermes home.
+
+    Fixture paths such as ``fixtures/golden/large-brief.json`` are common in the
+    contract docs, but an installed plugin is not necessarily running from the
+    repository root.  The resolver keeps that ergonomic path working without
+    hiding a missing file behind a raw OSError.
+    """
+    if not isinstance(value, (str, os.PathLike)) or not str(value).strip():
+        raise FileNotFoundError(f"{label} path is required")
+    raw = Path(value).expanduser()
+    candidates: list[Path] = []
+    if raw.is_absolute():
+        candidates.append(raw)
+    else:
+        candidates.extend((Path.cwd() / raw, raw, Path(__file__).parent / raw))
+        home = os.environ.get("HERMES_HOME", "").strip()
+        if home:
+            candidates.extend((Path(home) / raw, Path(home) / "fixtures" / raw.name))
+        # In a source checkout this is the repository root; in an installed copy
+        # it is the Hermes home, while the plugin-local copy keeps fixtures available.
+        candidates.append(Path(__file__).resolve().parents[2] / raw)
+    seen: set[Path] = set()
+    searched: list[str] = []
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        searched.append(str(resolved))
+        try:
+            if resolved.is_file():
+                return resolved
+        except OSError:
+            continue
+    raise FileNotFoundError(
+        f"{label} not found: {raw} (searched: {', '.join(searched)})"
+    )
+
+
 def _placeholder_layout(widget_id: str) -> dict[str, Any]:
     """A valid v2 first layout so a freshly paired device shows something useful."""
     return {
@@ -360,9 +400,10 @@ def _preview(args: Any) -> int:
     publication_mode = bool(getattr(args, "sizes", None) or getattr(args, "publication_file", None))
     source_path = getattr(args, "publication_file", None)
     if not publication_mode and not source_path and getattr(args, "layout_file", None):
-        source = Path(args.layout_file)
-        if not source.is_file():
-            print(f"layout file not found: {source}")
+        try:
+            source = _resolve_input_file(args.layout_file, label="layout file")
+        except FileNotFoundError as exc:
+            print(str(exc))
             return 1
         try:
             layout = json.loads(source.read_text(encoding="utf-8"))
@@ -386,9 +427,10 @@ def _preview(args: Any) -> int:
     widget_id = getattr(args, "widget_id", None) or store.DEFAULT_WIDGET_ID
     proposed = None
     if source_path:
-        source = Path(source_path)
-        if not source.is_file():
-            print(f"publication file not found: {source}")
+        try:
+            source = _resolve_input_file(source_path, label="publication file")
+        except FileNotFoundError as exc:
+            print(str(exc))
             return 1
         try:
             proposed = json.loads(source.read_text(encoding="utf-8"))
@@ -837,6 +879,8 @@ def _status(args: Any) -> int:
             "stale": publication.get("stale", False),
             "pollIntervalSeconds": publication.get("pollIntervalSeconds"),
             "revisions": publication.get("revisions", []),
+            "revisionHistory": publication.get("revisionHistory", {}),
+            "warnings": publication.get("warnings", []),
             "delivery": publication.get("delivery", []),
             "inventory": publication.get("inventory", []),
             "intents": publication.get("intents", []),
@@ -864,6 +908,8 @@ def _status(args: Any) -> int:
         print("Restart:      not required")
     print(f"Routine:      {'installed' if routine_ok else 'not installed (run hermes widget up)'}")
     print(f"Publication:  {publication.get('state', 'unknown')}" + (" (stale)" if publication.get("stale") else ""))
+    for warning in publication.get("warnings", []):
+        print(f"Warning:      {warning.get('code')}: {warning.get('detail')}")
     print(f"Instances:    {len(publication.get('inventory', []))} registered")
     print(f"Intents:      {len(publication.get('intents', []))} recorded")
     if publication.get("anomalies"):
@@ -997,7 +1043,8 @@ def _publish(args: Any) -> int:
         publication_file = getattr(args, "publication_file", None)
         if publication_file:
             try:
-                loaded = json.loads(Path(publication_file).read_text(encoding="utf-8"))
+                source = _resolve_input_file(publication_file, label="publication file")
+                loaded = json.loads(source.read_text(encoding="utf-8"))
             except Exception as exc:
                 err = {"error": "invalid_publication", "detail": _redact(str(exc))}
                 print(json.dumps(err, indent=2) if getattr(args, "json", False) else _redact(f"publish failed: {exc}"))
@@ -1057,7 +1104,8 @@ def _publish(args: Any) -> int:
             return 1
     elif layout_file:
         try:
-            payload = json.loads(Path(layout_file).read_text(encoding="utf-8"))
+            source = _resolve_input_file(layout_file, label="layout file")
+            payload = json.loads(source.read_text(encoding="utf-8"))
         except Exception as exc:
             err = {"error": "invalid_layout", "detail": _redact(str(exc))}
             print(json.dumps(err, indent=2) if getattr(args, "json", False) else _redact(f"publish failed: {exc}"))

@@ -44,7 +44,8 @@ Use the capability-based bootstrap from the repository root:
     bash scripts/bootstrap-linux.sh --json       # idempotent second run
 
 It detects the actual Hermes executable/version/profile/home, installs the plugin,
-skill, gateway startup hook, and one six-hour routine, then starts one healthy
+skill, fixture paths used by the contract CLI, gateway startup hook, and one six-hour routine,
+then starts one healthy
 server. Use `--restart-gateway` to reload the agent after installation, or
 `--skip-start` for install-only operations. `scripts/install-service.sh` remains
 as a compatibility wrapper.
