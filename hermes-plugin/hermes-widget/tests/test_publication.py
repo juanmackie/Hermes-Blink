@@ -118,6 +118,39 @@ class PublicationContract(unittest.TestCase):
         self.assertIn("does not prove", reminder["context"])
         self.assertTrue(callable(self.tools.widget_publish))
 
+    def test_proactive_guidance_uses_cache_safe_section_when_available(self):
+        plugin = _load_plugin()
+
+        class ModernContext:
+            def __init__(self):
+                self.section = None
+                self.hook = None
+
+            def register_system_prompt_section(self, *args, **kwargs):
+                self.section = (args, kwargs)
+
+            def register_hook(self, *args, **kwargs):
+                self.hook = (args, kwargs)
+
+        modern = ModernContext()
+        plugin._register_proactive_guidance(modern)
+        self.assertIsNotNone(modern.section)
+        self.assertIsNone(modern.hook)
+        self.assertEqual(modern.section[0][0], "hermes-widget.proactive-guidance")
+        self.assertEqual(modern.section[1]["position"], "after_memory")
+        self.assertLessEqual(len(plugin._system_prompt_section({})), 1800)
+
+        class LegacyContext:
+            def __init__(self):
+                self.hook = None
+
+            def register_hook(self, *args, **kwargs):
+                self.hook = (args, kwargs)
+
+        legacy = LegacyContext()
+        plugin._register_proactive_guidance(legacy)
+        self.assertEqual(legacy.hook[0][0], "pre_llm_call")
+
     def test_gateway_hook_branches_do_not_touch_global_platform_state(self):
         calls = []
 

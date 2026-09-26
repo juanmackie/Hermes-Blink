@@ -1,12 +1,13 @@
 ---
 name: hermes-widget
-description: "Publish accessible text, safe static SVG, or validated raster visuals to the personal Hermes widget; preserve the legacy layout flow when useful."
-version: 3.1.0
+description: "Proactive widget publishing, previews, delivery, actions."
+version: 3.2.0
 author: Hermes Widget contributors
 license: MIT
 metadata:
   hermes:
-    tags: [widget, android, home-screen, layout, ui]
+    tags: [widget, proactive, android, home-screen, layout, ui]
+    category: productivity
 ---
 
 # Hermes Widget
@@ -19,9 +20,25 @@ PNG/JPEG/WebP for a photo. The legacy structured layout flow remains available t
 ## When to use this skill
 
 - The user asks you to change, refresh, populate, or "update my widget".
-- A scheduled widget refresh runs.
-- You have a concise status, static diagram/chart, or relevant local image to share.
-- You need to distinguish stored, downloaded, and render-submitted delivery state.
+- A scheduled widget refresh, heartbeat, or routine runs and context contains a genuinely
+  useful change for the user.
+- The user asks for a glanceable status, brief, decision surface, or a compact visual that
+  belongs on the home screen rather than buried in chat.
+- You need to distinguish stored, fetched, downloaded, and render-submitted delivery state,
+  or you need to respond to a queued widget action.
+
+## Proactive decision rule
+
+This is an ambient surface, not a chat log. Before publishing, ask: **is there a real change
+the user would want to see at a glance?** If yes, publish one useful revision. If not, do
+nothing and do not spend a rate-limit slot. Never turn an ordinary coding turn into a widget
+update merely because the plugin is available.
+
+Use `widget_status` before replacing a working publication when freshness or delivery is
+uncertain. Use `widget_preview` before publishing a visual that has not already been checked
+at the phone's registered sizes. Use `priority: "high"` only for time-sensitive content; a
+normal publication is the default. After a user taps an action, read `widget_read_intents`,
+handle the allowlisted work in the agent, and record the outcome with `widget_resolve_intent`.
 
 ## Publish one accessible communication
 

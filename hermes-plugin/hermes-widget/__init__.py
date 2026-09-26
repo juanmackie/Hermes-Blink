@@ -22,8 +22,7 @@ SKILL_PATH = PLUGIN_DIR / "skills" / "widget" / "SKILL.md"
 
 _TOOLSET = "hermes-widget"
 _SKILL_DESCRIPTION = (
-    "How to publish accessible text, safe static SVG, or validated local raster "
-    "visuals to the personal Hermes widget and inspect delivery status."
+    "Proactive home-screen widget publishing, previews, delivery, and action intents."
 )
 
 _TOOLS: tuple[tuple[dict[str, Any], Callable[..., str]], ...] = (
@@ -48,11 +47,42 @@ def register(ctx: Any) -> None:
     _register_slash_command(ctx)
     _register_cli_command(ctx)
     _register_skill(ctx)
-    _register_context_reminder(ctx)
+    _register_proactive_guidance(ctx)
 
 
-def _register_context_reminder(ctx: Any) -> None:
-    """Make the one-way publishing surface discoverable during ordinary turns."""
+_PROACTIVE_GUIDANCE = (
+    "Hermes widget: use it when a useful user-facing update exists, the user asks for a "
+    "brief/status/decision surface, or a scheduled run finds a real change. Prefer "
+    "widget_publish with a truthful title, required summary, and exactly one supported "
+    "source; do not publish filler or republish an identical revision. Check "
+    "widget_status when delivery or freshness matters, widget_preview before committing "
+    "a visual, and widget_read_intents/widget_resolve_intent for queued taps. High "
+    "priority is only for genuinely time-sensitive content. Publishing stores a revision; "
+    "it never proves the user saw it (publishing does not prove delivery or visibility). "
+    "If setup is missing, use widget_setup rather than "
+    "guessing private paths."
+)
+
+
+def _register_proactive_guidance(ctx: Any) -> None:
+    """Add one bounded, cache-safe prompt section with a legacy hook fallback.
+
+    Current Hermes renders plugin prompt sections once per session, after memory,
+    instead of appending the same text to every turn.  The fallback keeps older
+    hosts functional without making the guidance a new dependency.
+    """
+    register_section = getattr(ctx, "register_system_prompt_section", None)
+    if callable(register_section):
+        try:
+            register_section(
+                "hermes-widget.proactive-guidance",
+                _system_prompt_section,
+                position="after_memory",
+                max_chars=1800,
+            )
+            return
+        except Exception:  # noqa: BLE001 - fall back for older/partially upgraded hosts
+            logger.debug("hermes-widget: prompt section unavailable; using hook fallback", exc_info=True)
     register_hook = getattr(ctx, "register_hook", None)
     if register_hook is None:
         return
@@ -62,16 +92,13 @@ def _register_context_reminder(ctx: Any) -> None:
         logger.warning("hermes-widget: failed to register availability reminder", exc_info=True)
 
 
+def _system_prompt_section(_session_info: Any = None) -> str:
+    return _PROACTIVE_GUIDANCE
+
+
 def _availability_reminder(**_kwargs: Any) -> dict[str, str]:
-    return {
-        "context": (
-            "Hermes widget publishing is available. When a useful user-facing update exists, "
-            "call widget_publish with a title, required summary, and exactly one text, safe "
-            "static SVG, or bounded local raster source; otherwise do nothing. Publishing "
-            "stores a revision and does not prove phone delivery or user visibility. High "
-            "priority asks for a content-free wake; queued actions are not executions."
-        )
-    }
+    """Legacy per-turn context shape used only when prompt sections are unavailable."""
+    return {"context": _PROACTIVE_GUIDANCE}
 
 
 # ---------------------------------------------------------------------------

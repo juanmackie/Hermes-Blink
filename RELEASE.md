@@ -1,5 +1,20 @@
 # Hermes Widget — Release notes
 
+## v3.2.0 — proactive, cache-safe agent behavior
+
+- Aligned the plugin with Hermes' cache-safe `register_system_prompt_section` contract:
+  proactive widget guidance is now one bounded section rendered once per session after memory,
+  instead of repeated `pre_llm_call` text on every turn. Older hosts retain the legacy hook
+  fallback.
+- Tightened the skill description and added an explicit proactive decision rule: publish only
+  real glanceable changes, check status before replacing a working surface, preview visuals at
+  registered sizes, and resolve queued action intents.
+- Simplified the recurring cron prompt to use its attached skill directly rather than loading it
+  a second time, keeping unattended runs cheaper and less noisy.
+- Fixed Pillow-only raster previews on hosts without libcairo and added a Pillow text fallback;
+  SVG rasterisation remains the only preview path that needs CairoSVG.
+- `hermes widget publish` now supports publication-mode CLI arguments including `--priority high`.
+
 ## v3.1.0 — priority wake, previews, and queued actions
 
 - `widget_publish` now accepts `priority: "normal" | "high"`. High-priority revisions use a

@@ -110,7 +110,8 @@ WIDGET_SETUP = {
     "description": (
         "Deterministic, resumable, idempotent setup for the Hermes widget host: "
         "detects the current Hermes host and persistent home, installs the "
-        "plugin/skill/gateway startup hook, prepares the widget, and reports "
+        "plugin/skill/gateway startup hook, prepares the widget, enables the recurring "
+        "proactive refresh, and reports "
         "capability-based progress with state needs_user_action|starting|"
         "awaiting_pairing|ready|degraded. Use the bootstrap command for a full "
         "container recreation installation."

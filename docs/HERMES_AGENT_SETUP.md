@@ -210,9 +210,15 @@ late. The bootstrap installs one idempotent Hermes routine every six hours:
     hermes widget routine --schedule "every 6h" --widget-id hermes-brief
 
 The routine uses `widget_publish` only when context contains a genuinely useful
-supported update. If nothing useful changed it does nothing, leaving the
+supported update. The widget skill is attached to the job, so the unattended run does not spend
+a second turn loading it. If nothing useful changed it does nothing, leaving the
 current publication untouched. `widget_status` distinguishes host storage,
 device download, and render submission; none claims user visibility.
+
+`widget_setup` is the agent-facing, idempotent setup path: it installs the skill, startup hook,
+server configuration, and this proactive routine. On current Hermes hosts the plugin adds one
+bounded proactive-guidance section after memory, rendered once per session rather than injecting
+a reminder into every turn.
 
 For a genuinely time-sensitive update, publish with `priority: "high"`. The Android app uses a
 user-selected UnifiedPush distributor (a self-hosted ntfy instance is suitable); the host sends

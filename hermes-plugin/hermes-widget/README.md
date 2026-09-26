@@ -14,6 +14,15 @@ to the same Tailscale tailnet and use Tailscale Serve HTTPS rather than exposing
 - Bundled skill: hermes-widget:widget (layout authoring, design tokens, proactive refresh)
 - A private HTTP server started with `hermes widget serve`; secure SVG parsing uses the pinned `defusedxml` dependency, and publication PNG previews use optional Pillow/CairoSVG backends with a bounded fallback.
 
+## Proactive agent behavior
+
+On current Hermes hosts the plugin registers a bounded, cache-safe
+`hermes-widget.proactive-guidance` system-prompt section after memory. It tells the agent when
+an ambient home-screen update is useful, when to stay quiet, and how to use status, previews,
+and action intents without turning every turn into a publish. Older hosts fall back to the
+legacy `pre_llm_call` reminder. The recurring cron job attaches the widget skill directly, so
+unattended runs do not load it twice.
+
 ## Architecture
 
     Hermes agent turn (chat / cron / heartbeat)
