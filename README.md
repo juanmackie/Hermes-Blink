@@ -116,7 +116,8 @@ The phone pairs with that code and stores only its device-scoped token. It does
 not need the operator/agent token. It also does not need to be on the same local
 network as the host; both devices only need access to the same tailnet. See
 [docs/HERMES_AGENT_SETUP.md](docs/HERMES_AGENT_SETUP.md) and
-[docs/TAILSCALE_HTTPS.md](docs/TAILSCALE_HTTPS.md) for the detailed flow.
+[docs/TAILSCALE_HTTPS.md](docs/TAILSCALE_HTTPS.md) for the detailed flow. The Android widget
+quality checklist is in [docs/WIDGET_DESIGN.md](docs/WIDGET_DESIGN.md).
 
 ## Android
 

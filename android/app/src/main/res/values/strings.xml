@@ -6,4 +6,5 @@
     <string name="pairing_code_hint">Pairing code (ABCD-1234)</string>
     <string name="pair_device">Pair phone</string>
     <string name="connect">Pair or update</string>
+    <string name="widget_description">A glanceable Hermes brief with a request-update action.</string>
 </resources>

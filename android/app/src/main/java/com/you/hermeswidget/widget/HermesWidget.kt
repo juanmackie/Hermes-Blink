@@ -12,6 +12,7 @@ import androidx.glance.Image
 import androidx.glance.ImageProvider
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
+import androidx.glance.appwidget.cornerRadius
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.action.actionParametersOf
 import androidx.glance.appwidget.action.actionStartActivity
@@ -58,27 +59,36 @@ class HermesWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val snapshot = withContext(Dispatchers.IO) { loadSnapshot(context) }
         provideContent {
-            val dark = snapshot.publication?.darkPalette == true
+            val systemDark = (context.resources.configuration.uiMode and
+                android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+                android.content.res.Configuration.UI_MODE_NIGHT_YES
+            val dark = snapshot.publication?.darkPalette == true || systemDark
             Box(
                 modifier = GlanceModifier
                     .fillMaxSize()
+                    .cornerRadius(24.dp)
                     .background(if (dark) Color(0xFF1C1C1E) else WIDGET_SCRIM)
             ) {
                 when {
                     !snapshot.paired -> EmptyState(
                         "Pair this phone",
-                        "Run hermes widget code on Hermes, then enter the short-lived pairing code."
+                        "Run hermes widget code on Hermes, then enter the short-lived pairing code.",
+                        dark = dark,
                     )
                     snapshot.publication != null && !snapshot.publication.isExpired() ->
                         PublicationSurface(snapshot)
                     snapshot.publication?.isExpired() == true -> EmptyState(
                         "Publication expired",
-                        "Open the app to refresh the connection."
+                        "Open the app to refresh the connection.",
+                        dark = dark,
+                        showRequest = true,
                     )
                     snapshot.legacyLayout != null -> WidgetSurface(snapshot.legacyLayout)
                     else -> EmptyState(
                         "No publication yet",
-                        "Useful Hermes updates will appear here automatically."
+                        "Useful Hermes updates will appear here automatically.",
+                        dark = dark,
+                        showRequest = true,
                     )
                 }
             }
@@ -122,8 +132,12 @@ class HermesWidget : GlanceAppWidget() {
 @Composable
 private fun PublicationSurface(snapshot: WidgetSnapshot) {
     val publication = snapshot.publication ?: return
-    val ink = if (publication.darkPalette) "#F2F2F7" else "#000000"
-    val secondary = if (publication.darkPalette) "#AEAEB2" else "#8E8E93"
+    val systemDark = (LocalContext.current.resources.configuration.uiMode and
+        android.content.res.Configuration.UI_MODE_NIGHT_MASK) ==
+        android.content.res.Configuration.UI_MODE_NIGHT_YES
+    val dark = publication.darkPalette || systemDark
+    val ink = if (dark) "#F2F2F7" else "#000000"
+    val secondary = if (dark) "#AEAEB2" else "#8E8E93"
     val variant = if (snapshot.compact) {
         publication.variants["2x2"]
     } else {
@@ -182,7 +196,8 @@ private fun PublicationSurface(snapshot: WidgetSnapshot) {
             text = "Request update",
             modifier = GlanceModifier
                 .fillMaxWidth()
-                .padding(top = 6.dp)
+                .height(48.dp)
+                .padding(top = 4.dp)
                 .clickable(
                     actionRunCallback<ActionCallbacks.EventAction>(
                         actionParametersOf(
@@ -192,7 +207,7 @@ private fun PublicationSurface(snapshot: WidgetSnapshot) {
                         )
                     )
                 ),
-            style = Typo.textStyle("caption", colorOverride = if (publication.darkPalette) "#7C3AED" else "#7C3AED"),
+            style = Typo.textStyle("caption", colorOverride = "#5B3CC4"),
             maxLines = 1,
         )
     }
@@ -234,18 +249,45 @@ private fun ColumnScope.PublicationBody(
 }
 
 @Composable
-private fun EmptyState(title: String, message: String) {
+private fun EmptyState(
+    title: String,
+    message: String,
+    dark: Boolean = false,
+    showRequest: Boolean = false,
+) {
+    val ink = if (dark) "#F2F2F7" else "#000000"
+    val secondary = if (dark) "#AEAEB2" else "#8E8E93"
     Column(
         modifier = GlanceModifier.fillMaxSize().padding(16.dp),
         verticalAlignment = Alignment.Vertical.CenterVertically,
         horizontalAlignment = Alignment.Horizontal.Start,
     ) {
-        Text(text = title, style = Typo.textStyle("title"), maxLines = 2)
+        Text(text = title, style = Typo.textStyle("title", colorOverride = ink), maxLines = 2)
         Text(
             text = message,
             modifier = GlanceModifier.fillMaxWidth().padding(top = 6.dp),
-            style = Typo.textStyle("body"),
+            style = Typo.textStyle("body", colorOverride = secondary),
         )
+        if (showRequest) {
+            Text(
+                text = "Request update",
+                modifier = GlanceModifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .padding(top = 12.dp)
+                    .clickable(
+                        actionRunCallback<ActionCallbacks.EventAction>(
+                            actionParametersOf(
+                                WidgetParams.eventKey to "request_update",
+                                WidgetParams.kindKey to "request_update",
+                                WidgetParams.payloadKey to "{}",
+                            )
+                        )
+                    ),
+                style = Typo.textStyle("caption", colorOverride = "#5B3CC4"),
+                maxLines = 1,
+            )
+        }
     }
 }
 
