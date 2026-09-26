@@ -9,6 +9,7 @@ This checklist maps the Android widget design guidance to the Hermes widget impl
 - The surface fills the allocated bounds and uses a 24dp system-like corner radius.
 - Geometry is reported from the launcher, so previews and rendering use the actual instance size.
 - Compact instances show the hero; the ticker and supplemental regions are omitted when they would clip.
+- Long publications use a Glance `LazyColumn`, so content is scrollable instead of silently cut off; stable item ordering preserves position across refreshes.
 
 ## Content
 

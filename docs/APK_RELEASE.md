@@ -12,8 +12,8 @@ The debug APK was rebuilt and tested on 2026-09-25 with JDK 17 (the project also
 | Field | Value |
 | --- | --- |
 | Artifact | `android/app/build/outputs/apk/debug/app-debug.apk` |
-| Size | 7,180,443 bytes |
-| SHA-256 | `1dd1c0ebef49a104133cf19bc60a01199bea75cc4ab23e789ef605fb8e8ecc96` |
+| Size | 7,182,371 bytes |
+| SHA-256 | `895452e10b6e836982f58a051ecb5ce95c0e424a6a808a2647d2c6b56fccd0d4` |
 | Package | `com.you.hermeswidget` |
 | Version | `0.2.0` (`versionCode=2`) |
 | SDK range | minSdk 26, targetSdk 35 |

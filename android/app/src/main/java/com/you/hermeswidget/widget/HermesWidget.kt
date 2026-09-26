@@ -13,6 +13,7 @@ import androidx.glance.ImageProvider
 import androidx.glance.action.clickable
 import androidx.glance.appwidget.GlanceAppWidget
 import androidx.glance.appwidget.cornerRadius
+import androidx.glance.appwidget.lazy.LazyColumn
 import androidx.glance.appwidget.action.actionRunCallback
 import androidx.glance.action.actionParametersOf
 import androidx.glance.appwidget.action.actionStartActivity
@@ -148,73 +149,87 @@ private fun PublicationSurface(snapshot: WidgetSnapshot) {
     val body = variant?.let { PublicationContent.Text(it.text) } ?: publication.content
     val intent = Intent(LocalContext.current, PublicationActivity::class.java)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-    Column(
+    LazyColumn(
         modifier = GlanceModifier
             .fillMaxSize()
+            .cornerRadius(24.dp)
+            .background(if (dark) Color(0xFF1C1C1E) else WIDGET_SCRIM)
             .clickable(actionStartActivity(intent))
-            .padding(12.dp)
+            .padding(12.dp),
     ) {
-        Text(
-            text = provenanceLabel(publication, title),
-            modifier = GlanceModifier.fillMaxWidth(),
-            style = Typo.textStyle("title", colorOverride = ink),
-            maxLines = 2,
-        )
-        Text(
-            text = summary,
-            modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp),
-            style = Typo.textStyle("caption", colorOverride = secondary),
-            maxLines = 2,
-        )
-        PublicationBody(body, snapshot.bitmap, summary, ink)
-        publication.question?.takeIf { it.status == "open" }?.let { question ->
-            Text(
-                text = "Tap to answer: ${question.prompt}",
-                modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp),
-                style = Typo.textStyle("caption", colorOverride = "#7C3AED"),
-                maxLines = 1,
-            )
-        }
-        if (!snapshot.compact) {
-            publication.ticker?.takeUnless { it.decayed }?.let { ticker ->
-                val rotating = ticker.rotation.firstOrNull { !it.pinned }
+        item {
+            Column(modifier = GlanceModifier.fillMaxWidth()) {
                 Text(
-                    text = "${ticker.title} · ${rotating?.summary ?: ticker.summary}",
-                    modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp),
+                    text = provenanceLabel(publication, title),
+                    modifier = GlanceModifier.fillMaxWidth(),
+                    style = Typo.textStyle("title", colorOverride = ink),
+                    maxLines = 2,
+                )
+                Text(
+                    text = summary,
+                    modifier = GlanceModifier.fillMaxWidth().padding(top = 2.dp),
                     style = Typo.textStyle("caption", colorOverride = secondary),
+                    maxLines = 2,
+                )
+                PublicationBody(body, snapshot.bitmap, summary, ink)
+            }
+        }
+        publication.question?.takeIf { it.status == "open" }?.let { question ->
+            item {
+                Text(
+                    text = "Tap to answer: ${question.prompt}",
+                    modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp),
+                    style = Typo.textStyle("caption", colorOverride = "#7C3AED"),
                     maxLines = 1,
                 )
             }
         }
-        Text(
-            text = deliveryLabel(publication, snapshot.connectionState),
-            modifier = GlanceModifier.fillMaxWidth().padding(top = 6.dp),
-            style = Typo.textStyle("caption", colorOverride = secondary),
-            maxLines = 1,
-        )
-        Text(
-            text = "Request update",
-            modifier = GlanceModifier
-                .fillMaxWidth()
-                .height(48.dp)
-                .padding(top = 4.dp)
-                .clickable(
-                    actionRunCallback<ActionCallbacks.EventAction>(
-                        actionParametersOf(
-                            WidgetParams.eventKey to "request_update",
-                            WidgetParams.kindKey to "request_update",
-                            WidgetParams.payloadKey to "{}",
-                        )
+        if (!snapshot.compact) {
+            publication.ticker?.takeUnless { it.decayed }?.let { ticker ->
+                item {
+                    val rotating = ticker.rotation.firstOrNull { !it.pinned }
+                    Text(
+                        text = "${ticker.title} · ${rotating?.summary ?: ticker.summary}",
+                        modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp),
+                        style = Typo.textStyle("caption", colorOverride = secondary),
+                        maxLines = 1,
                     )
-                ),
-            style = Typo.textStyle("caption", colorOverride = "#5B3CC4"),
-            maxLines = 1,
-        )
+                }
+            }
+        }
+        item {
+            Column(modifier = GlanceModifier.fillMaxWidth()) {
+                Text(
+                    text = deliveryLabel(publication, snapshot.connectionState),
+                    modifier = GlanceModifier.fillMaxWidth().padding(top = 6.dp),
+                    style = Typo.textStyle("caption", colorOverride = secondary),
+                    maxLines = 1,
+                )
+                Text(
+                    text = "Request update",
+                    modifier = GlanceModifier
+                        .fillMaxWidth()
+                        .height(48.dp)
+                        .padding(top = 4.dp)
+                        .clickable(
+                            actionRunCallback<ActionCallbacks.EventAction>(
+                                actionParametersOf(
+                                    WidgetParams.eventKey to "request_update",
+                                    WidgetParams.kindKey to "request_update",
+                                    WidgetParams.payloadKey to "{}",
+                                )
+                            )
+                        ),
+                    style = Typo.textStyle("caption", colorOverride = "#5B3CC4"),
+                    maxLines = 1,
+                )
+            }
+        }
     }
 }
 
 @Composable
-private fun ColumnScope.PublicationBody(
+private fun PublicationBody(
     content: PublicationContent,
     bitmap: android.graphics.Bitmap?,
     summary: String,
@@ -223,24 +238,21 @@ private fun ColumnScope.PublicationBody(
     when (content) {
         is PublicationContent.Text -> Text(
             text = content.text,
-            modifier = GlanceModifier.fillMaxWidth().defaultWeight().padding(top = 8.dp),
+            modifier = GlanceModifier.fillMaxWidth().padding(top = 8.dp),
             style = Typo.textStyle("body", colorOverride = ink),
         )
         is PublicationContent.Image -> {
             if (bitmap == null) {
                 Text(
                     text = "Visual unavailable offline",
-                    modifier = GlanceModifier.fillMaxWidth().defaultWeight().padding(top = 8.dp),
+                    modifier = GlanceModifier.fillMaxWidth().padding(top = 8.dp),
                     style = Typo.textStyle("body", colorOverride = "#8E8E93"),
                 )
             } else {
                 Image(
                     provider = ImageProvider(bitmap),
                     contentDescription = summary,
-                    modifier = GlanceModifier
-                        .fillMaxWidth()
-                        .defaultWeight()
-                        .padding(top = 8.dp),
+                    modifier = GlanceModifier.fillMaxWidth().height(200.dp).padding(top = 8.dp),
                     contentScale = ContentScale.Fit,
                 )
             }
