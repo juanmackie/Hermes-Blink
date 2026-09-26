@@ -38,6 +38,21 @@
             android:layout_marginTop="20dp"
             android:textSize="15sp" />
 
+        <TextView
+            android:id="@+id/widget_instances_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:textIsSelectable="true"
+            android:textSize="15sp" />
+
+        <Button
+            android:id="@+id/pin_widget"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="Add widget to home screen" />
+
         <Button
             android:id="@+id/request_battery_exemption"
             android:layout_width="wrap_content"

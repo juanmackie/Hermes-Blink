@@ -89,6 +89,8 @@ class SettingsActivity : Activity() {
                             "Paired as $deviceId; waiting for the first publication",
                             Toast.LENGTH_LONG,
                         ).show()
+                        // Discovery: one system pin offer, after pairing, never blocking.
+                        WidgetPinning.offer(this, this)
                     }.onFailure { error ->
                         Toast.makeText(this, error.message ?: "Pairing failed", Toast.LENGTH_LONG).show()
                     }

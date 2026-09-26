@@ -30,6 +30,12 @@ def contrast(hex_a: str, hex_b: str) -> float:
 
 def main() -> int:
     widget = text("java/com/you/hermeswidget/widget/HermesWidget.kt")
+    breakpoints = text("java/com/you/hermeswidget/widget/Breakpoints.kt")
+    theme = text("java/com/you/hermeswidget/widget/WidgetTheme.kt")
+    widget_package = "\n".join(
+        p.read_text(encoding="utf-8")
+        for p in (ROOT / "android/app/src/main/java/com/you/hermeswidget/widget").glob("*.kt")
+    )
     dims = text("java/com/you/hermeswidget/widget/WidgetDimensions.kt")
     typo = text("java/com/you/hermeswidget/widget/Typo.kt")
     provider = text("res/xml/hermes_widget_info.xml")
@@ -39,10 +45,29 @@ def main() -> int:
     plugin_tests = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "hermes-plugin/hermes-widget/tests").rglob("*.py"))
     checks = {
         "responsive_size_mode": has("SizeMode.Responsive", path="java/com/you/hermeswidget/widget/HermesWidget.kt") and has("LocalSize", path="java/com/you/hermeswidget/widget/HermesWidget.kt"),
-        "band_ladder": has("WidgetBand", path="java/com/you/hermeswidget/widget/WidgetDimensions.kt") and has("heightDp < 130", path="java/com/you/hermeswidget/widget/WidgetDimensions.kt"),
-        "footer_pinned": int("LazyColumn" in widget and "Request update" in widget and "Footer" in widget),
+        # The ladder lives in its own file (Breakpoints.kt) and the pinned footer is a
+        # sibling of the LazyColumn, not one of its items: both are structural facts.
+        # One ladder (Breakpoints.kt), consumed by the widget, with the width guard and a
+        # size-class ladder that shares the same 245dp column edge.
+        "band_ladder": all(token in breakpoints for token in (
+            "WidgetBand", "heightDp < XS_MAX_HEIGHT_DP", "SINGLE_COLUMN_MAX_WIDTH_DP",
+            "variantKey", "imageHeightDp",
+        ))
+        and "BandSpec" in widget
+        and "WIDE_MIN_DP = 245" in dims,
+        "footer_pinned": int(
+            "LazyColumn" in widget
+            and "FooterRow" in widget
+            # The request action must appear after the LazyColumn block closes, i.e. outside it.
+            and "request_update" in widget.split("LazyColumn(", 1)[-1].split("\n        }", 1)[-1]
+        ),
         "header": has("Header", path="java/com/you/hermeswidget/widget/HermesWidget.kt"),
-        "system_radius": int("system_app_widget_background_radius" in widget or "system_app_widget_inner_radius" in widget),
+        "system_radius": int(
+            ("system_app_widget_background_radius" in widget_package
+             or "system_app_widget_inner_radius" in widget_package)
+            and "getIdentifier" in theme
+            and "widget_corner_radius" in text("res/values/dimens.xml")
+        ),
         "theme_tokens": int("Theme.Material3" in text("res/values/themes.xml") or "WidgetTheme" in text("res/values/themes.xml")),
         "dark_resources": int((ROOT / "android/app/src/main/res/values-night").is_dir() or (ROOT / "android/app/src/main/res/values-night").is_dir()),
         "representative_preview": has("widget_preview", path="res/xml/hermes_widget_info.xml"),

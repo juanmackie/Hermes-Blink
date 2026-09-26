@@ -1,19 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!--
-  Widget picker preview (WD-1 / WD-4): mirrors the composition HermesWidget.kt actually
-  ships — header (mark + wordmark + status dot), provenance + hero line, one summary line,
-  a body line, and the pinned footer (status line + 48dp request action).
-
-  The strings are deliberately inlined (android:text, not @string) and the colors come
-  from @color/widget_* tokens rather than literals, so:
-    * the night variant is the same layout with the -night tokens — no second file to drift;
-    * `aapt2 dump xmltree` on the built APK shows the header/action strings, which is how
-      the CI check below proves this file still mirrors the widget.
-
-  layout-night/widget_preview.xml exists as the explicit dark twin for launchers that ask
-  for a night-specific preview resource; it is generated from this file and must stay in
-  sync with it (see scripts/check-contract-parity.py, check "preview").
--->
+<!-- Night preview (WD-1). Identical structure to layout/widget_preview.xml; only the
+     -night color tokens differ, so the launcher in dark mode sees the dark surface, ink
+     and accent the widget itself will use. Keep the two files structurally identical:
+     scripts/check-contract-parity.py compares their node signatures. -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:app="http://schemas.android.com/apk/res-auto"
     xmlns:tools="http://schemas.android.com/tools"

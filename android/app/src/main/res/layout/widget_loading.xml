@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WS-3 loading state: the wireframe the launcher shows for the first frames after a cold
+  add. It is the shipped hierarchy in grey — header bar, hero block, one body line and the
+  action placeholder — so the surface does not jump to a different shape when the first
+  publication arrives. No spinner: the shape is the information.
+-->
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:background="@drawable/widget_preview_background"
+    android:padding="12dp"
+    tools:ignore="HardcodedText">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="16dp"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <View
+            android:layout_width="16dp"
+            android:layout_height="16dp"
+            android:background="@drawable/widget_loading_mark" />
+
+        <View
+            android:layout_width="48dp"
+            android:layout_height="10dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/widget_loading_bar" />
+
+        <View
+            android:layout_width="6dp"
+            android:layout_height="6dp"
+            android:layout_marginStart="6dp"
+            android:background="@drawable/widget_loading_dot" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="20dp"
+        android:layout_marginTop="6dp"
+        android:background="@drawable/widget_loading_bar" />
+
+    <View
+        android:layout_width="160dp"
+        android:layout_height="12dp"
+        android:layout_marginTop="4dp"
+        android:background="@drawable/widget_loading_bar" />
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="14dp"
+        android:layout_marginTop="10dp"
+        android:background="@drawable/widget_loading_bar" />
+
+    <View
+        android:layout_width="220dp"
+        android:layout_height="14dp"
+        android:layout_marginTop="6dp"
+        android:background="@drawable/widget_loading_bar" />
+
+    <Space
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1" />
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:gravity="center_vertical"
+        android:orientation="horizontal">
+
+        <View
+            android:layout_width="120dp"
+            android:layout_height="12dp"
+            android:background="@drawable/widget_loading_bar" />
+
+        <View
+            android:layout_width="112dp"
+            android:layout_height="48dp"
+            android:layout_marginStart="8dp"
+            android:background="@drawable/widget_loading_button" />
+    </LinearLayout>
+</LinearLayout>

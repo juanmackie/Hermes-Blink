@@ -106,7 +106,7 @@ layouts using removed types are rejected. There is no v1 compatibility path: `ve
 | `title` | 18sp | bold | `#000000` |
 | `body` | 14sp | normal | `#000000` |
 | `label` | 12sp | medium | `#000000` |
-| `caption` | 11sp | normal | `#8E8E93` |
+| `caption` | 11sp | normal | `#5F5F66` |
 
 An absent or unknown `style` renders as `body`. Glance ships only `Normal`, `Medium` and
 `Bold`, so the scale uses those three and no others.
@@ -119,8 +119,11 @@ Every colour field — `accentColor`, `text.color`, `divider.color`, `badge.colo
 device ignores an unparseable colour rather than failing to paint, so the rejection is the
 guard against a push that quietly renders the wrong colour.
 
-Semantic defaults: secondary label `#8E8E93`, hairline/track `#E5E5EA`, delta up `#34C759`,
-delta down `#FF3B30`.
+Semantic defaults: secondary label `#5F5F66`, hairline/track `#E5E5EA`, delta up `#1E7D3C`,
+delta down `#C5221A`. Every one of these clears WCAG AA (4.5:1) against the light surface
+the widget composes, and the device substitutes its own dark pair (`#AEAEB2` secondary,
+`#7BD88F` / `#FF6B60` deltas) when the launcher is in dark mode — see
+`docs/WIDGET_DESIGN.md` and the `ContrastTest` gate in the Android unit tests.
 
 ## Actions
 

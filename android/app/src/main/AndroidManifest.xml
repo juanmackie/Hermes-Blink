@@ -53,7 +53,11 @@
             </intent-filter>
         </receiver>
 
-        <receiver android:name=".widget.HermesWidgetReceiver" android:exported="true" android:label="Hermes">
+        <receiver
+            android:name=".widget.HermesWidgetReceiver"
+            android:exported="true"
+            android:label="Hermes"
+            android:theme="@style/WidgetTheme">
             <intent-filter>
                 <action android:name="android.appwidget.action.APPWIDGET_UPDATE" />
                 <action android:name="com.you.hermeswidget.REFRESH" />

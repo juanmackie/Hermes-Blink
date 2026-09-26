@@ -117,7 +117,7 @@
         "title":   { "sizeSp": 18, "weight": "bold",   "color": "#000000" },
         "body":    { "sizeSp": 14, "weight": "normal", "color": "#000000" },
         "label":   { "sizeSp": 12, "weight": "medium", "color": "#000000" },
-        "caption": { "sizeSp": 11, "weight": "normal", "color": "#8E8E93" }
+        "caption": { "sizeSp": 11, "weight": "normal", "color": "#5F5F66" }
       },
       "additionalProperties": false
     },
@@ -126,9 +126,9 @@
       "description": "Semantic colours shared by the device (Typo.kt), the renderer default and the offline preview. Not a per-node setting; node `color` fields override them.",
       "properties": {
         "primary":   { "const": "#000000" },
-        "secondary": { "const": "#8E8E93" },
-        "success":   { "const": "#34C759" },
-        "danger":    { "const": "#FF3B30" },
+        "secondary": { "const": "#5F5F66" },
+        "success":   { "const": "#1E7D3C" },
+        "danger":    { "const": "#C5221A" },
         "hairline":  { "const": "#E5E5EA" },
         "accent":    { "const": "#7C3AED" }
       },

@@ -23,14 +23,20 @@ import androidx.glance.unit.ColorProvider
  */
 object Typo {
 
-    /** Ink on the translucent white widget scrim (see HermesWidget.WIDGET_SCRIM). */
+    /** Ink on the widget surface (see WidgetTheme): the hero, body and label steps. */
     const val PRIMARY = "#000000"
 
-    /** Labels, captions, metadata. */
-    const val SECONDARY = "#8E8E93"
+    /**
+     * Labels, captions, metadata. The old #8E8E93 measured 2.97:1 on the light surface and
+     * 1.34:1 composited over a dark wallpaper, so it failed WCAG AA for 11sp text; this
+     * token clears 4.5:1 on the light surface and the dark pair (#AEAEB2) clears 7.6:1.
+     * ContrastTest keeps both honest.
+     */
+    const val SECONDARY = "#5F5F66"
 
-    const val SUCCESS = "#34C759"
-    const val DANGER = "#FF3B30"
+    /** Deltas: AA-on-surface rather than the display-bright #34C759 / #FF3B30. */
+    const val SUCCESS = "#1E7D3C"
+    const val DANGER = "#C5221A"
 
     /** Track color for progress, divider default. */
     const val HAIRLINE = "#E5E5EA"
@@ -89,6 +95,17 @@ object Typo {
         fontSize = fontSize(style),
         fontWeight = fontWeight(spec(style).weight),
         textAlign = textAlign(alignment),
+    )
+
+    /**
+     * The same closed scale with a theme-resolved ink. The v2 contract's hexes are
+     * publisher-facing constants, so a themed surface picks its own ColorProvider here
+     * rather than inventing a second scale.
+     */
+    fun textStyle(style: String?, color: ColorProvider): TextStyle = TextStyle(
+        color = color,
+        fontSize = fontSize(style),
+        fontWeight = fontWeight(spec(style).weight),
     )
 
     /** Uses [fallback] when [hex] is absent or not a plain 3/6-digit hex. */

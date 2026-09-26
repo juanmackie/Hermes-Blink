@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light surface / ink. values-v31 re-points these at the device's own tonal
+         palette, so Android 12+ follows the wallpaper-derived theme and older
+         releases keep this static pair. -->
+    <color name="widget_surface">#F7F2FF</color>
+    <color name="widget_on_surface">#1B1B1F</color>
+    <color name="widget_secondary">#5F5F66</color>
+    <color name="widget_accent">#5B3CC4</color>
+    <color name="widget_on_accent">#FFFFFF</color>
+    <color name="widget_hairline">#E5DFF7</color>
+
+    <!-- Dark surface / ink, used when the device is in dark mode and whenever a
+         publication sets dark_palette (the device system can override every other
+         value, but not that explicit author intent). -->
+    <color name="widget_surface_dark">#1C1C1E</color>
+    <color name="widget_on_surface_dark">#F2F2F7</color>
+    <color name="widget_secondary_dark">#AEAEB2</color>
+    <color name="widget_accent_dark">#B9A6FF</color>
+    <color name="widget_on_accent_dark">#1C1C1E</color>
+
+    <!-- Header/status dot. The dot is a shape, not text, so it only has to read as
+         "healthy / attention / none" at 6dp. -->
+    <color name="widget_status_fresh">#1E7D3C</color>
+    <color name="widget_status_aged">#8A5A00</color>
+    <color name="widget_status_stale">#C5221A</color>
+    <color name="widget_status_offline">#5F5F66</color>
+</resources>

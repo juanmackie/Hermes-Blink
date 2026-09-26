@@ -43,7 +43,10 @@ try:  # normal path: imported as part of the hermes-widget plugin package
     from .publication import PublicationTooLarge as _PublicationInputTooLarge
     from .publication import capabilities as _publication_capabilities
     from .validate import ValidationError
+    from .validate import BAND_BODY_LINES as _BAND_BODY_LINES
+    from .validate import chars_per_line as _chars_per_line
     from .validate import inspect_layout as _inspect_layout
+    from .validate import size_band as _size_band
     from .validate import validate_layout as _validate
 except ImportError:  # pragma: no cover - direct import from tests/scripts
     import push as _push  # type: ignore
@@ -64,7 +67,10 @@ except ImportError:  # pragma: no cover - direct import from tests/scripts
     )
     from publication import capabilities as _publication_capabilities  # type: ignore
     from validate import ValidationError  # type: ignore
+    from validate import BAND_BODY_LINES as _BAND_BODY_LINES  # type: ignore
+    from validate import chars_per_line as _chars_per_line  # type: ignore
     from validate import inspect_layout as _inspect_layout  # type: ignore
+    from validate import size_band as _size_band  # type: ignore
     from validate import validate_layout as _validate  # type: ignore
 
 DEFAULT_WIDGET_ID = "hermes-brief"
@@ -706,18 +712,60 @@ def _receipt(
 
 
 def _capacity_warnings_for_publication(publication: dict, widget_id: str) -> list[dict[str, str]]:
-    """Advisory fit checks against the smallest size a device registered."""
+    """Advisory fit checks against the smallest band a device registered.
+
+    Bands mirror the device's ladder (validate.size_band), so a warning names the band the
+    user would actually see rather than a nominal canvas.
+    """
     instances = list_widget_instances(widget_id)
     if not instances:
         return []
-    smallest = min(instances, key=lambda item: (item["widthDp"], item["heightDp"]))
+    smallest = min(
+        (item for item in instances if _size_band(item["widthDp"], item["heightDp"])),
+        key=lambda item: (item["heightDp"], item["widthDp"]),
+        default=None,
+    )
+    if smallest is None:
+        return []
+    band = _size_band(smallest["widthDp"], smallest["heightDp"])
+    size = f"{smallest['widthDp']}x{smallest['heightDp']}dp"
     warnings: list[dict[str, str]] = []
     if publication.get("kind") == "text":
         text = (publication.get("content") or {}).get("text", "")
-        if smallest["sizeClass"] == "2x2" and len(text) > 180:
+        body_lines = _BAND_BODY_LINES[band]
+        per_line = _chars_per_line(smallest["widthDp"])
+        if body_lines == 0 and text:
             warnings.append({
-                "code": "TEXT_MAY_CLIP_2X2",
-                "detail": f"text is {len(text)} characters and may clip on the smallest registered {smallest['sizeClass']} instance",
+                "code": f"BODY_HIDDEN_IN_{band.upper()}",
+                "detail": (
+                    f"{len(text)} characters of body text cannot render in the {band} band "
+                    f"({size}); the smallest instance shows the title"
+                    f"{' and summary' if band == 's' else ''} only"
+                ),
+            })
+        elif len(text) > body_lines * per_line:
+            warnings.append({
+                "code": f"BODY_MAY_SCROLL_{band.upper()}",
+                "detail": (
+                    f"{len(text)} characters is about {max(1, -(-len(text) // per_line))} body "
+                    f"lines (est. {per_line} chars/line at {smallest['widthDp']}dp) against a "
+                    f"{band} budget of {body_lines}; the rest is reachable by scrolling"
+                ),
+            })
+        title = str(publication.get("title") or "")
+        summary = str(publication.get("summary") or "")
+        if len(title) > per_line * 2:
+            warnings.append({
+                "code": "TITLE_MAY_CLIP",
+                "detail": (
+                    f"title is {len(title)} characters, about 2 lines at {per_line} "
+                    "chars/line; the hero is capped at 2 lines and Glance has no ellipsis"
+                ),
+            })
+        if band in {"xs"} and summary:
+            warnings.append({
+                "code": "SUMMARY_HIDDEN_IN_XS",
+                "detail": f"the summary does not render in the xs band ({size})",
             })
     else:
         content = publication.get("content") or {}
@@ -2352,17 +2400,23 @@ def wake_test(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
 
 
 def _size_class(width_dp: int, height_dp: int, declared: Any = None) -> str:
+    """Normalize a reported instance to the contract's five size classes.
+
+    Mirrors android/.../widget/WidgetDimensions.sizeClass: the guide's dp ranges overlap
+    (245-306 x 115-276 is both a 2x2 and a 4x2), so the wider reading wins and a device is
+    never told it has less room than it does.
+    """
     if declared in {"2x2", "4x2", "2x4", "4x4", "custom"}:
         return str(declared)
-    if width_dp <= 160 and height_dp <= 160:
-        return "2x2"
-    if width_dp >= 220 and height_dp <= 180:
-        return "4x2"
-    if width_dp <= 180 and height_dp >= 220:
-        return "2x4"
-    if width_dp >= 220 and height_dp >= 220:
+    if not (109 <= width_dp <= 624 and 56 <= height_dp <= 422):
+        return "custom"
+    if width_dp >= 245 and height_dp >= 300:
         return "4x4"
-    return "custom"
+    if width_dp >= 245:
+        return "4x2"
+    if height_dp >= 300:
+        return "2x4"
+    return "2x2"
 
 
 def _instance_int(value: Any, name: str, lo: int, hi: int) -> int:

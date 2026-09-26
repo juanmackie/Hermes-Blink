@@ -1,0 +1,12 @@
+<!-- 16dp header monogram. The fill is a tint *source*: Glance tints it with the theme
+     accent (ColorFilter/TintColorFilterParams) so the mark follows the day/night/dynamic
+     palette, and the preview ImageViews tint it with @color/widget_accent. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="16dp"
+    android:height="16dp"
+    android:viewportWidth="16"
+    android:viewportHeight="16">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M5.1,2.6h1.9v4.3h2.0V2.6h1.9v10.8h-1.9V8.6H7.0v4.8H5.1z" />
+</vector>

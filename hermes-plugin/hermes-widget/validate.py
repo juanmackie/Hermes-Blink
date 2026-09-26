@@ -267,31 +267,123 @@ MIN_ROOT_PADDING = 12
 _TEXT_STYLE_WARN_COUNT = 3
 _NODE_WARN_COUNT = 80
 
+# --- the device's breakpoint ladder ------------------------------------------------
+# A mirror of android/.../widget/Breakpoints.kt, so a publisher warning and the rendered
+# widget agree about what fits. Height drives the band; width is the single-column guard.
+BAND_XS_MAX_HEIGHT_DP = 130
+BAND_S_MAX_HEIGHT_DP = 185
+BAND_M_MAX_HEIGHT_DP = 300
+SINGLE_COLUMN_MAX_WIDTH_DP = 245
 
-def _capacity_warnings(stats: dict, inventory: Any) -> list[dict[str, str]]:
+# Body lines the widget renders before the reader has to scroll, per band. XS and S do not
+# render the body at all (a 130dp cell cannot hold a scroll region and a footer).
+BAND_BODY_LINES = {"xs": 0, "s": 0, "m": 3, "l": 8}
+# Lines of chrome (header, hero, summary, footer) the band spends before the body.
+BAND_CHROME_LINES = {"xs": 3, "s": 4, "m": 6, "l": 6}
+# Glance 1.1.0 has no ellipsizing, so long strings clip mid-glyph rather than ending in "…".
+CHARS_PER_LINE_AT_245DP = 34
+
+
+def size_band(width_dp: Any, height_dp: Any) -> str | None:
+    """The widget band for a registered instance, or None for unusable geometry.
+
+    Accepts ints and floats: the device reports ints, the offline preview derives dp from
+    pixels and therefore gets floats.
+    """
+    for value in (width_dp, height_dp):
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            return None
+    if width_dp <= 0 or height_dp <= 0:
+        return None
+    if height_dp < BAND_XS_MAX_HEIGHT_DP:
+        return "xs"
+    if height_dp < BAND_S_MAX_HEIGHT_DP:
+        return "s"
+    if height_dp < BAND_M_MAX_HEIGHT_DP:
+        return "m"
+    return "l"
+
+
+def is_single_column(width_dp: Any) -> bool:
+    if isinstance(width_dp, bool) or not isinstance(width_dp, (int, float)):
+        return True
+    return width_dp < SINGLE_COLUMN_MAX_WIDTH_DP
+
+
+def chars_per_line(width_dp: Any) -> int:
+    """Approximate body characters per line: ~34 at 245dp, linear in the usable width."""
+    if isinstance(width_dp, bool) or not isinstance(width_dp, (int, float)) or width_dp <= 0:
+        return CHARS_PER_LINE_AT_245DP
+    return max(8, int(CHARS_PER_LINE_AT_245DP * width_dp / 245))
+
+
+def _smallest_instance(inventory: Any) -> dict[str, Any] | None:
     if not isinstance(inventory, list) or not inventory:
-        return []
+        return None
     valid = [
         item for item in inventory
         if isinstance(item, dict)
-        and isinstance(item.get("widthDp"), int)
-        and isinstance(item.get("heightDp"), int)
+        and not isinstance(item.get("widthDp"), bool)
+        and not isinstance(item.get("heightDp"), bool)
+        and isinstance(item.get("widthDp"), (int, float))
+        and isinstance(item.get("heightDp"), (int, float))
     ]
     if not valid:
+        return None
+    return min(valid, key=lambda item: (item["heightDp"], item["widthDp"]))
+
+
+def _band_warnings(stats: dict, inventory: Any) -> list[dict[str, str]]:
+    """Per-band fit advice, keyed on the smallest instance a device actually registered.
+
+    The device bands the same way (Breakpoints.kt), so the warning names the band the user
+    would see rather than a nominal canvas. Two different failure modes are reported:
+
+    * the band has no body region at all (`xs`/`s`), so nodes that need one are lost;
+    * the longest string is longer than the band's visible body, so the reader has to
+      scroll. The line count is an estimate and says so.
+    """
+    smallest = _smallest_instance(inventory)
+    if smallest is None:
         return []
-    smallest = min(valid, key=lambda item: (item["widthDp"], item["heightDp"]))
+    band = size_band(smallest["widthDp"], smallest["heightDp"])
+    if band is None:
+        return []
+    width_dp = smallest["widthDp"]
+    size = f'{width_dp}x{smallest["heightDp"]}dp'
     warnings: list[dict[str, str]] = []
-    if smallest.get("sizeClass") == "2x2" and stats["nodes"] > 5:
+    body_lines = BAND_BODY_LINES[band]
+    per_line = chars_per_line(width_dp)
+    longest = int(stats.get("longestText") or 0)
+    if body_lines == 0 and stats["nodes"] > 2:
         warnings.append({
-            "code": "LAYOUT_MAY_CLIP_2X2",
-            "detail": f"{stats['nodes']} nodes may clip on the smallest registered 2x2 instance",
+            "code": "LAYOUT_TOO_TALL_FOR_BAND",
+            "detail": (
+                f"{stats['nodes']} nodes cannot render in the {band} band ({size}); "
+                f"only the header, one title line"
+                f"{' and the summary' if band == 's' else ''} render there"
+            ),
         })
-    if smallest.get("sizeClass") == "2x2" and stats["textNodes"] > 3:
+    if body_lines and longest > body_lines * per_line:
         warnings.append({
-            "code": "TEXT_MAY_CLIP_2X2",
-            "detail": f"{stats['textNodes']} text nodes may not fit on the smallest registered 2x2 instance",
+            "code": f"LAYOUT_MAY_SCROLL_{band.upper()}",
+            "detail": (
+                f"longest string is {longest} characters, about "
+                f"{max(1, -(-longest // per_line))} body lines "
+                f"(est. {per_line} chars/line at {width_dp}dp) against a {band} budget of "
+                f"{body_lines}; the rest is reachable by scrolling the widget"
+            ),
+        })
+    if band in {"xs", "s"} and stats["textNodes"] > 3:
+        warnings.append({
+            "code": f"TEXT_MAY_CLIP_{band.upper()}",
+            "detail": f"{stats['textNodes']} text nodes may not fit in the {band} band ({size})",
         })
     return warnings
+
+
+def _capacity_warnings(stats: dict, inventory: Any) -> list[dict[str, str]]:
+    return _band_warnings(stats, inventory)
 
 
 def _inspect_node(node: Any, stats: dict) -> None:
@@ -302,6 +394,9 @@ def _inspect_node(node: Any, stats: dict) -> None:
         # The effective step, not the declared one: an omitted style renders as body.
         stats["styles"].add(node.get("style") or "body")
         stats["textNodes"] += 1
+        value = node.get("value")
+        if isinstance(value, str):
+            stats["longestText"] = max(int(stats.get("longestText") or 0), len(value))
     for child in node.get("children") or []:
         _inspect_node(child, stats)
 
@@ -315,7 +410,7 @@ def inspect_layout(layout: Any, inventory: Any = None) -> dict:
     """
     validate_layout(layout)
 
-    stats: dict = {"nodes": 0, "styles": set(), "textNodes": 0}
+    stats: dict = {"nodes": 0, "styles": set(), "textNodes": 0, "longestText": 0}
     _inspect_node(layout["root"], stats)
     payload = json.dumps(layout, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
 

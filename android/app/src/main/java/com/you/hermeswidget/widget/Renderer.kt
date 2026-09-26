@@ -336,15 +336,6 @@ private fun StaleIndicatorNode() {
     )
 }
 
-/** Shown when no layout could be loaded from cache, agent, or fixture. */
-@Composable
-fun ErrorStateNode(node: Node) {
-    Column(modifier = GlanceModifier.fillMaxWidth()) {
-        Text(text = node.value ?: "Connection error", style = Typo.textStyle("body"))
-        Text(text = node.label ?: "Tap to reconnect", style = Typo.textStyle("caption"))
-    }
-}
-
 private fun safeChildren(node: Node): List<Node> =
     if (node.type in CONTAINER_TYPES) node.children ?: emptyList() else emptyList()
 

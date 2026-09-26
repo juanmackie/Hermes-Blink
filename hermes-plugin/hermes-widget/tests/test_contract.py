@@ -28,6 +28,7 @@ except ImportError:
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
     from validate import validate_layout, ValidationError, LAYOUT_VERSION  # type: ignore
     from validate import inspect_layout  # type: ignore
+    import validate  # type: ignore
     import store  # type: ignore
     import tools  # type: ignore
     import schemas  # type: ignore
@@ -261,6 +262,121 @@ class DryRunValidate(unittest.TestCase):
     def test_widget_validate_is_registered_and_has_no_extra_requirements(self):
         self.assertEqual("widget_validate", schemas.WIDGET_VALIDATE["name"])
         self.assertEqual(["layout"], schemas.WIDGET_VALIDATE["parameters"]["required"])
+
+
+class BandBudgets(unittest.TestCase):
+    """Task 12: publisher warnings follow the device's band ladder, not a nominal canvas.
+
+    The phone groups instances by height (Breakpoints.kt); the same thresholds live in
+    validate.size_band, so a warning names the band the user would actually see.
+    """
+
+    # 472 characters: under the contract's 500-char text cap and far over the 3-line
+    # budget of a 4x2 at 407dp (est. 56 chars/line -> 168).
+    WALL = ("alpha bravo charlie delta echo foxtrot golf hotel india juliet " * 8)[:472]
+
+    def _layout(self, body_text="short", extra_lines=0):
+        children = [
+            {"type": "text", "id": "h", "value": "Overnight batch", "style": "title"},
+            {"type": "text", "id": "s", "value": "3 need review", "style": "caption"},
+            {"type": "text", "id": "b", "value": body_text, "style": "body"},
+        ]
+        for index in range(extra_lines):
+            children.append({
+                "type": "text",
+                "id": f"x{index}",
+                "value": f"detail line {index}",
+                "style": "label",
+            })
+        return {
+            "version": 2,
+            "widgetId": "hermes-brief",
+            "title": "Overnight batch",
+            "root": {"type": "column", "children": children},
+        }
+
+    def test_band_edges_match_the_device(self):
+        cases = {
+            (109, 56): "xs", (624, 129): "xs",
+            (624, 130): "s", (306, 184): "s",
+            (624, 185): "m", (306, 299): "m",
+            (624, 300): "l", (407, 412): "l",
+        }
+        for (width, height), band in cases.items():
+            self.assertEqual(band, validate.size_band(width, height), f"{width}x{height}")
+
+    def test_a_wide_short_instance_is_xs_and_has_no_body_region(self):
+        # 4x1: 245-624 x 56-130. The body cannot render there at all.
+        report = inspect_layout(self._layout(self.WALL), [{"widthDp": 624, "heightDp": 120}])
+        codes = [w["code"] for w in report["warnings"]]
+        self.assertIn("LAYOUT_TOO_TALL_FOR_BAND", codes)
+        detail = next(w["detail"] for w in report["warnings"]
+                      if w["code"] == "LAYOUT_TOO_TALL_FOR_BAND")
+        self.assertIn("xs band", detail)
+        self.assertIn("624x120dp", detail)
+
+    def test_too_many_text_nodes_names_the_small_band(self):
+        report = inspect_layout(self._layout("All clear.", extra_lines=2),
+                                [{"widthDp": 624, "heightDp": 120}])
+        codes = {w["code"] for w in report["warnings"]}
+        self.assertIn("TEXT_MAY_CLIP_XS", codes)
+
+    def test_a_text_wall_on_a_2x2_names_the_band_and_its_geometry(self):
+        # 2x2 max height is 276dp; 150dp is the S band: title + summary, no body region.
+        report = inspect_layout(self._layout(self.WALL), [{"widthDp": 300, "heightDp": 150}])
+        codes = {w["code"] for w in report["warnings"]}
+        self.assertIn("LAYOUT_TOO_TALL_FOR_BAND", codes)
+        detail = next(w["detail"] for w in report["warnings"]
+                      if w["code"] == "LAYOUT_TOO_TALL_FOR_BAND")
+        self.assertIn("s band", detail)
+        self.assertIn("300x150dp", detail)
+        self.assertIn("summary", detail)
+
+    def test_a_4x4_reports_scroll_not_clipping(self):
+        report = inspect_layout(self._layout(self.WALL), [{"widthDp": 407, "heightDp": 412}])
+        codes = {w["code"] for w in report["warnings"]}
+        self.assertIn("LAYOUT_MAY_SCROLL_L", codes)
+        self.assertNotIn("TEXT_MAY_CLIP_L", codes)
+
+    def test_a_4x2_flags_a_body_that_needs_scrolling(self):
+        report = inspect_layout(self._layout(self.WALL), [{"widthDp": 407, "heightDp": 250}])
+        self.assertIn("LAYOUT_MAY_SCROLL_M", {w["code"] for w in report["warnings"]})
+
+    def test_a_tight_layout_on_a_4x2_warns_nothing(self):
+        report = inspect_layout(self._layout("All clear."), [{"widthDp": 407, "heightDp": 250}])
+        codes = {w["code"] for w in report["warnings"]}
+        self.assertNotIn("LAYOUT_MAY_SCROLL_M", codes)
+        self.assertNotIn("LAYOUT_TOO_TALL_FOR_BAND", codes)
+
+    def test_without_inventory_there_is_nothing_to_warn_about(self):
+        report = inspect_layout(self._layout(self.WALL), [])
+        codes = {w["code"] for w in report["warnings"]}
+        self.assertNotIn("LAYOUT_TOO_TALL_FOR_BAND", codes)
+        self.assertNotIn("LAYOUT_MAY_SCROLL_L", codes)
+
+    def test_the_estimate_is_stated_as_an_estimate(self):
+        # 34 chars/line at 245dp, linear in width: the message must not present it as exact.
+        self.assertEqual(34, validate.chars_per_line(245))
+        self.assertEqual(16, validate.chars_per_line(120))
+        report = inspect_layout(self._layout(self.WALL), [{"widthDp": 407, "heightDp": 412}])
+        detail = next(w["detail"] for w in report["warnings"]
+                      if w["code"] == "LAYOUT_MAY_SCROLL_L")
+        self.assertIn("est.", detail)
+        self.assertIn("chars/line", detail)
+
+    def test_size_class_normalization_matches_the_device(self):
+        cases = {
+            (110, 110): "2x2", (200, 150): "2x2",
+            (245, 130): "4x2", (307, 60): "4x2", (624, 276): "4x2",
+            (180, 400): "2x4",
+            (407, 412): "4x4", (624, 422): "4x4",
+            (700, 300): "custom", (100, 50): "custom",
+        }
+        for (width, height), expected in cases.items():
+            self.assertEqual(expected, store._size_class(width, height), f"{width}x{height}")
+        # A declared value from the wire contract is always honored verbatim.
+        for declared in ("2x2", "4x2", "2x4", "4x4", "custom"):
+            self.assertEqual(declared, store._size_class(407, 412, declared))
 
 
 class PreviewRender(unittest.TestCase):

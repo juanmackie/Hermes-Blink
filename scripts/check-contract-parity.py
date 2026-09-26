@@ -33,6 +33,15 @@ PARSER_PATH = REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you"
 TYPO_PATH = REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget" / "widget" / "Typo.kt"
 SKILL_PATH = PLUGIN / "skills" / "widget" / "SKILL.md"
 SCHEMA_DOC_PATH = REPO / "docs" / "SCHEMA.md"
+WIDGET_KT = REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget" / "widget" / "HermesWidget.kt"
+PREVIEW_PY = PLUGIN / "preview.py"
+RES = REPO / "android" / "app" / "src" / "main" / "res"
+WIDGET_INFO = RES / "xml" / "hermes_widget_info.xml"
+PREVIEW_LAYOUT = RES / "layout" / "widget_preview.xml"
+PREVIEW_LAYOUT_NIGHT = RES / "layout-night" / "widget_preview.xml"
+LOADING_LAYOUT = RES / "layout" / "widget_loading.xml"
+STRINGS_XML = RES / "values" / "strings.xml"
+DIMENS_XML = RES / "values" / "dimens.xml"
 
 # Fields that live in the envelope, not on a node, and are not rendered per-node.
 ENVELOPE_METADATA = {"version", "widgetId", "itemId", "title", "ttlSeconds", "accentColor", "updatedAt", "root"}
@@ -266,6 +275,112 @@ def main() -> int:
                  f"{field}: schema {want} but Typo.kt LayoutDefaults.{const}="
                  f"{found.group(1) if found else 'not found'}")
 
+    # --- the widget surface itself (Tasks 3-10) ----------------------------
+    widget = WIDGET_KT.read_text(encoding="utf-8")
+    for retired, why in (
+        ("WIDGET_SCRIM", "the 65%-alpha scrim was replaced by theme tokens (WC-1)"),
+        ("cornerRadius(24.dp)", "the system corner radius is resolved instead (WS-2)"),
+        ("height(200.dp)", "image height is band driven (D15)"),
+        ("compact", "the single compact boolean was replaced by the band ladder (D2)"),
+    ):
+        if retired in widget:
+            fail("widget-surface", f"HermesWidget.kt still has {retired!r}: {why}")
+    if "SizeMode.Responsive" not in widget:
+        fail("widget-surface", "HermesWidget.kt must compose responsively (SizeMode.Responsive)")
+    if "LocalSize" not in widget:
+        fail("widget-surface", "HermesWidget.kt must read LocalSize for per-instance geometry")
+    if "LazyColumn" not in widget:
+        fail("widget-surface", "the publication body must stay scrollable (LazyColumn)")
+    # The status/action footer must be composed outside the LazyColumn: everything the
+    # LazyColumn holds between its braces may not mention the request action.
+    lazy_body = re.search(r"LazyColumn\((.*?)\n        \}", widget, re.S)
+    if lazy_body and "request_update" in lazy_body.group(1):
+        fail("widget-surface",
+             "the request action is inside the scroll region again; the footer must be pinned (WT-4)")
+
+    # --- preview tokens vs the device's color resources -------------------
+    preview_src = PREVIEW_PY.read_text(encoding="utf-8")
+    device_colors = {
+        "day": dict(re.findall(r'<color name="([a-z_]+)">(#[0-9A-Fa-f]{6})</color>',
+                               (RES / "values" / "colors.xml").read_text(encoding="utf-8"))),
+        "night": dict(re.findall(r'<color name="([a-z_]+)">(#[0-9A-Fa-f]{6})</color>',
+                                (RES / "values-night" / "colors.xml").read_text(encoding="utf-8"))),
+    }
+    token_block = re.search(r"WIDGET_SURFACE: dict\[str, dict\[str, str\]\] = \{(.*?)\n\}",
+                            preview_src, re.S)
+    if not token_block:
+        fail("preview-surface", "preview.py has no WIDGET_SURFACE token block")
+    else:
+        for mode, mapping in re.findall(r'"(day|night)": \{(.*?)\}', token_block.group(1), re.S):
+            pairs = re.findall(r'"([a-z_]+)": "(#[0-9A-Fa-f]{6})"', mapping)
+            if not pairs:
+                fail("preview-surface", f"preview.py WIDGET_SURFACE[{mode}] has no colours")
+            for name, value in pairs:
+                token = "widget_" + name
+                want = device_colors[mode].get(token)
+                if want is None:
+                    fail("preview-surface",
+                         f"preview.py {mode} token {token} has no device resource")
+                elif want.lower() != value.lower():
+                    fail("preview-surface",
+                         f"preview.py {mode} {token}={value} but colors.xml says {want}")
+
+    # --- the picker preview mirrors the shipped composition ----------------
+    for name, path in (("day", PREVIEW_LAYOUT), ("night", PREVIEW_LAYOUT_NIGHT)):
+        if not path.is_file():
+            fail("preview-layout", f"missing {path.relative_to(REPO)}")
+    if PREVIEW_LAYOUT.is_file() and PREVIEW_LAYOUT_NIGHT.is_file():
+        day_xml = PREVIEW_LAYOUT.read_text(encoding="utf-8")
+        night_xml = PREVIEW_LAYOUT_NIGHT.read_text(encoding="utf-8")
+        if day_xml != night_xml:
+            # Only colors may differ: the structure has to stay the same shape. Comments
+            # are stripped because each file explains itself in its own words.
+            def shape(xml: str) -> str:
+                return re.sub(r'@color/[a-z_]+', "@color/x", re.sub(r"<!--.*?-->", "", xml, flags=re.S))
+            if shape(day_xml) != shape(night_xml):
+                fail("preview-layout",
+                     "layout-night/widget_preview.xml is not structurally identical to the day one")
+        strings = {
+            m.group(1): m.group(2)
+            for m in re.finditer(r'<string name="([a-z_]+)">(.*?)</string>',
+                                 STRINGS_XML.read_text(encoding="utf-8"))
+        }
+        for key in ("widget_header_title", "widget_request_update"):
+            want = strings.get(key)
+            if want is None:
+                fail("preview-layout", f"strings.xml has no {key}")
+            elif f'android:text="{want}"' not in day_xml:
+                fail("preview-layout",
+                     f"the picker preview does not show {key} ({want!r}); it must mirror the widget")
+        for needed in ("ic_hermes_mark", "widget_status_dot", "widget_action_background",
+                       "widget_preview_background"):
+            if needed not in day_xml:
+                fail("preview-layout", f"the picker preview does not use {needed}")
+        radius_drawable = (RES / "drawable" / "widget_preview_background.xml").read_text(encoding="utf-8")
+        if "@dimen/widget_corner_radius" not in radius_drawable:
+            fail("preview-layout",
+                 "the preview background must round with @dimen/widget_corner_radius (WS-2)")
+        if re.search(r'android:radius="[0-9]+dp"', radius_drawable):
+            fail("preview-layout", "the preview background hard-codes a radius literal (WS-2)")
+
+    # --- loading state mirrors the shipped hierarchy -----------------------
+    info = WIDGET_INFO.read_text(encoding="utf-8")
+    if 'android:initialLayout="@layout/widget_loading"' not in info:
+        fail("loading-state", "initialLayout must be the shipped-shape wireframe (WS-3)")
+    elif LOADING_LAYOUT.is_file():
+        loading = LOADING_LAYOUT.read_text(encoding="utf-8")
+        for needed in ("widget_loading_bar", "widget_loading_button"):
+            if needed not in loading:
+                fail("loading-state", f"widget_loading.xml has no {needed} placeholder")
+    else:
+        fail("loading-state", "res/layout/widget_loading.xml is missing")
+    if "@layout/widget_preview" not in info:
+        fail("loading-state", "previewLayout must stay @layout/widget_preview (WD-1)")
+
+    # --- the radius fallback lives in resources, not in Kotlin -------------
+    if not DIMENS_XML.is_file() or "widget_corner_radius" not in DIMENS_XML.read_text(encoding="utf-8"):
+        fail("corner-radius", "values/dimens.xml must hold the widget_corner_radius fallback (WS-2)")
+
     # --- docs/SCHEMA.md must not promise removed things -------------------
     # Naming a removed field is fine as long as the line says it is gone; what this
     # forbids is a doc that reads as if the field exists.
@@ -287,7 +402,8 @@ def main() -> int:
         f"{len(types_schema)} node types, {len(kinds_schema)} action kinds, "
         f"{len(styles_schema)} text styles, "
         f"{sum(len(v) for v in fields_schema.values())} per-type fields, "
-        f"{len(envelope)} envelope fields"
+        f"{len(envelope)} envelope fields, "
+        "widget surface (bands, pinned footer, theme tokens, preview, loading state)"
     )
     return 0
 

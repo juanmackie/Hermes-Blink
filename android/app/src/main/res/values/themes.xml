@@ -1,4 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="AppTheme" parent="Theme.AppCompat.DayNight.DarkActionBar" />
+    <!-- The widget's own theme (WC-1): its window background and primary ink are the
+         surface tokens, so ?android:colorBackground resolves to the same day/night/dynamic
+         values HermesWidget.kt paints. Applied to the provider in the manifest. -->
+    <style name="WidgetTheme" parent="Theme.AppCompat.DayNight">
+        <item name="android:windowBackground">@color/widget_surface</item>
+        <item name="android:textColorPrimary">@color/widget_on_surface</item>
+    </style>
 </resources>

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The action's filled style: accent fill, 8dp corner (LayoutDefaults.BUTTON_CORRIER
+     parity), matching the Glance button the widget composes. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/widget_accent" />
+    <corners android:radius="8dp" />
+</shape>

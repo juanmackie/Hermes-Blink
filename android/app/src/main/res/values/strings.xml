@@ -7,4 +7,10 @@
     <string name="pair_device">Pair phone</string>
     <string name="connect">Pair or update</string>
     <string name="widget_description">A glanceable Hermes brief with a request-update action.</string>
+    <!-- Widget chrome. The picker preview inlines the same two strings (they live in the
+         compiled layout XML, not resources.arsc); check-contract-parity.py compares them. -->
+    <string name="widget_header_title">Hermes</string>
+    <string name="widget_request_update">Request update</string>
+    <string name="widget_pin_offered">Add the Hermes widget to your home screen</string>
+    <string name="widget_image_description">Publication image</string>
 </resources>

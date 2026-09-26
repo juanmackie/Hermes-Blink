@@ -171,7 +171,7 @@ does not accept a free-form font size.
 | `title` | 18sp | bold | `#000000` | The hero: one number, one word, a headline |
 | `body` | 14sp | normal | `#000000` | Task text, list item titles |
 | `label` | 12sp | medium | `#000000` | Short identifiers, event titles |
-| `caption` | 11sp | normal | `#8E8E93` | Labels, units, timestamps, context |
+| `caption` | 11sp | normal | `#5F5F66` | Labels, units, timestamps, context |
 
 An absent or unknown `style` renders as `body`. At most three of these four per widget, and at
 most two active weights — the contrast between `title` and `caption` is what makes a layout
@@ -182,9 +182,10 @@ readable at a glance, and adding a third size flattens it.
 - **6-digit hex only.** 8-digit alpha hex, named colors, and `rgb()` are rejected at push
   time (`accentColor` has always been checked this way; `color` now is too).
 - Primary text: `#000000` or omit.
-- Secondary labels: `#8E8E93`.
+- Secondary labels: `#5F5F66` (clears 4.5:1 on the light surface; the device
+  substitutes `#AEAEB2` in dark mode, 7.7:1).
 - Hairline / progress track: `#E5E5EA`.
-- Deltas: `#34C759` up, `#FF3B30` down — the `deltaDirection` you set picks the color, so do
+- Deltas: `#1E7D3C` up, `#C5221A` down — the `deltaDirection` you set picks the color, so do
   not also set `color` on the same `stat`.
 - **One accent hue per widget.** The envelope `accentColor` paints `progress` fills and
   `filled` buttons. `badge.color` and `divider.color` are per-node overrides.
@@ -200,15 +201,40 @@ more or content sits against the widget border (`ROOT_PADDING_LOW` is a warning,
 The widget is resizable, and modern launchers can give the same cell substantially more
 dp than the old nominal preview boxes. Treat these as **ranges**, not fixed canvases. The
 authoritative geometry is the `widget_instances` inventory reported by the phone; at density
-3.0 a 4×4 instance can be about 407×412dp (1221×1236px), not 270×270dp. Design for the shape,
-use `maxItems`/`maxLines`, and preview against the reported instance dimensions.
+3.0 a 4×4 instance can be about 407×412dp (1221×1236px), not 270×270dp.
+
+### The band ladder the device actually renders
+
+The phone groups every instance into one of four bands by **height**, and applies a width
+guard on top. Write for the band your smallest registered instance lands in — the phone
+warns you when a publication does not fit it.
+
+| Band | Height | Canonical shapes | What the device renders | Publication variant key |
+| --- | --- | --- | --- | --- |
+| `xs` | < 130dp | 2×1, 4×1 | Header (mark + status dot), provenance + one hero line | `2x2` |
+| `s` | 130–184dp | 2×2, 4×2 floor | `xs` + one summary line | `2x2` |
+| `m` | 185–299dp | 4×2, 2×3 | `s` + scrollable body (≈3 lines visible) + status line + Request update | `4x2` |
+| `l` | ≥ 300dp | 4×3, 4×4 | `m` + ticker line, ≈8 body lines visible | `4x4` (falls back to `4x2`) |
+
+Two consequences worth planning for:
+
+- **Below 185dp the body is not rendered at all.** A `xs`/`s` instance shows the title (and,
+  in `s`, the summary) and nothing else. If the smallest thing you publish must be readable
+  at 4×1, it has to live in the title.
+- **`widthDp < 245` is single-column.** No ticker, no question, no split row, and the hero
+  is one line. Write the ticker and the question for wide instances only.
+
+The status line and the action are **pinned**, not scrolled: a long body never pushes
+"Request update" below the fold.
+
+### Shape table
 
 | Shape | Typical dp range | What fits |
 | --- | --- | --- |
-| 2×2 | ~110–200 × 110–200dp | One hero (`stat` or `title` text) + one `caption`. Nothing else. |
-| 4×2 (default) | ~250–420 × 110–220dp | Hero + two or three supporting lines, or a hero `row` of two stats. |
-| 2×4 | ~110–200 × 250–420dp | One stacked column: title, then 3–4 `list_item`s. |
-| 4×4 | ~300–420 × 300–420dp | Hero row + divider + `list` of 3–5 items + a footer `caption`. |
+| 2×2 | ~110–306 × 115–276dp | Band `s`/`m`: one hero (`stat` or `title` text) + one `caption`. |
+| 4×2 (default) | ~245–624 × 115–276dp | Band `m`: hero + a few supporting lines, or a hero `row` of two stats. |
+| 2×4 | ~110–306 × 185–422dp | Band `l`, single-column: title, then 3–4 `list_item`s. |
+| 4×4 | ~245–624 × 300–422dp | Band `l`: hero row + divider + `list` of 3–5 items + footer `caption`. |
 
 Density caveat: `px = dp × device density`; the same dp class can produce very different pixel
 counts across phones. `widget_preview` and the publication endpoint use the phone's reported

@@ -9,7 +9,10 @@ import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
 import org.json.JSONObject
+import android.util.Log
 import com.you.hermeswidget.net.Config
+import com.you.hermeswidget.widget.Breakpoints
+import com.you.hermeswidget.widget.WidgetDimensions
 import java.text.DateFormat
 import java.util.Date
 
@@ -18,6 +21,7 @@ class DiagnosticsActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var exemption: TextView
     private lateinit var pushState: TextView
+    private lateinit var instances: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -25,8 +29,13 @@ class DiagnosticsActivity : Activity() {
         status = findViewById(R.id.diagnostics_status)
         exemption = findViewById(R.id.battery_exemption_status)
         pushState = findViewById(R.id.push_state_status)
+        instances = findViewById(R.id.widget_instances_status)
         findViewById<Button>(R.id.request_battery_exemption).setOnClickListener {
             requestExemption()
+        }
+        // Manual entry point for the same one-shot pin offer pairing makes (discovery guide).
+        findViewById<Button>(R.id.pin_widget).setOnClickListener {
+            WidgetPinning.offer(this, this)
         }
         findViewById<Button>(R.id.close_diagnostics).setOnClickListener { finish() }
     }
@@ -67,6 +76,35 @@ class DiagnosticsActivity : Activity() {
             append("\nLast wake received: ")
             append(lastWake?.let { format.format(Date(it)) } ?: "never")
         }
+        renderInstances()
+    }
+
+    /**
+     * The per-instance geometry that drives the band ladder, so "why did my 2x2 look
+     * like a 4x4" is answerable on the device instead of guessed at. The widget itself
+     * reads Glance's LocalSize first; this is the launcher-reported inventory that is the
+     * fallback and the value the host receives, so both are worth one line here.
+     */
+    private fun renderInstances() {
+        val rows = WidgetDimensions.allInstances(this)
+        instances.text = if (rows.isEmpty()) {
+            "Widget instances: none added yet"
+        } else {
+            buildString {
+                append("Widget instances: ${rows.size}")
+                for (row in rows) {
+                    val spec = Breakpoints.spec(
+                        row.widthDp.toFloat(),
+                        row.heightDp.toFloat(),
+                    )
+                    append("\n#${row.instanceId} ${row.widthDp}x${row.heightDp}dp " +
+                        "(${row.widthPx}x${row.heightPx}px) ${row.sizeClass} " +
+                        "band=${spec.band} variant=${spec.band.variantKey} " +
+                        "singleColumn=${spec.singleColumn}")
+                }
+            }
+        }
+        Log.i("HermesDiagnostics", instances.text.toString().replace("\n", " | "))
     }
 
     private fun requestExemption() {

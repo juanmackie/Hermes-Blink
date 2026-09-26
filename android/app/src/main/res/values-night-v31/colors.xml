@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Dark tonal pair: surface tone 900, ink tone 50, secondary tone 300 and the
+         light accent1_200 (M3's dark-theme primary). -->
+    <color name="widget_surface">@android:color/system_neutral1_900</color>
+    <color name="widget_on_surface">@android:color/system_neutral1_50</color>
+    <color name="widget_secondary">@android:color/system_neutral1_300</color>
+    <color name="widget_accent">@android:color/system_accent1_200</color>
+    <color name="widget_on_accent">@android:color/system_neutral1_900</color>
+    <color name="widget_hairline">@android:color/system_neutral1_700</color>
+</resources>

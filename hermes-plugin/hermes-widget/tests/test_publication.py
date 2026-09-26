@@ -279,6 +279,61 @@ class PublicationContract(unittest.TestCase):
         self.assertEqual([record["id"] for record in fake.records], ["first"])
         self.assertFalse(fake.created)
 
+    def _register_instance(self, label, width_dp, height_dp):
+        """Pair a device and register one instance so the budget can see its band."""
+        token = self.pair_device(label)
+        device_id = self.store.device_for_token(token)["deviceId"]
+        instances = [{
+            "instanceId": "1",
+            "sizeClass": self.store._size_class(width_dp, height_dp),
+            "widthDp": width_dp,
+            "heightDp": height_dp,
+            "widthPx": width_dp * 3,
+            "heightPx": height_dp * 3,
+        }]
+        return self.store.report_widget_instances(device_id, "hermes-brief", instances)
+
+    def test_a_text_wall_warns_about_the_smallest_registered_band(self):
+        self._register_instance("Pixel Band", 624, 120)   # 4x1 -> xs: no body region
+        result = json.loads(self.tools.widget_publish({
+            "title": "Overnight batch",
+            "summary": "3 need review",
+            "text": "detail " * 90,
+        }))
+        self.assertTrue(result["ok"], result)
+        codes = {w["code"] for w in result["warnings"]}
+        self.assertIn("BODY_HIDDEN_IN_XS", codes)
+        detail = next(w["detail"] for w in result["warnings"]
+                      if w["code"] == "BODY_HIDDEN_IN_XS")
+        self.assertIn("xs band", detail)
+        self.assertIn("624x120dp", detail)
+
+    def test_a_4x4_publication_reports_scrolling_not_clipping(self):
+        # 4x4 -> l: 8 body lines at est. 56 chars/line = 448 characters of visible body.
+        self._register_instance("Pixel Large", 407, 412)
+        result = json.loads(self.tools.widget_publish({
+            "title": "Overnight batch",
+            "summary": "3 need review",
+            "text": "detail " * 90,
+        }))
+        self.assertTrue(result["ok"], result)
+        codes = {w["code"] for w in result["warnings"]}
+        self.assertIn("BODY_MAY_SCROLL_L", codes)
+        self.assertNotIn("BODY_HIDDEN_IN_L", codes)
+        self.assertNotIn("SUMMARY_HIDDEN_IN_XS", codes)
+
+    def test_a_short_publication_on_a_4x2_warns_nothing_about_fit(self):
+        self._register_instance("Pixel Mid", 407, 250)     # 4x2 -> m
+        result = json.loads(self.tools.widget_publish({
+            "title": "Overnight batch",
+            "summary": "3 need review",
+            "text": "All clear.",
+        }))
+        self.assertTrue(result["ok"], result)
+        codes = {w["code"] for w in result["warnings"]}
+        self.assertNotIn("BODY_MAY_SCROLL_M", codes)
+        self.assertNotIn("BODY_HIDDEN_IN_M", codes)
+
     def test_text_publish_is_idempotent_and_status_is_honest(self):
         first = json.loads(
             self.tools.widget_publish(

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="widget_surface">#1C1C1E</color>
+    <color name="widget_on_surface">#F2F2F7</color>
+    <color name="widget_secondary">#AEAEB2</color>
+    <color name="widget_accent">#B9A6FF</color>
+    <color name="widget_on_accent">#1C1C1E</color>
+    <color name="widget_hairline">#3A3A3C</color>
+
+    <color name="widget_status_fresh">#7BD88F</color>
+    <color name="widget_status_aged">#FFB020</color>
+    <color name="widget_status_stale">#FF6B60</color>
+    <color name="widget_status_offline">#AEAEB2</color>
+</resources>
