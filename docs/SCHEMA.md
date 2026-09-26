@@ -300,6 +300,37 @@ aggregate dwell/tap/render/supersession counts. The agent consumes intents with
 sensitive classes require confirmation. A revoked device cannot report inventory, telemetry,
 or enqueue an intent, and unactioned intents expire.
 
+### Client build reporting
+
+A device that renders the wrong thing is usually a build problem, so the phone names the
+build it is running on **every** request, including the GET poll:
+
+| Header | Example | Meaning |
+| --- | --- | --- |
+| `X-Hermes-App-Version` | `0.2.0` | `versionName` of the installed package |
+| `X-Hermes-App-Build` | `200` | `versionCode` / `longVersionCode` |
+| `X-Hermes-Os-Sdk` | `35` | Android API level |
+
+The combined form `0.2.0 (200)` in the version header is also accepted. The same values
+travel in a `client` object on `PATCH /v1/device` (`{"appVersion","appBuildCode","osSdk"}`)
+and as `clientVersion` / `clientBuildCode` on the render acknowledgement.
+
+The server stores the latest report per device (`device_client_info`, first and last seen)
+and, per `(widget, device, revision)`, which build rendered it
+(`publication_render_builds`). `widget_status` surfaces both as `devices[].appVersion` /
+`appBuildCode` and `delivery[].renderedBy` / `delivery[].client`.
+
+Deliberately narrow, and deliberately lenient:
+
+- only an app version, a build code and an OS API level — nothing that identifies a person,
+  a place or an account;
+- values are bounded (32 characters, build code ≤ 2^31-1, API level ≤ 100) and a value that
+  fails validation is **ignored, not stored and not raised** — build metadata must never be
+  able to fail a publication fetch;
+- an unchanged build writes nothing, so the 15-minute poll does not become a write per wakeup;
+- a device that reports nothing (an app predating this) keeps working; its `client` and
+  `renderedBy` fields are `null` rather than a guess, and a revoked device gets no row.
+
 ## Forward compatibility
 
 Unknown node types are rejected in validation (server) and skipped by the renderer (device).

@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import re
 import ssl
 from datetime import datetime, timezone
 from email.utils import format_datetime
@@ -69,6 +70,23 @@ def _bearer(headers: Any) -> str:
     if raw[:7].lower() != "bearer ":
         return ""
     return raw[7:].strip()
+
+
+_COMBINED_VERSION = re.compile(r"^\s*(\S+)\s+\((\d+)\)\s*$")
+
+
+def _split_combined_version(raw: Any) -> tuple[Any, Any]:
+    """Accept both "0.2.0" and "0.2.0 (200)" in the version header.
+
+    Returns (version, build_or_None). Unrecognised text is passed through untouched so the
+    store's own validation is the single place that decides what is storable.
+    """
+    if not isinstance(raw, str):
+        return raw, None
+    match = _COMBINED_VERSION.match(raw)
+    if not match:
+        return raw, None
+    return match.group(1), match.group(2)
 
 
 def _map_store_error(exc: store.StoreError) -> _HttpError:
@@ -217,11 +235,70 @@ class _Handler(BaseHTTPRequestHandler):
         if allow_device and token:
             device = store.device_for_token(token)
             if device:
+                self._note_client(device["deviceId"])
                 return "device", device["deviceId"]
         # Loopback callers must present a valid bearer token; no automatic
         # agent-level trust. Required before Tailscale HTTPS exposes the
         # server beyond localhost. See review finding 2.
         raise _HttpError(401, "unauthorized", "a valid bearer token is required")
+
+    # -- client build reporting --------------------------------------------
+
+    _CLIENT_VERSION_HEADERS = ("X-Hermes-App-Version", "X-Hermes-Appversion")
+    _CLIENT_BUILD_HEADERS = ("X-Hermes-App-Build", "X-Hermes-Appbuild")
+    _CLIENT_SDK_HEADERS = ("X-Hermes-Os-Sdk", "X-Hermes-Android-Sdk")
+
+    def _header(self, names: tuple[str, ...]) -> str | None:
+        for name in names:
+            value = self.headers.get(name)
+            if value:
+                return value
+        return None
+
+    def _client_identity(self) -> dict[str, object]:
+        """The build this request came from, from headers or a `client` body block.
+
+        Lenient on purpose (see store.record_device_client): a malformed value is treated
+        as absent, never as a reason to refuse a publication fetch. The version header is
+        also accepted in the combined "0.2.0 (200)" form a human-friendly client might
+        send, because a space and a bracket in optional metadata should cost nothing.
+        """
+        raw_version = self._header(self._CLIENT_VERSION_HEADERS)
+        version, build_from_version = _split_combined_version(raw_version)
+        build = self._header(self._CLIENT_BUILD_HEADERS)
+        return {
+            "appVersion": version,
+            "appBuildCode": build if build is not None else build_from_version,
+            "osSdk": self._header(self._CLIENT_SDK_HEADERS),
+        }
+
+    def _client_from_body(self, body: Any) -> dict[str, object]:
+        """Accept both `client: {...}` and the flat fields a thin client may send."""
+        if not isinstance(body, dict):
+            return {}
+        block = body.get("client", body.get("clientInfo"))
+        source = block if isinstance(block, dict) else body
+        return {
+            "appVersion": source.get("appVersion", source.get("app_version", source.get("version"))),
+            "appBuildCode": source.get("appBuildCode", source.get("app_build_code", source.get("buildCode"))),
+            "osSdk": source.get("osSdk", source.get("os_sdk", source.get("androidSdk"))),
+        }
+
+    def _note_client(self, device_id: str, body: Any = None) -> dict | None:
+        """Record the build for a device. Called on every authenticated device request."""
+        identity = {**self._client_identity(), **self._client_from_body(body)}
+        if not any(value is not None for value in identity.values()):
+            return None
+        try:
+            return store.record_device_client(
+                device_id,
+                identity.get("appVersion"),
+                identity.get("appBuildCode"),
+                identity.get("osSdk"),
+            )
+        except store.StoreError:
+            # Metadata must never break the request it rode along with.
+            return None
 
     # -- routing ------------------------------------------------------------
 
@@ -474,6 +551,18 @@ class _Handler(BaseHTTPRequestHandler):
             widget_id, device_id, revision, width, height,
             status=body.get("status"),
         )
+        # Which build drew this revision, recorded with the acknowledgement so the
+        # delivery chain can name it later. A client that reports nothing records nothing.
+        store.record_render_build(
+            widget_id,
+            device_id,
+            revision,
+            body.get("clientVersion", body.get("appVersion")),
+            body.get("clientBuildCode", body.get("appBuildCode")),
+        )
+        rendered_by = store.get_render_builds(widget_id).get((device_id, revision))
+        if rendered_by:
+            result["renderedBy"] = rendered_by
         self._json(200, result)
 
     def _asset(self, asset_id: str | None) -> None:
@@ -767,6 +856,8 @@ class _Handler(BaseHTTPRequestHandler):
                 raise _HttpError(404, "unknown_device", "device does not exist")
         else:
             updated = {"deviceId": device_id}
+        if "client" in body or "clientInfo" in body:
+            updated = {**updated, "client": self._note_client(device_id, body)}
         if "pushEndpoint" in body or "push_endpoint" in body:
             push_result = store.set_device_push_endpoint(
                 device_id, body.get("pushEndpoint", body.get("push_endpoint"))
@@ -786,8 +877,9 @@ class _Handler(BaseHTTPRequestHandler):
             label is None
             and "pushEndpoint" not in body and "push_endpoint" not in body
             and "pushState" not in body and "push_state" not in body
+            and "client" not in body and "clientInfo" not in body
         ):
-            raise _HttpError(400, "bad_request", "label, pushEndpoint, or pushState is required")
+            raise _HttpError(400, "bad_request", "label, pushEndpoint, pushState, or client is required")
         self._json(200, updated)
 
     def _widget_events(self, widget_id: str | None) -> None:

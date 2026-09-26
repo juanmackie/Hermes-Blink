@@ -39,7 +39,9 @@ class UnifiedPushService : PushService() {
         Config.setPushState(context, "failed", true, reasonText)
         val baseUrl = SecureStore.baseUrl(context) ?: Config.getBackendUrl(context) ?: return
         val token = SecureStore.token(context) ?: return
-        Thread { HermesApi.reportPushState(baseUrl, token, "failed", true, reasonText) }.start()
+        Thread {
+            HermesApi.reportPushState(baseUrl, token, "failed", true, reasonText, context = context)
+        }.start()
     }
 
     override fun onUnregistered(instance: String) {

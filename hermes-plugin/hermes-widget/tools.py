@@ -579,6 +579,11 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
                     "revoked": d.get("revoked", False),
                     "pushEndpointRegistered": d.get("pushEndpointRegistered", False),
                     "lastSeenAt": d.get("lastSeenAt"),
+                    # Which build last talked to this server, so "the phone shows X but
+                    # the widget looks like Y" is answerable without asking the user.
+                    "appVersion": d.get("appVersion"),
+                    "appBuildCode": d.get("appBuildCode"),
+                    "osSdk": d.get("osSdk"),
                 }
                 for d in devices
             ],

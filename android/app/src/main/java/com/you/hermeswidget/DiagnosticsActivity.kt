@@ -10,6 +10,7 @@ import android.widget.Button
 import android.widget.TextView
 import org.json.JSONObject
 import android.util.Log
+import com.you.hermeswidget.net.AppIdentity
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.widget.Breakpoints
 import com.you.hermeswidget.widget.WidgetDimensions
@@ -25,6 +26,7 @@ class DiagnosticsActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppIdentity.attach(this)
         setContentView(R.layout.activity_diagnostics)
         status = findViewById(R.id.diagnostics_status)
         exemption = findViewById(R.id.battery_exemption_status)
@@ -45,7 +47,11 @@ class DiagnosticsActivity : Activity() {
         val times = Config.getDiagnosticTimes(this)
         val format = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
         fun label(value: Long?): String = value?.let { format.format(Date(it)) } ?: "never"
+        // The build the user is running, so "which version is this?" is answerable by
+        // reading the screen rather than by guessing which APK they installed.
+        val identity = AppIdentity.of(this)
         status.text = buildString {
+            append("App: ${AppIdentity.describe(identity)} \u00b7 Android API ${identity.osSdk}\n")
             append("Last poll: ${label(times["lastPollAt"])}\n")
             append("Last fetch: ${label(times["lastFetchAt"])}\n")
             append("Last render: ${label(times["lastRenderAt"])}\n")

@@ -1,5 +1,6 @@
 package com.you.hermeswidget.net
 
+import android.content.Context
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.net.HttpURLConnection
@@ -182,6 +183,7 @@ object HermesApi {
         revision: Int,
         width: Int,
         height: Int,
+        context: Context? = null,
     ): HttpResult {
         val conn = open(
             baseUrl,
@@ -192,13 +194,17 @@ object HermesApi {
         return try {
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/json")
+            val identity = AppIdentity.of(context)
             val body = JSONObject()
                 .put("revision", revision)
                 .put("status", "render_submitted")
                 .put("renderedWidth", width)
                 .put("renderedHeight", height)
-                .toString()
-            conn.outputStream.write(body.toByteArray(StandardCharsets.UTF_8))
+            // Named in the body as well as the headers: the render receipt is the one
+            // place where "which build drew this revision" is worth recording.
+            identity.appVersion?.let { body.put("clientVersion", it) }
+            identity.appBuildCode?.let { body.put("clientBuildCode", it) }
+            conn.outputStream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
             val code = conn.responseCode
             HttpResult(
                 code = code,
@@ -351,6 +357,7 @@ object HermesApi {
         state: String,
         distributorPresent: Boolean?,
         failureReason: String? = null,
+        context: Context? = null,
     ): HttpResult {
         val conn = open(baseUrl, "/v1/device", token, method = "PATCH")
         return try {
@@ -360,8 +367,13 @@ object HermesApi {
                 .put("state", state)
                 .put("distributorPresent", distributorPresent ?: JSONObject.NULL)
             if (failureReason != null) pushState.put("failureReason", failureReason)
+            val identity = AppIdentity.of(context)
+            val payload = JSONObject().put("pushState", pushState)
+            // The structured block, on a call this phone already makes: the server then
+            // has a durable record even if it never sees the poll headers.
+            if (identity.isReportable) payload.put("client", identity.toJson())
             conn.outputStream.write(
-                JSONObject().put("pushState", pushState).toString().toByteArray(StandardCharsets.UTF_8)
+                payload.toString().toByteArray(StandardCharsets.UTF_8)
             )
             val code = conn.responseCode
             HttpResult(
@@ -464,6 +476,17 @@ object HermesApi {
         conn.readTimeout = 20_000
         conn.setRequestProperty("Authorization", "Bearer $token")
         conn.setRequestProperty("Accept", "application/json, image/*")
+        // The poll is a GET with no body, so the build identifier rides on every request
+        // as headers: that is what lets the server answer "which build rendered this?"
+        // for an app that predates the structured `client` block.
+        val identity = AppIdentity.of(null)
+        AppIdentity.versionHeader(identity.appVersion)?.let {
+            conn.setRequestProperty("X-Hermes-App-Version", it)
+        }
+        AppIdentity.buildHeader(identity.appBuildCode)?.let {
+            conn.setRequestProperty("X-Hermes-App-Build", it)
+        }
+        conn.setRequestProperty("X-Hermes-Os-Sdk", identity.osSdk.toString())
         if (!etag.isNullOrEmpty()) conn.setRequestProperty("If-None-Match", etag)
         return conn
     }

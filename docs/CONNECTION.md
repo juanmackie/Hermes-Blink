@@ -212,6 +212,12 @@ Two credentials, both bearer tokens in the Authorization header.
 2. DEVICE token - per paired device. Format "dvc_" + secrets.token_urlsafe(16-ish).
    Only its sha256 is stored in the devices table. Verified by hashing the presented token.
 
+The phone also names its build on every request (`X-Hermes-App-Version`,
+`X-Hermes-App-Build`, `X-Hermes-Os-Sdk`), including the GET poll, so the server can answer
+"which build rendered this?". These headers are metadata, not credentials: they are never
+authorised against, are bounded and validated, and a malformed value is ignored rather than
+refused. See docs/SCHEMA.md, "Client build reporting".
+
 Loopback is not an authorization upgrade. Every protected route requires a valid agent or
 paired device bearer token, including requests from 127.0.0.1. This prevents a local proxy
 or accidentally exposed listener from bypassing the credential boundary.

@@ -258,6 +258,10 @@ A headline that is identical every day is noise. Lead with the one thing that ch
 
 ## Reading what the user did
 
+`widget_status` also names the app build each device last reported (`devices[].appVersion`,
+`appBuildCode`) and which build rendered the current revision (`delivery[].renderedBy`), so a
+user report of "it looks wrong on my phone" starts with the build rather than a guess.
+
 Call widget_read_events (optionally `since`, `widget_id`, `limit`) to see taps and refreshes.
 Events are newest first and carry the widget id, device id, event name, and payload. Close the
 loop: if the user tapped "refresh", push an updated layout; if "dismiss" or "review", update

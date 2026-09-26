@@ -7,6 +7,7 @@ import android.widget.Button
 import android.widget.EditText
 import android.widget.Toast
 import com.you.hermeswidget.config.PairingLink
+import com.you.hermeswidget.net.AppIdentity
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.ConnectionState
 import com.you.hermeswidget.net.HermesApi
@@ -17,6 +18,7 @@ import org.json.JSONObject
 class SettingsActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppIdentity.attach(this)
         setContentView(R.layout.activity_settings)
         val urlEdit = findViewById<EditText>(R.id.backend_url_input)
         val codeEdit = findViewById<EditText>(R.id.pairing_code_input)

@@ -7,6 +7,7 @@ import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.work.WorkManager
+import com.you.hermeswidget.net.AppIdentity
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.HermesApi
 import com.you.hermeswidget.net.ConnectionState
@@ -20,6 +21,7 @@ import org.unifiedpush.android.connector.UnifiedPush
 class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        AppIdentity.attach(this)
         setContentView(R.layout.activity_main)
         findViewById<Button>(R.id.connect_btn).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
@@ -55,7 +57,7 @@ class MainActivity : AppCompatActivity() {
         Config.setPushState(this, state, present)
         val baseUrl = SecureStore.baseUrl(this) ?: return
         val token = SecureStore.token(this) ?: return
-        Thread { HermesApi.reportPushState(baseUrl, token, state, present) }.start()
+        Thread { HermesApi.reportPushState(baseUrl, token, state, present, context = this@MainActivity) }.start()
     }
 
     private fun registerUnifiedPushIfAvailable() {

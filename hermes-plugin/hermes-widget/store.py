@@ -87,6 +87,14 @@ ACTION_RATE_WINDOW_SECONDS = 3600
 ACTION_MAX_PER_WINDOW = 30
 PUSH_STATES = ("unknown", "unavailable", "registering", "registered", "failed", "unregistered")
 MAX_WIDGET_INSTANCES = 32
+
+# Client build reporting. Deliberately narrow: an app version, a build code and an OS
+# API level are what "which build was this?" needs, and nothing that identifies a person
+# or a place. Bounded so a hostile client cannot grow the row.
+MAX_APP_VERSION_LEN = 32
+MAX_APP_BUILD_CODE = 2_147_483_647
+MAX_OS_SDK = 100
+_APP_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$")
 PAIRING_TTL_MINUTES = 10
 DEVICE_TOKEN_PREFIX = "dvc" + "_"
 AGENT_TOKEN_ENV = "HERMES_WIDGET_" + "AGENT_TOKEN"
@@ -411,6 +419,21 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS action_intents_status_idx "
             "ON action_intents(widget_id, status, created_at)"
+        )
+        # Which build the phone is running. A device that renders the wrong thing is
+        # usually a build problem, and the only way to answer "which build rendered
+        # revision N" is to have recorded it at the time. Additive tables, like
+        # device_push_state, so an existing widget.db upgrades without a migration.
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS device_client_info ("
+            "device_id TEXT PRIMARY KEY, app_version TEXT, app_build_code INTEGER, "
+            "os_sdk INTEGER, first_reported_at TEXT, updated_at TEXT)"
+        )
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS publication_render_builds ("
+            "widget_id TEXT NOT NULL, device_id TEXT NOT NULL, revision INTEGER NOT NULL, "
+            "app_version TEXT, app_build_code INTEGER, reported_at TEXT NOT NULL, "
+            "PRIMARY KEY (widget_id, device_id, revision))"
         )
         conn.commit()
         _initialised.add(str(db_path()))
@@ -1733,6 +1756,31 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
                     (widget_id,),
                 ).fetchall()
             }
+            render_builds = {
+                (row["device_id"], int(row["revision"])): {
+                    "appVersion": row["app_version"],
+                    "appBuildCode": row["app_build_code"],
+                    "reportedAt": row["reported_at"],
+                }
+                for row in conn.execute(
+                    "SELECT device_id, revision, app_version, app_build_code, reported_at "
+                    "FROM publication_render_builds WHERE widget_id = ?",
+                    (widget_id,),
+                ).fetchall()
+            }
+            client_info = {
+                row["device_id"]: {
+                    "appVersion": row["app_version"],
+                    "appBuildCode": row["app_build_code"],
+                    "osSdk": row["os_sdk"],
+                    "firstReportedAt": row["first_reported_at"],
+                    "updatedAt": row["updated_at"],
+                }
+                for row in conn.execute(
+                    "SELECT device_id, app_version, app_build_code, os_sdk, "
+                    "first_reported_at, updated_at FROM device_client_info"
+                ).fetchall()
+            }
             nudges = {
                 (row["device_id"], int(row["revision"])): row
                 for row in conn.execute(
@@ -1861,6 +1909,10 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
                 ) else None,
                 "renderedWidth": current_ack["width"] if current_ack else None,
                 "renderedHeight": current_ack["height"] if current_ack else None,
+                # Which build rendered this revision, and which build the phone is on now.
+                # Both are null for an app that predates build reporting; neither is invented.
+                "renderedBy": render_builds.get((device_id, current_revision)),
+                "client": client_info.get(device_id),
                 "nudgeStatus": current_nudge["status"] if current_nudge else "not_sent",
                 "nudgeSentAt": current_nudge["sent_at"] if current_nudge else None,
                 "fetchedAt": current_fetch["fetched_at"] if current_fetch else None,
@@ -2654,14 +2706,188 @@ def list_widget_instances(widget_id: str | None = None, *, device_id: str | None
     ]
 
 
+def _clean_app_version(value: Any) -> str | None:
+    """A version string is stored only if it is short and boring."""
+    if value is None or not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    if not trimmed or len(trimmed) > MAX_APP_VERSION_LEN:
+        return None
+    return trimmed if _APP_VERSION_RE.match(trimmed) else None
+
+
+def _clean_app_build_code(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value.isdigit():
+            return None
+        value = int(value)
+    if not isinstance(value, int) or not 0 <= value <= MAX_APP_BUILD_CODE:
+        return None
+    return value
+
+
+def _clean_os_sdk(value: Any) -> int | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        if not value.isdigit():
+            return None
+        value = int(value)
+    if not isinstance(value, int) or not 1 <= value <= MAX_OS_SDK:
+        return None
+    return value
+
+
+def record_device_client(
+    device_id: str,
+    app_version: Any = None,
+    app_build_code: Any = None,
+    os_sdk: Any = None,
+) -> dict | None:
+    """Record which build a device is running, from the poll headers or a `client` block.
+
+    Lenient by design: invalid values are dropped rather than raised, because this is
+    metadata on the delivery path and a phone that cannot fetch a publication because its
+    version string had a space in it would be a far worse bug than a missing version. An
+    unchanged build writes nothing, so the periodic poll does not turn into a write per
+    wakeup.
+    """
+    if not isinstance(device_id, str) or not device_id:
+        raise StoreError("device_id is required")
+    version = _clean_app_version(app_version)
+    build = _clean_app_build_code(app_build_code)
+    sdk = _clean_os_sdk(os_sdk)
+    if version is None and build is None and sdk is None:
+        return get_device_client_info(device_id)
+    now = _now()
+    with _LOCK:
+        conn = _connect()
+        try:
+            active = conn.execute(
+                "SELECT device_id FROM devices WHERE device_id = ? AND revoked = 0", (device_id,)
+            ).fetchone()
+            if active is None:
+                # Unknown or revoked devices never get client rows: nothing reads them,
+                # and a revoked token should not keep leaving traces.
+                return None
+            current = conn.execute(
+                "SELECT app_version, app_build_code, os_sdk FROM device_client_info "
+                "WHERE device_id = ?",
+                (device_id,),
+            ).fetchone()
+            if (
+                current is not None
+                and current["app_version"] == version
+                and current["app_build_code"] == build
+                and current["os_sdk"] == sdk
+            ):
+                return get_device_client_info(device_id)
+            conn.execute(
+                "INSERT INTO device_client_info "
+                "(device_id, app_version, app_build_code, os_sdk, first_reported_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(device_id) DO UPDATE SET "
+                "app_version=excluded.app_version, app_build_code=excluded.app_build_code, "
+                "os_sdk=excluded.os_sdk, updated_at=excluded.updated_at",
+                (device_id, version, build, sdk, now, now),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return get_device_client_info(device_id)
+
+
+def get_device_client_info(device_id: str) -> dict | None:
+    with _LOCK:
+        conn = _connect()
+        try:
+            row = conn.execute(
+                "SELECT app_version, app_build_code, os_sdk, first_reported_at, updated_at "
+                "FROM device_client_info WHERE device_id = ?",
+                (device_id,),
+            ).fetchone()
+        finally:
+            conn.close()
+    if row is None:
+        return None
+    return {
+        "appVersion": row["app_version"],
+        "appBuildCode": row["app_build_code"],
+        "osSdk": row["os_sdk"],
+        "firstReportedAt": row["first_reported_at"],
+        "updatedAt": row["updated_at"],
+    }
+
+
+def record_render_build(
+    widget_id: str,
+    device_id: str,
+    revision: int,
+    app_version: Any = None,
+    app_build_code: Any = None,
+) -> None:
+    """Note which build rendered a revision, alongside the render acknowledgement.
+
+    Best effort: a client that reports no build (an older app) simply records nothing,
+    which is why the columns are nullable rather than defaulted to a lie.
+    """
+    version = _clean_app_version(app_version)
+    build = _clean_app_build_code(app_build_code)
+    if version is None and build is None:
+        return
+    if not isinstance(device_id, str) or not device_id:
+        return
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                "INSERT INTO publication_render_builds "
+                "(widget_id, device_id, revision, app_version, app_build_code, reported_at) "
+                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(widget_id, device_id, revision) DO UPDATE SET "
+                "app_version=excluded.app_version, app_build_code=excluded.app_build_code, "
+                "reported_at=excluded.reported_at",
+                (widget_id, device_id, revision, version, build, _now()),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_render_builds(widget_id: str) -> dict[tuple[str, int], dict]:
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT device_id, revision, app_version, app_build_code, reported_at "
+                "FROM publication_render_builds WHERE widget_id = ?",
+                (widget_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+    return {
+        (str(row["device_id"]), int(row["revision"])): {
+            "appVersion": row["app_version"],
+            "appBuildCode": row["app_build_code"],
+            "reportedAt": row["reported_at"],
+        }
+        for row in rows
+    }
+
+
 def list_devices() -> list[dict]:
     with _LOCK:
         conn = _connect()
         try:
             rows = conn.execute(
                 "SELECT d.device_id, d.label, d.created_at, d.last_seen_at, d.revoked, "
-                "CASE WHEN p.device_id IS NULL THEN 0 ELSE 1 END AS push_registered "
-                "FROM devices d LEFT JOIN device_push_endpoints p ON p.device_id = d.device_id "
+                "CASE WHEN p.device_id IS NULL THEN 0 ELSE 1 END AS push_registered, "
+                "c.app_version, c.app_build_code, c.os_sdk, c.updated_at AS client_updated_at "
+                "FROM devices d "
+                "LEFT JOIN device_push_endpoints p ON p.device_id = d.device_id "
+                "LEFT JOIN device_client_info c ON c.device_id = d.device_id "
                 "ORDER BY d.created_at"
             ).fetchall()
         finally:
@@ -2674,6 +2900,12 @@ def list_devices() -> list[dict]:
             "lastSeenAt": row["last_seen_at"],
             "revoked": bool(row["revoked"]),
             "pushEndpointRegistered": bool(row["push_registered"]),
+            # The build that last talked to the server, so support can ask for an
+            # upgrade without guessing.
+            "appVersion": row["app_version"],
+            "appBuildCode": row["app_build_code"],
+            "osSdk": row["os_sdk"],
+            "clientReportedAt": row["client_updated_at"],
         }
         for row in rows
     ]

@@ -13,6 +13,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import com.you.hermeswidget.net.AppIdentity
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.ConnectionState
 import com.you.hermeswidget.net.HermesApi
@@ -28,6 +29,8 @@ import java.util.concurrent.TimeUnit
 
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
+        // So every request this worker makes can name the build it came from.
+        AppIdentity.attach(applicationContext)
         Config.setDiagnosticTime(applicationContext, "poll")
         retryPendingActions()
         reportInventory()

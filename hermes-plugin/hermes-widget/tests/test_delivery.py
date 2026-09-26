@@ -72,13 +72,25 @@ class DeliveryTruthfulness(unittest.TestCase):
         self.agent_token = self.store.get_agent_token()
         self.assertTrue(self.agent_token)
 
-    def request(self, method, path, body=None, token=None):
+    def request(self, method, path, body=None, token=None, client=None):
+        """`client={"version": ..., "build": ..., "sdk": ...}` sends the app's build headers."""
         data = json.dumps(body).encode("utf-8") if body is not None else None
         headers: dict[str, str] = {}
         if body is not None:
             headers["Content-Type"] = "application/json"
         if token:
             headers["Authorization"] = f"Bearer {token}"
+        if client is not None:
+            version = client.get("version")
+            build = client.get("build")
+            if version is not None:
+                headers["X-Hermes-App-Version"] = (
+                    f"{version} ({build})" if build is not None else str(version)
+                )
+            if build is not None:
+                headers["X-Hermes-App-Build"] = str(build)
+            if client.get("sdk") is not None:
+                headers["X-Hermes-Os-Sdk"] = str(client["sdk"])
         connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         try:
             connection.request(method, path, body=data, headers=headers)
@@ -263,3 +275,257 @@ class DeliveryTruthfulness(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class ClientBuildReporting(unittest.TestCase):
+    """Which build the phone is running, reported on the poll and stored by the server.
+
+    Without this, "the widget looks wrong" is unanswerable: the server sees a device, a
+    revision and a render receipt, and nothing that says which APK produced them.
+
+    These tests publish under their own widget id on purpose: `check_push_rate` keeps a
+    process-wide 30-per-hour budget per widget, so adding more publishes to the default id
+    would break unrelated tests in this suite rather than this one.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        _load_plugin()
+        cls.store = importlib.import_module("hermes_plugins.hermes_widget.store")
+        cls.server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
+        cls.server = cls.server_module.make_server("127.0.0.1", 0)
+        cls.port = cls.server.server_address[1]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+        os.environ.pop("HERMES_WIDGET_DIR", None)
+
+    def setUp(self):
+        self._dir = Path(tempfile.mkdtemp(prefix="hermes-client-build-"))
+        os.environ["HERMES_WIDGET_DIR"] = str(self._dir)
+        self.addCleanup(shutil.rmtree, self._dir, ignore_errors=True)
+        self.store.init_db()
+        self.agent_token = self.store.get_agent_token()
+
+    def request(self, method, path, body=None, token=None, client=None):
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        headers: dict[str, str] = {}
+        if body is not None:
+            headers["Content-Type"] = "application/json"
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        if client is not None:
+            version, build = client.get("version"), client.get("build")
+            if version is not None:
+                headers["X-Hermes-App-Version"] = (
+                    f"{version} ({build})" if build is not None else str(version)
+                )
+            if build is not None:
+                headers["X-Hermes-App-Build"] = str(build)
+            if client.get("sdk") is not None:
+                headers["X-Hermes-Os-Sdk"] = str(client["sdk"])
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.request(method, path, body=data, headers=headers)
+            response = connection.getresponse()
+            raw = response.read().decode("utf-8") or "{}"
+            try:
+                return response.status, json.loads(raw)
+            except json.JSONDecodeError:
+                return response.status, {"raw": raw}
+        finally:
+            connection.close()
+
+    def pair_device(self, label="Pixel 10 Pro XL"):
+        status, minted = self.request("POST", "/v1/pairing-codes", {}, self.agent_token)
+        self.assertEqual(status, 200, minted)
+        status, paired = self.request(
+            "POST", "/v1/pair", {"code": minted["code"], "deviceLabel": label}
+        )
+        self.assertEqual(status, 200, paired)
+        return paired
+
+    def publish(self, **kwargs):
+        return self.store.put_publication(
+            "hermes-build-report",
+            title=kwargs.get("title", "Status"),
+            summary=kwargs.get("summary", "A short status"),
+            text=kwargs.get("text", "All clear"),
+        )
+
+    def _client_row(self, device_id):
+        return self.store.get_device_client_info(device_id)
+
+    def test_the_poll_records_the_build_that_fetched_it(self):
+        paired = self.pair_device()
+        self.publish()
+        status, fetched = self.request(
+            "GET", "/v1/widgets/hermes-build-report/publication", None, paired["token"],
+            client={"version": "0.2.0", "build": 200, "sdk": 35},
+        )
+        self.assertEqual(status, 200, fetched)
+
+        row = self._client_row(paired["deviceId"])
+        self.assertIsNotNone(row, "the poll must leave a build record")
+        self.assertEqual(row["appVersion"], "0.2.0")
+        self.assertEqual(row["appBuildCode"], 200)
+        self.assertEqual(row["osSdk"], 35)
+        self.assertIsNotNone(row["firstReportedAt"])
+
+    def test_an_older_app_that_reports_nothing_still_works(self):
+        paired = self.pair_device()
+        self.publish()
+        status, fetched = self.request(
+            "GET", "/v1/widgets/hermes-build-report/publication", None, paired["token"],
+        )
+        self.assertEqual(status, 200, fetched)
+        # No invented values, and nothing that breaks the fetch.
+        self.assertIsNone(self._client_row(paired["deviceId"]))
+        status_body = self.store.publication_status("hermes-build-report")
+        delivery = status_body["delivery"][0]
+        self.assertIsNone(delivery["client"])
+        self.assertIsNone(delivery["renderedBy"])
+
+    def test_a_malformed_build_never_breaks_the_poll(self):
+        paired = self.pair_device()
+        self.publish()
+        for headers in (
+            {"X-Hermes-App-Version": "a" * 200, "X-Hermes-App-Build": "99999999999999"},
+            {"X-Hermes-App-Version": "0.2.0", "X-Hermes-App-Build": "not-a-number"},
+            {"X-Hermes-App-Build": "-1"},
+        ):
+            connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            try:
+                connection.request(
+                    "GET", "/v1/widgets/hermes-build-report/publication",
+                    headers={"Authorization": f"Bearer {paired['token']}", **headers},
+                )
+                response = connection.getresponse()
+                response.read()
+                self.assertEqual(response.status, 200, f"{headers} must not fail the fetch")
+            finally:
+                connection.close()
+        row = self._client_row(paired["deviceId"])
+        # Partial data is still data: the valid version is kept, the junk build is not,
+        # and nothing is defaulted or guessed.
+        self.assertEqual(row["appVersion"], "0.2.0")
+        self.assertIsNone(row["appBuildCode"])
+
+    def test_an_unchanged_build_does_not_rewrite_the_row(self):
+        paired = self.pair_device()
+        self.publish()
+        self.request(
+            "GET", "/v1/widgets/hermes-build-report/publication", None, paired["token"],
+            client={"version": "0.2.0", "build": 200, "sdk": 35},
+        )
+        first = self._client_row(paired["deviceId"])["updatedAt"]
+        self.request(
+            "GET", "/v1/widgets/hermes-build-report/publication", None, paired["token"],
+            client={"version": "0.2.0", "build": 200, "sdk": 35},
+        )
+        self.assertEqual(self._client_row(paired["deviceId"])["updatedAt"], first)
+
+        # A real upgrade does move it, and keeps the original first-seen time.
+        self.request(
+            "GET", "/v1/widgets/hermes-build-report/publication", None, paired["token"],
+            client={"version": "0.3.0", "build": 300, "sdk": 35},
+        )
+        upgraded = self._client_row(paired["deviceId"])
+        self.assertEqual(upgraded["appVersion"], "0.3.0")
+        self.assertEqual(upgraded["appBuildCode"], 300)
+        self.assertEqual(upgraded["firstReportedAt"], first)
+
+    def test_the_device_patch_accepts_a_structured_client_block(self):
+        paired = self.pair_device()
+        status, result = self.request(
+            "PATCH", "/v1/device", {"client": {"appVersion": "0.2.0", "appBuildCode": 200, "osSdk": 35}},
+            paired["token"],
+        )
+        self.assertEqual(status, 200, result)
+        self.assertEqual(result["client"]["appVersion"], "0.2.0")
+        self.assertEqual(result["client"]["appBuildCode"], 200)
+        row = self._client_row(paired["deviceId"])
+        self.assertEqual(row["appBuildCode"], 200)
+
+    def test_the_render_receipt_names_the_build_that_drew_the_revision(self):
+        paired = self.pair_device()
+        published = self.publish()
+        revision = published["revision"]
+        self.request(
+            "GET", "/v1/widgets/hermes-build-report/publication", None, paired["token"],
+            client={"version": "0.2.0", "build": 200, "sdk": 35},
+        )
+        status, acked = self.request(
+            "POST", "/v1/widgets/hermes-build-report/publication/ack",
+            {
+                "revision": revision,
+                "status": "render_submitted",
+                "renderedWidth": 1221,
+                "renderedHeight": 1236,
+                "clientVersion": "0.2.0",
+                "clientBuildCode": 200,
+            },
+            paired["token"],
+        )
+        self.assertEqual(status, 200, acked)
+        self.assertEqual(acked["renderedBy"]["appVersion"], "0.2.0")
+        self.assertEqual(acked["renderedBy"]["appBuildCode"], 200)
+
+        delivery = self.store.publication_status("hermes-build-report")["delivery"][0]
+        self.assertEqual(delivery["renderedBy"]["appBuildCode"], 200)
+        self.assertEqual(delivery["client"]["appBuildCode"], 200)
+        # The render dimensions and the build travel together, which is the point.
+        self.assertEqual(delivery["renderedWidth"], 1221)
+        self.assertEqual(delivery["renderedHeight"], 1236)
+
+    def test_list_devices_surfaces_the_build(self):
+        paired = self.pair_device()
+        self.publish()
+        self.request(
+            "GET", "/v1/widgets/hermes-build-report/publication", None, paired["token"],
+            client={"version": "0.2.0", "build": 200, "sdk": 35},
+        )
+        devices = self.store.list_devices()
+        self.assertEqual(len(devices), 1)
+        self.assertEqual(devices[0]["appVersion"], "0.2.0")
+        self.assertEqual(devices[0]["appBuildCode"], 200)
+        self.assertEqual(devices[0]["osSdk"], 35)
+        self.assertIsNotNone(devices[0]["clientReportedAt"])
+
+    def test_a_revoked_device_gets_no_client_row(self):
+        paired = self.pair_device()
+        self.publish()
+        self.request(
+            "GET", "/v1/widgets/hermes-build-report/publication", None, paired["token"],
+            client={"version": "0.2.0", "build": 200, "sdk": 35},
+        )
+        self.assertIsNotNone(self._client_row(paired["deviceId"]))
+        self.store.revoke_device(paired["deviceId"])
+        self.assertIsNone(
+            self.store.record_device_client(paired["deviceId"], "9.9.9", 999, 35)
+        )
+
+    def test_junk_values_are_ignored_and_never_erase_what_we_know(self):
+        paired = self.pair_device()
+        device_id = paired["deviceId"]
+        self.assertIsNotNone(self.store.record_device_client(device_id, "0.2.0", 200, 35))
+        known = self._client_row(device_id)
+
+        # Nothing here is storable, and none of it may raise: this rides the poll.
+        for junk in (
+            ("x" * 64, -5, 9_999),
+            (True, "1.5", None),
+            (None, None, None),
+            ("", "", 0),
+        ):
+            self.store.record_device_client(device_id, *junk)
+            self.assertEqual(self._client_row(device_id), known)
+
+        # A real upgrade still lands.
+        self.store.record_device_client(device_id, "0.3.0", 300, 35)
+        self.assertEqual(self._client_row(device_id)["appBuildCode"], 300)

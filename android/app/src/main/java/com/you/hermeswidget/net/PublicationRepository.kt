@@ -185,6 +185,7 @@ object PublicationRepository {
             publication.revision,
             width,
             height,
+            appContext,
         ).code in 200..299
         if (acknowledged && Config.markAttentionRendered(appContext, publication.revision)) {
             HermesApi.reportAttention(

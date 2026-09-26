@@ -377,6 +377,25 @@ def main() -> int:
     if "@layout/widget_preview" not in info:
         fail("loading-state", "previewLayout must stay @layout/widget_preview (WD-1)")
 
+    # --- client build reporting: docs, headers and the store agree ---------
+    api = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+           "hermeswidget" / "net" / "HermesApi.kt").read_text(encoding="utf-8")
+    store_src = (PLUGIN / "store.py").read_text(encoding="utf-8")
+    server_src = (PLUGIN / "server.py").read_text(encoding="utf-8")
+    for header in ("X-Hermes-App-Version", "X-Hermes-App-Build", "X-Hermes-Os-Sdk"):
+        for name, blob in (("HermesApi.kt", api), ("server.py", server_src),
+                           ("docs/SCHEMA.md", schema_doc)):
+            if header not in blob:
+                fail("client-build", f"{name} never mentions {header}")
+    for token in ("device_client_info", "publication_render_builds",
+                  "record_device_client", "record_render_build"):
+        if token not in store_src:
+            fail("client-build", f"store.py has no {token}")
+    if "renderedBy" not in store_src:
+        fail("client-build", "publication_status must name the build that rendered a revision")
+    if "ClientBuildReporting" not in (PLUGIN / "tests" / "test_delivery.py").read_text(encoding="utf-8"):
+        fail("client-build", "no host test covers client build reporting")
+
     # --- the radius fallback lives in resources, not in Kotlin -------------
     if not DIMENS_XML.is_file() or "widget_corner_radius" not in DIMENS_XML.read_text(encoding="utf-8"):
         fail("corner-radius", "values/dimens.xml must hold the widget_corner_radius fallback (WS-2)")
