@@ -86,6 +86,24 @@ def spent_version_codes() -> dict[int, str]:
     return spent
 
 
+def recent_commits(count: int = 2) -> list[str]:
+    """HEAD and the commits just behind it.
+
+    The release document trails HEAD by exactly one commit, because recording the numbers is
+    itself a commit. An artifact built at HEAD~1 and recorded from it is the normal steady
+    state, not a stale build: a gate that reads that as "older than the tree" makes
+    following its own convention impossible.
+    """
+    return [line for line in git("rev-list", f"--max-count={count}", "HEAD").splitlines() if line]
+
+
+def matches_any(sha: str, candidates: list[str]) -> bool:
+    """True when `sha` is a prefix-compatible identifier of any candidate."""
+    if not sha:
+        return False
+    return any(sha.startswith(c) or c.startswith(sha) for c in candidates if c)
+
+
 def stamped_commit() -> str | None:
     for path in REPO.glob(BUILDCONFIG_GLOB):
         match = COMMIT_FIELD.search(path.read_text(encoding="utf-8"))
@@ -116,7 +134,7 @@ def main() -> int:
     # 1. A versionCode that has already been published cannot be reissued.
     if code is not None and code in spent:
         published_by = spent[code]
-        same_build = published_by.startswith(short_head) or short_head.startswith(published_by)
+        same_build = matches_any(published_by, recent_commits(2))
         if not same_build:
             problems.append(
                 f"versionCode {code} was already published by commit {published_by[:12]}. "
@@ -148,10 +166,18 @@ def main() -> int:
             f"way. Commit first, then build, or the stamp only records that nobody was "
             f"paying attention."
         )
-    elif head and not stamp.startswith(head[: len(stamp)]):
+    elif head and not matches_any(stamp, recent_commits(2)):
         problems.append(
-            f"COMMIT_SHA is '{stamp}' but HEAD is '{short_head}': the APK is older than "
-            f"the tree, so the document would describe a build of different code."
+            f"COMMIT_SHA is '{stamp}' but the tree is at {short_head}: this APK is more than "
+            f"one commit behind, so the document would describe different code. Build again."
+        )
+    elif code is not None and code in spent and stamp and not matches_any(stamp, [spent[code]]):
+        # The ledger and the artifact must agree. Two binaries claiming one versionCode
+        # differ exactly here: the ledger names the first, this stamp is the second.
+        problems.append(
+            f"versionCode {code} is recorded against {spent[code][:12]} but this artifact "
+            f"was built from {stamp}: two binaries would claim one versionCode, which is "
+            f"the exact failure this gate exists to prevent. Retire the code."
         )
 
     # 3. The release this build belongs to must be documented.

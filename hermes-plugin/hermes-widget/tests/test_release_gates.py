@@ -201,6 +201,57 @@ class BuildProvenanceGate(unittest.TestCase):
         self.assertEqual(code, 1, out)
         self.assertIn("unknown", out)
 
+    def test_an_artifact_from_the_commit_behind_head_is_accepted(self):
+        # The evidence document trails HEAD by one commit, because recording the numbers is
+        # itself a commit. A gate that calls that "older than the tree" makes its own
+        # convention impossible to follow, and the first version of this did exactly that.
+        repo = self._fixture()
+        head = git(repo, "rev-parse", "HEAD")
+        doc = repo / DOC
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text(
+            "# release\n\n"
+            "| Version | Commit | Size | SHA-256 |\n| --- | --- | --- | --- |\n"
+            f"| `0.4.0` (versionCode 5) | `{head[:12]}` | 1 bytes | `{'f' * 64}` |\n"
+        )
+        commit_all(repo, "record the evidence")
+        generated = (
+            repo / "android/app/build/generated/source/buildConfig/debug/com/you/hermeswidget"
+        )
+        generated.mkdir(parents=True)
+        # Built from the parent, which is exactly the steady state after recording.
+        (generated / "BuildConfig.java").write_text(
+            f'  public static final String COMMIT_SHA = "{head[:12]}";\n'
+        )
+        code, out = self._run(repo)
+        self.assertEqual(code, 0, out)
+
+    def test_a_second_binary_claiming_the_same_code_is_refused(self):
+        # The ledger names the first build; this artifact is a different one claiming the
+        # same number. That is finding 1, and it must fail even though both are recent.
+        repo = self._fixture()
+        head = git(repo, "rev-parse", "HEAD")
+        doc = repo / DOC
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text(
+            "# release\n\n"
+            "| Version | Commit | Size | SHA-256 |\n| --- | --- | --- | --- |\n"
+            f"| `0.4.0` (versionCode 5) | `{head[:12]}` | 1 bytes | `{'f' * 64}` |\n"
+        )
+        commit_all(repo, "record the evidence")
+        (repo / "second-binary.txt").write_text("a different build\n")
+        commit_all(repo, "a different build ships the same versionCode")
+        generated = (
+            repo / "android/app/build/generated/source/buildConfig/debug/com/you/hermeswidget"
+        )
+        generated.mkdir(parents=True)
+        (generated / "BuildConfig.java").write_text(
+            f'  public static final String COMMIT_SHA = "{git(repo, "rev-parse", "HEAD")[:12]}";\n'
+        )
+        code, out = self._run(repo)
+        self.assertEqual(code, 1, out)
+        self.assertIn("two binaries would claim one versionCode", out)
+
     def test_the_gradle_build_refuses_a_dirty_tree(self):
         # The enforcement half, checked structurally: the review environment cannot run
         # Gradle, so this asserts the wiring exists rather than that it fires.
