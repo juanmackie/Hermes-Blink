@@ -19,15 +19,36 @@ object ActionCallbacks {
         ) {
             val widgetId = parameters[WidgetParams.widgetIdKey]
                 ?: Config.getWidgetId(context)
-            val event = parameters[WidgetParams.eventKey] ?: return
+            val instanceId = WidgetInstanceIds.of(glanceId)
+            // Log the entry before anything can bail out. Round 6 learned that a press
+            // which produces no record is indistinguishable from a press that never
+            // happened; this line is where that is settled.
+            android.util.Log.i(
+                "HermesWidgetAction",
+                "onAction instance=$instanceId event=${parameters[WidgetParams.eventKey]} " +
+                    "kind=${parameters[WidgetParams.kindKey]} " +
+                    "hasPayload=${!parameters[WidgetParams.payloadKey].isNullOrBlank()}",
+            )
+            val event = parameters[WidgetParams.eventKey].also {
+                if (it == null) {
+                    // The last silent exit, removed: a callback with no event name is a
+                    // wiring bug, and a wiring bug that says nothing is how a round is lost.
+                    android.util.Log.e(
+                        "HermesWidgetAction",
+                        "callback fired with no event parameter " +
+                            "kind=${parameters[WidgetParams.kindKey]}",
+                    )
+                    Config.recordActionOutcome(
+                        context, "<no event>", instanceId, 0, "missing_event_parameter",
+                        "the widget action was dispatched without an event name",
+                    )
+                }
+            } ?: return
             val payload = parameters[WidgetParams.payloadKey]
             val kind = parameters[WidgetParams.kindKey] ?: event
             val itemId = parameters[WidgetParams.itemIdKey].orEmpty()
             val actionClass = parameters[WidgetParams.actionClassKey] ?: "reversible"
             val confirmOnDevice = parameters[WidgetParams.confirmOnDeviceKey] ?: false
-            // Which instance was tapped. Without this, a server-side event cannot be
-            // tied back to a specific widget on the home screen.
-            val instanceId = WidgetInstanceIds.of(glanceId)
             val url = SecureStore.baseUrl(context) ?: Config.getBackendUrl(context)
             val token = SecureStore.token(context)
             if (url == null || token == null) {

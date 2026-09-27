@@ -43,11 +43,12 @@ android {
         applicationId = "com.you.hermeswidget"
         minSdk = 26
         targetSdk = 35
-        // Bumped per release: 5 = the 2026-09-27 round-6 fixes (button press feedback,
-        // honest pin/battery actions, live pairing status). CI fails the build when a
-        // source change lands with the same versionCode (scripts/check-version-bump.py).
-        versionCode = 5
-        versionName = "0.4.1"
+        // Bumped per release: 6 = the 2026-09-27 "Request update does not work" round —
+        // explicit scroll-region height so the pinned action cannot be clipped off the
+        // bottom, plus the three-link action trail. CI fails the build when a source
+        // change lands with the same versionCode (scripts/check-version-bump.py).
+        versionCode = 6
+        versionName = "0.4.2"
     }
     buildFeatures {
         compose = true

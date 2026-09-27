@@ -15,6 +15,11 @@ import org.junit.Test
  */
 class WidgetBreakpointsTest {
 
+    private companion object {
+        /** Below this the cell cannot hold the header plus a readable row at all. */
+        const val MIN_USABLE_HEIGHT_DP = 60f
+    }
+
 
     // --- band edges (E2: 2x1/4x1 56-130, 2x2/4x2 115-276, 4x3 185-422) -------------
 
@@ -140,6 +145,53 @@ class WidgetBreakpointsTest {
         assertTrue("tight 4x4 image height was $tight", tight in 120..240)
         // The chrome it subtracts is real: the image can never eat the footer.
         assertTrue(Breakpoints.spec(400f, 412f).imageHeightDp < 412)
+    }
+
+    // --- pinned chrome must fit (round 6) --------------------------------------
+
+    @Test
+    fun `the scroll region and the pinned chrome always fit the instance`() {
+        // The footer is the only way to poke the agent from the widget, so the column's
+        // total height must never exceed the cell: a weight-constrained lazy list is
+        // measured by the platform, and a miss pushes the footer out of view.
+        val heights = listOf(56f, 110f, 130f, 184f, 185f, 250f, 276f, 300f, 412f)
+        for (height in heights) {
+            for (width in listOf(110f, 245f, 407f, 624f)) {
+                val spec = Breakpoints.spec(width, height)
+                val total = spec.chromeHeightDp + spec.scrollHeightDp
+                assertTrue(
+                    "width=${width}dp height=${height}dp: chrome ${spec.chromeHeightDp} + " +
+                        "scroll ${spec.scrollHeightDp} = $total exceeds the cell",
+                    total <= height || height < MIN_USABLE_HEIGHT_DP,
+                )
+                assertTrue("scroll region must never be zero", spec.scrollHeightDp > 0)
+            }
+        }
+    }
+
+    @Test
+    fun `a tall instance gets the height the chrome left over`() {
+        val spec = Breakpoints.spec(407f, 412f)
+        // 412 - (24 padding + 20 header + 52 footer) = 316
+        assertEquals(316, spec.scrollHeightDp)
+        assertEquals(12f + 12f + 20f + 52f, spec.chromeHeightDp, 0.01f)
+    }
+
+    @Test
+    fun `a band with no footer reserves only the header and the padding`() {
+        val spec = Breakpoints.spec(300f, 120f)   // S: no footer
+        assertFalse(spec.showsFooter)
+        // Only the padding and the header are reserved: 12 + 12 + 20 = 44.
+        assertEquals(12f * 2 + 20f, spec.chromeHeightDp, 0.01f)
+        assertEquals(120 - 44, spec.scrollHeightDp)
+    }
+
+    @Test
+    fun `a cell too short for real chrome still keeps a usable scroll region`() {
+        // 56dp (a 2x1 floor) cannot fit the header and a 48dp action; the ladder floors
+        // the scroll region rather than producing a negative height.
+        val spec = Breakpoints.spec(300f, 56f)
+        assertEquals(MIN_SCROLL_DP.toInt(), spec.scrollHeightDp)
     }
 
     // --- LocalSize plumbing (Task 1) --------------------------------------------

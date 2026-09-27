@@ -27,6 +27,8 @@ object Config {
     private const val KEY_ATTENTION_RENDERED_REVISION = "attention_rendered_revision"
     private const val KEY_LAST_PUSH_WAKE = "last_push_wake"
     private const val KEY_ACTION_OUTCOMES = "action_outcomes"
+    private const val KEY_LAST_COMPOSITION = "last_composition"
+    private const val KEY_ACTION_FIRES = "action_fires"
 
     private fun prefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -274,6 +276,56 @@ object Config {
         val array = JSONArray(prefs(context).getString(KEY_ACTION_OUTCOMES, "[]") ?: "[]")
         (0 until array.length()).mapNotNull { array.optJSONObject(it) }
     }.getOrDefault(emptyList())
+
+    /**
+     * What the last widget composition actually drew.
+     *
+     * Field round 6: "Request update does not work" was unanswerable because we could not
+     * tell a missing button from a tap that went nowhere. This records the band, whether
+     * the action was part of it, and the scroll region it was given.
+     */
+    fun setLastComposition(
+        context: Context,
+        band: String,
+        actionAvailable: Boolean,
+        scrollHeightDp: Int,
+        at: Long = System.currentTimeMillis(),
+    ) {
+        prefs(context).edit().putString(
+            KEY_LAST_COMPOSITION,
+            JSONObject()
+                .put("band", band)
+                .put("actionAvailable", actionAvailable)
+                .put("scrollHeightDp", scrollHeightDp)
+                .put("at", at)
+                .toString(),
+        ).apply()
+    }
+
+    fun getLastComposition(context: Context): JSONObject? = runCatching {
+        JSONObject(prefs(context).getString(KEY_LAST_COMPOSITION, "{}") ?: "{}")
+    }.getOrNull()?.takeIf { it.length() > 2 }
+
+    /**
+     * A widget action broadcast that actually reached this process.
+     *
+     * Counted before Glance dispatches it, so a count with no matching outcome means the
+     * dispatch failed, and a count of zero means the tap never produced a broadcast at all
+     * — the tap landed somewhere else (typically the surface, which opens the app).
+     */
+    fun recordActionFired(context: Context, callbackClass: String?, at: Long = System.currentTimeMillis()) {
+        val current = runCatching {
+            JSONObject(prefs(context).getString(KEY_ACTION_FIRES, "{}") ?: "{}")
+        }.getOrElse { JSONObject() }
+        current.put("count", current.optInt("count", 0) + 1)
+        current.put("callback", callbackClass ?: "unknown")
+        current.put("at", at)
+        prefs(context).edit().putString(KEY_ACTION_FIRES, current.toString()).apply()
+    }
+
+    fun getActionFires(context: Context): JSONObject? = runCatching {
+        JSONObject(prefs(context).getString(KEY_ACTION_FIRES, "{}") ?: "{}")
+    }.getOrNull()?.takeIf { it.length() > 2 }
 
     fun markAttentionRendered(context: Context, revision: Int): Boolean {
         val key = prefs(context)

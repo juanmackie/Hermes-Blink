@@ -3,6 +3,12 @@ package com.you.hermeswidget.widget
 import androidx.compose.ui.unit.DpSize
 import kotlin.math.roundToInt
 
+/** The pinned chrome the scroll region must leave behind, in dp. */
+internal const val SURFACE_PADDING_DP = 12f
+internal const val HEADER_HEIGHT_DP = 20f   // 16dp mark + 4dp gap
+internal const val FOOTER_HEIGHT_DP = 52f   // 48dp action + 4dp gap
+internal const val MIN_SCROLL_DP = 56f
+
 /**
  * The widget's content budget ladder.  Everything about "how much fits" lives here so the
  * renderer, the publisher budgets and the tests cannot disagree about the same instance.
@@ -43,6 +49,12 @@ enum class WidgetBand(
     val showsRequestAction: Boolean get() = this >= M
 
     companion object {
+        /** The pinned chrome, in dp, that the scroll region must leave behind. */
+        const val SURFACE_PADDING_DP = 12f
+        const val HEADER_HEIGHT_DP = 20f   // 16dp mark + 4dp gap
+        const val FOOTER_HEIGHT_DP = 52f   // 48dp action + 4dp gap
+        const val MIN_SCROLL_DP = 56f
+
         /** Canonical band edges in dp. Height drives the band; width is a guard, not a band. */
         const val XS_MAX_HEIGHT_DP = 130f
         const val S_MAX_HEIGHT_DP = 185f
@@ -91,6 +103,24 @@ data class BandSpec(
     val showsStatusDot: Boolean get() = band.showsStatusDot
     val showsFooter: Boolean get() = band.showsFooter
     val showsRequestAction: Boolean get() = band.showsRequestAction
+
+    /**
+     * Height of the scroll region, in dp, derived from the instance rather than left to
+     * `defaultWeight()`.
+     *
+     * Field round 6: a weight-constrained Glance LazyColumn is measured by the platform at
+     * draw time, and when that resolution does not land the way Compose would, the Column
+     * is taller than the cell and the launcher clips the bottom — which is exactly where
+     * the pinned action lives. Explicit arithmetic makes the layout deterministic: the
+     * chrome is subtracted, so the footer is inside the cell by construction.
+     */
+    val scrollHeightDp: Int
+        get() = (heightDp - chromeHeightDp).roundToInt().coerceIn(MIN_SCROLL_DP.toInt(), 4_096)
+
+    /** The pinned chrome this band reserves, in dp. */
+    val chromeHeightDp: Float
+        get() = SURFACE_PADDING_DP * 2 + HEADER_HEIGHT_DP +
+            (if (showsFooter) FOOTER_HEIGHT_DP else 0f)
 
     /**
      * Band-driven image height (D15). S and M get a fixed budget; L is allowed to use the

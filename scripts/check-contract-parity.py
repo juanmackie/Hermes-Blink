@@ -447,6 +447,38 @@ def main() -> int:
         if needed not in settings:
             fail("app-action-feedback", f"SettingsActivity is missing {needed!r}")
 
+    # --- the widget action must be reachable and observable ------------------
+    widget_kt = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+                 "hermeswidget" / "widget" / "HermesWidget.kt").read_text(encoding="utf-8")
+    breakpoints = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+                   "hermeswidget" / "widget" / "Breakpoints.kt").read_text(encoding="utf-8")
+    # Only the LazyColumn matters: a width weight inside the footer Row is fine, so the
+    # check is scoped to the scroll region's own modifier block, comments excluded.
+    widget_code = re.sub(r"//.*", "", re.sub(r"/\*.*?\*/", "", widget_kt, flags=re.S))
+    lazy = re.search(r"LazyColumn\((.*?)\n        \)", widget_code, re.S)
+    if lazy and "defaultWeight()" in lazy.group(1):
+        fail("widget-action",
+             "the scroll region must use an explicit height, not defaultWeight(): a "
+             "weight-constrained lazy list can be measured past the cell, which clips the "
+             "pinned action off the bottom (round 6)")
+    if "spec.scrollHeightDp" not in widget_kt:
+        fail("widget-action", "the LazyColumn must be bounded by BandSpec.scrollHeightDp")
+    if "scrollHeightDp" not in breakpoints or "chromeHeightDp" not in breakpoints:
+        fail("widget-action", "Breakpoints.kt must own the chrome/scroll arithmetic")
+    if "setLastComposition" not in widget_kt:
+        fail("widget-action",
+             "the composition must record whether it drew an action, or 'no button' and "
+             "'the tap went elsewhere' stay indistinguishable")
+    if "getActionFires" not in diagnostics or "renderComposition" not in diagnostics:
+        fail("widget-action",
+             "DiagnosticsActivity must render the action trail; a press that produces no "
+             "record must never again be unanswerable")
+    receiver = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+                "hermeswidget" / "widget" / "HermesWidgetReceiver.kt").read_text(encoding="utf-8")
+    if "ActionCallbackBroadcastReceiver:callbackClass" not in receiver:
+        fail("widget-action",
+             "the receiver must count action broadcasts before Glance dispatches them")
+
     # --- tap observability: the trail exists on both sides and is documented ---
     _SERVER_SRC = (PLUGIN / "server.py").read_text(encoding="utf-8")
     _STORE_SRC = (PLUGIN / "store.py").read_text(encoding="utf-8")

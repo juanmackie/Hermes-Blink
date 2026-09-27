@@ -24,6 +24,7 @@ class DiagnosticsActivity : Activity() {
     private lateinit var pushState: TextView
     private lateinit var instances: TextView
     private lateinit var actions: TextView
+    private lateinit var composition: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -34,6 +35,7 @@ class DiagnosticsActivity : Activity() {
         pushState = findViewById(R.id.push_state_status)
         instances = findViewById(R.id.widget_instances_status)
         actions = findViewById(R.id.action_outcomes_status)
+        composition = findViewById(R.id.widget_composition_status)
         findViewById<Button>(R.id.request_battery_exemption).setOnClickListener {
             requestExemption()
         }
@@ -93,6 +95,46 @@ class DiagnosticsActivity : Activity() {
         }
         renderInstances()
         renderActionOutcomes()
+        renderComposition()
+    }
+
+    /**
+     * The three links of the widget-action trail, in the order they happen:
+     *
+     *  1. **composed** — the last composition drew a button, and how tall its scroll region
+     *     was. If this says `actionAvailable: false`, there was no button to press.
+     *  2. **fired** — a tap produced an action broadcast that reached this process. Zero
+     *     here means the tap landed somewhere else, most often on the surface, which opens
+     *     the app.
+     *  3. **outcome** — what the request actually got back (the list below).
+     *
+     * Any gap between them localises the failure to a layer instead of a guess.
+     */
+    private fun renderComposition() {
+        val format = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+        fun at(value: Long) = value.takeIf { it > 0 }?.let { format.format(Date(it)) } ?: "never"
+        val last = Config.getLastComposition(this)
+        val fires = Config.getActionFires(this)
+        val band = last?.optString("band") ?: "?"
+        val available = last?.optBoolean("actionAvailable", false) ?: false
+        val scroll = last?.optInt("scrollHeightDp", 0) ?: 0
+        val count = fires?.optInt("count", 0) ?: 0
+        composition.text = buildString {
+            append("1. composed: band $band · " +
+                if (available) "action available" else "NO ACTION DRAWN")
+            if (scroll > 0) append(" · scroll region ${scroll}dp")
+            append(" (${at(last?.optLong("at", 0L) ?: 0L)})\n")
+            append("2. fired: $count action broadcast(s) received")
+            if (count > 0) {
+                append(" · last ${at(fires?.optLong("at", 0L) ?: 0L)}")
+                append(" via ${fires?.optString("callback")?.takeIf { it.isNotBlank() } ?: "unknown"}")
+            }
+            append("\n3. outcome: see Widget actions below")
+        }
+        Log.i(
+            "HermesDiagnostics",
+            "trail composed band=$band action=$available scroll=${scroll}d fires=$count",
+        )
     }
 
     /**

@@ -198,7 +198,13 @@ private fun PublicationSurface(
             .clickable(actionStartActivity(intent)),
     ) {
         HeaderRow(publication, snapshot.connectionState, spec, dark)
-        LazyColumn(modifier = GlanceModifier.fillMaxWidth().defaultWeight()) {
+        // An explicit height, not defaultWeight(): a weight-constrained lazy list is
+        // measured by the platform at draw time, and when that resolution misses, the
+        // Column overflows the cell and the launcher clips the footer — taking the only
+        // action with it. The arithmetic in BandSpec keeps the footer inside the cell.
+        LazyColumn(
+            modifier = GlanceModifier.fillMaxWidth().height(spec.scrollHeightDp.dp),
+        ) {
             item {
                 HeroBlock(
                     title = provenanceLabel(publication, title),
@@ -242,6 +248,14 @@ private fun PublicationSurface(
         if (spec.showsFooter) {
             FooterRow(publication, snapshot.connectionState, spec, dark)
         }
+        // The composition half of the trail: if a tap is ever reported as missing, we can
+        // tell "no button was drawn" from "a button was drawn and the tap went elsewhere".
+        Config.setLastComposition(
+            context,
+            band = spec.band.name,
+            actionAvailable = spec.showsRequestAction,
+            scrollHeightDp = spec.scrollHeightDp,
+        )
     }
 }
 

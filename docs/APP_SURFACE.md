@@ -76,6 +76,40 @@ background loses its ripple.
 The tick reads only the encrypted store and prefs: no network, no battery cost, and no way
 for a 2-second cadence to hammer a private server.
 
+## Round 7 — "Request update does not work"
+
+The report carried the answer in one line: **"Widget actions: none recorded yet"** while
+the same screen showed a healthy poll, fetch, render and a registered instance. Since
+round 5, every outcome of a widget-button press is written locally before the request is
+attempted, so an empty list means the press never reached our code — this was not a
+network, token or server problem, and no amount of server-side work would have found it.
+
+Two weaknesses on our side, both fixed:
+
+1. **The scroll region was `defaultWeight()`.** A weight-constrained Glance LazyColumn is
+   measured by the platform at draw time; when that resolution misses, the Column is
+   taller than the cell and the launcher clips the bottom — which is exactly where the
+   pinned action lives. A press then lands on the *surface*, whose target is "open the
+   app", and the button looks dead. The scroll region now has an explicit height computed
+   from the instance (`BandSpec.scrollHeightDp`), so the chrome is subtracted by
+   arithmetic and the footer is inside the cell by construction. Four unit tests assert
+   the arithmetic across 4 widths x 9 heights.
+2. **The last silent exit is gone.** `parameters[eventKey] ?: return` could bail out with
+   no trace; it now logs and records `missing_event_parameter`.
+
+And the trail grew the two links that were missing, so this cannot be ambiguous again:
+
+| Link | Where | Means |
+| --- | --- | --- |
+| 1. composed | `Config.setLastComposition` from the widget, shown in Diagnostics | the band, whether an action was drawn, the scroll height |
+| 2. fired | `Config.recordActionFired` in the receiver, counting the broadcast *before* Glance dispatches it | a tap produced an action that reached this process |
+| 3. outcome | the action list, already present | what the request got back |
+
+`fired = 0` means the tap never produced a broadcast — the surface got it. `fired > 0`
+with no outcome means the dispatch failed. `composed: NO ACTION DRAWN` means there was
+no button to press. Each is a different bug with a different fix, and the screen now says
+which.
+
 ## Gates
 
 `AppSurfaceTest` (JVM, runs in CI):
