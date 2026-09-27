@@ -145,7 +145,7 @@ class BuildProvenanceGate(unittest.TestCase):
         self._stamp(repo, git(repo, "rev-parse", "HEAD"))
         code, out = self._run(repo)
         self.assertEqual(code, 1, out)
-        self.assertIn("two binaries would claim one versionCode", out)
+        self.assertIn("divergent binaries would claim one versionCode", out)
         self.assertIn("Retire it", out)
 
     def test_the_same_build_re_verified_is_not_a_reissue(self):
@@ -235,9 +235,48 @@ class BuildProvenanceGate(unittest.TestCase):
         code, out = self._run(repo)
         self.assertEqual(code, 0, out)
 
-    def test_a_second_binary_claiming_the_same_code_is_refused(self):
-        # The ledger names the first build; this artifact is a different one claiming the
-        # same number. That is finding 1, and it must fail even though both are recent.
+    def test_a_divergent_build_claiming_the_same_code_is_refused(self):
+        # Two resolvable commits on sibling lines, both claiming one versionCode: the
+        # shape a rebase or a release branch produces, and the one Android installs over
+        # without a word.
+        repo = self._fixture()
+        (repo / "line-a.txt").write_text("a\n")
+        commit_all(repo, "line a")
+        # Snapshotted *after* the commit: before it, this would be the common ancestor of
+        # both lines and therefore an ancestor of the stamp, which is the opposite of
+        # divergent.
+        first = git(repo, "rev-parse", "HEAD")
+        # Rewind past line a and commit something else, so the two commits share a parent.
+        # Two commits in a row would only be an ancestor chain.
+        git(repo, "reset", "--hard", "HEAD~1")
+        (repo / "line-b.txt").write_text("b\n")
+        commit_all(repo, "line b")
+        second = git(repo, "rev-parse", "HEAD")
+        self.assertNotEqual(first, second)
+        self.assertFalse(
+            subprocess.run(
+                ["git", "merge-base", "--is-ancestor", first, second],
+                cwd=repo, capture_output=True,
+            ).returncode == 0,
+            "the two commits must be siblings for this to test divergence",
+        )
+        # The ledger points at line a; the artifact on the phone was built from line b.
+        doc = repo / DOC
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text(
+            "# release\n\n"
+            "| Version | Commit | Size | SHA-256 |\n| --- | --- | --- | --- |\n"
+            f"| `0.4.0` (versionCode 5) | `{first[:12]}` | 1 bytes | `{'f' * 64}` |\n"
+        )
+        commit_all(repo, "ledger points at the other line")
+        self._stamp(repo, second)
+        code, out = self._run(repo)
+        self.assertEqual(code, 1, out)
+        self.assertIn("divergent binaries would claim one versionCode", out)
+
+    def test_a_later_build_on_the_same_code_is_not_a_reissue(self):
+        # main moves after a release. The next build carries the same versionCode until
+        # the bump lands, and that is normal development, not two binaries diverging.
         repo = self._fixture()
         head = git(repo, "rev-parse", "HEAD")
         doc = repo / DOC
@@ -248,18 +287,11 @@ class BuildProvenanceGate(unittest.TestCase):
             f"| `0.4.0` (versionCode 5) | `{head[:12]}` | 1 bytes | `{'f' * 64}` |\n"
         )
         commit_all(repo, "record the evidence")
-        (repo / "second-binary.txt").write_text("a different build\n")
-        commit_all(repo, "a different build ships the same versionCode")
-        generated = (
-            repo / "android/app/build/generated/source/buildConfig/debug/com/you/hermeswidget"
-        )
-        generated.mkdir(parents=True)
-        (generated / "BuildConfig.java").write_text(
-            f'  public static final String COMMIT_SHA = "{git(repo, "rev-parse", "HEAD")[:12]}";\n'
-        )
-        code, out = self._run(repo)
-        self.assertEqual(code, 1, out)
-        self.assertIn("two binaries would claim one versionCode", out)
+        (repo / "later.txt").write_text("later work\n")
+        commit_all(repo, "later work on the same versionCode")
+        self._stamp(repo, git(repo, "rev-parse", "HEAD"))
+        code, out = self._run(repo, "--allow-dirty")
+        self.assertEqual(code, 0, out)
 
     def test_the_gradle_build_refuses_a_dirty_tree(self):
         # The enforcement half, checked structurally: the review environment cannot run

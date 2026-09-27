@@ -93,6 +93,16 @@ def head_pair() -> list[str]:
     ]
 
 
+def _descends_from(older: str, newer: str) -> bool:
+    """True when `older` is an ancestor of `newer` (a strictly later point in one line)."""
+    if not older or not newer:
+        return False
+    return subprocess.run(
+        ["git", "merge-base", "--is-ancestor", older, newer],
+        cwd=REPO, capture_output=True,
+    ).returncode == 0
+
+
 def is_ancestor(sha: str) -> bool:
     """True when `sha` is in this branch's history.
 
@@ -188,19 +198,26 @@ def main() -> int:
 
     if code is not None and code in spent:
         recorded = spent[code]
-        if stamp and not matches_any(stamp, [recorded]):
-            problems.append(
-                f"versionCode {code} is recorded against {recorded[:12]} but this artifact "
-                f"was built from {stamp}: two binaries would claim one versionCode, which is "
-                f"the failure this gate exists to prevent. Android installs the second over "
-                f"the first silently and app_build_code cannot tell them apart. Retire it: "
-                f"use {code + 1}."
-            )
-        elif not stamp:
+        if not stamp:
             problems.append(
                 f"versionCode {code} is recorded against {recorded[:12]} but this build "
                 f"carries no stamp, so it cannot be shown to be that same build."
             )
+        elif not matches_any(stamp, [recorded]):
+            # Newer work on the same code is normal - main moves after a release, and the
+            # next release bumps the number. A *divergent* build is the defect: two
+            # unrelated binaries claiming one versionCode, which Android installs over
+            # silently and app_build_code cannot distinguish.
+            # Later work on the same code is normal: main moves after a release and the
+            # next release bumps the number. A *divergent* build is the defect.
+            if not _descends_from(recorded, stamp):
+                problems.append(
+                    f"versionCode {code} is recorded against {recorded[:12]} and this "
+                    f"artifact is built from {stamp}, which does not descend from it: two "
+                    f"divergent binaries would claim one versionCode. Android installs the "
+                    f"second over the first silently and app_build_code cannot tell them "
+                    f"apart. Retire it: use {code + 1}."
+                )
     elif code is not None and not problems:
         problems.append(
             f"versionCode {code} ({name}) has no row in {DOC}. Record it with "
