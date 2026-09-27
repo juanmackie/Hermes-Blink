@@ -414,6 +414,38 @@ def main() -> int:
              "theme now, so white text would be invisible in light mode")
     if not (REPO / "docs" / "APP_SURFACE.md").is_file():
         fail("app-surface", "docs/APP_SURFACE.md must record what was adopted and what was not")
+    # A button with no state layer gives no press feedback, and a tap then reads as a dead
+    # control. That is the whole of "the buttons do nothing".
+    for name in ("bg_button_filled", "bg_button_tonal", "bg_button_outlined"):
+        drawable = app_res / "drawable" / f"{name}.xml"
+        if not drawable.is_file():
+            fail("app-surface", f"{name}.xml is missing")
+            continue
+        if "<ripple" not in drawable.read_text(encoding="utf-8"):
+            fail("app-surface",
+                 f"{name}.xml has no <ripple>; a button with no press state gives no "
+                 "feedback and reads as broken")
+    for mode in ("values", "values-night"):
+        if "app_state_layer" not in (app_res / mode / "app_colors.xml").read_text(encoding="utf-8"):
+            fail("app-surface", f"{mode}/app_colors.xml has no app_state_layer")
+    # An action that can fail silently must not be able to.
+    pinning = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+               "hermeswidget" / "WidgetPinning.kt").read_text(encoding="utf-8")
+    diagnostics = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+                   "hermeswidget" / "DiagnosticsActivity.kt").read_text(encoding="utf-8")
+    if "offerNow" not in diagnostics or "offerNow" not in pinning:
+        fail("app-action-feedback",
+             "the Add widget button must call the manual offer path, which always reports")
+    diagnostics_code = re.sub(r"//.*", "", re.sub(r"/\*.*?\*/", "", diagnostics, flags=re.S))
+    if "ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" in diagnostics_code:
+        fail("app-action-feedback",
+             "ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS opens nothing on modern Android; "
+             "use the settings list and say so")
+    settings = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+                "hermeswidget" / "SettingsActivity.kt").read_text(encoding="utf-8")
+    for needed in ("STATUS_POLL_MS = 2_000L", "onPause", "PairingStatus.read"):
+        if needed not in settings:
+            fail("app-action-feedback", f"SettingsActivity is missing {needed!r}")
 
     # --- tap observability: the trail exists on both sides and is documented ---
     _SERVER_SRC = (PLUGIN / "server.py").read_text(encoding="utf-8")

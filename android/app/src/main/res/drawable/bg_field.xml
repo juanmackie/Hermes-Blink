@@ -1,10 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Text field: container-high fill, 12dp radius, outline-variant boundary. -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <solid android:color="@color/app_surface_container_high" />
-    <corners android:radius="@dimen/shape_field" />
-    <stroke
-        android:width="@dimen/hairline"
-        android:color="@color/app_outline_variant" />
-</shape>
+<!-- Text field: container-high fill, 12dp radius, outline-variant boundary, and a
+     focused state so a user knows which field they are typing into. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/app_surface_container_high" />
+            <corners android:radius="@dimen/shape_field" />
+            <stroke
+                android:width="2dp"
+                android:color="@color/app_primary" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/app_surface_container_high" />
+            <corners android:radius="@dimen/shape_field" />
+            <stroke
+                android:width="@dimen/hairline"
+                android:color="@color/app_outline_variant" />
+        </shape>
+    </item>
+</selector>

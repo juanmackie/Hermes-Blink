@@ -42,7 +42,7 @@ class AppSurfaceTest {
     private fun colors(qualifier: String?): Map<String, String> {
         val file = File(res, if (qualifier == null) "values/app_colors.xml" else "values-$qualifier/app_colors.xml")
         val found = mutableMapOf<String, String>()
-        Regex("<color name=\"([a-z_]+)\">(#[0-9A-Fa-f]{6})</color>")
+        Regex("<color name=\"([a-z_]+)\">(#[0-9A-Fa-f]{6,8})</color>")
             .findAll(file.readText())
             .forEach { found[it.groupValues[1]] = it.groupValues[2].lowercase(Locale.ROOT) }
         return found
@@ -157,6 +157,32 @@ class AppSurfaceTest {
                 onPrimary >= 4.5,
             )
         }
+    }
+
+    @Test
+    fun `every button background carries a press state`() {
+        // Reported as "the buttons do nothing": they did act, but a plain <shape> has no
+        // state layer, so a tap produced no ripple and read as a dead control.
+        for (name in listOf("bg_button_filled", "bg_button_tonal", "bg_button_outlined")) {
+            val xml = read("drawable/$name.xml")
+            assertTrue(
+                "$name.xml has no <ripple>; a button with no press state gives no " +
+                    "feedback and reads as broken",
+                xml.contains("<ripple"),
+            )
+            assertTrue("$name.xml has no mask; the ripple would spill past the pill", 
+                xml.contains("@android:id/mask"))
+        }
+        assertTrue("a state layer token must exist", colors(null).containsKey("app_state_layer"))
+        assertTrue("and in dark mode too", colors("night").containsKey("app_state_layer"))
+    }
+
+    @Test
+    fun `a focused field looks focused`() {
+        assertTrue(
+            "bg_field.xml has no focused state, so there is no cue which field is active",
+            read("drawable/bg_field.xml").contains("state_focused"),
+        )
     }
 
     @Test

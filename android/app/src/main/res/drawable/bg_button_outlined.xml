@@ -1,10 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Outlined button: hairline outline, transparent fill, pill. -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <solid android:color="@android:color/transparent" />
-    <corners android:radius="@dimen/shape_pill" />
-    <stroke
-        android:width="@dimen/hairline"
-        android:color="@color/app_outline" />
-</shape>
+<!-- Outlined button: hairline outline, transparent fill, pill, with a press state.
+     The mask matters here: the fill is transparent, so without it the ripple would spill
+     past the pill's rounded corners. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/app_state_layer">
+    <item android:id="@android:id/mask">
+        <shape android:shape="rectangle">
+            <solid android:color="#FFFFFFFF" />
+            <corners android:radius="@dimen/shape_pill" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@android:color/transparent" />
+            <corners android:radius="@dimen/shape_pill" />
+            <stroke
+                android:width="@dimen/hairline"
+                android:color="@color/app_outline" />
+        </shape>
+    </item>
+</ripple>

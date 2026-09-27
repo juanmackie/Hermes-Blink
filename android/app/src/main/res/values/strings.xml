@@ -34,4 +34,13 @@
     <string name="widget_request_update">Request update</string>
     <string name="widget_pin_offered">Add the Hermes widget to your home screen</string>
     <string name="widget_image_description">Publication image</string>
+    <string name="widget_pin_requested">Add the widget from the sheet Android just showed</string>
+    <string name="widget_pin_already">A Hermes widget is already on your home screen</string>
+    <string name="widget_pin_unsupported">This launcher does not support adding widgets from an app — add it from the launcher\'s widget list</string>
+    <string name="widget_pin_refused">Android declined the request — try again from the launcher\'s widget list</string>
+    <string name="battery_exempt">Battery optimisation is already off for this app; nothing to do</string>
+    <string name="battery_settings_opened">Opening Android\'s battery settings — pick Hermes and turn off optimisation</string>
+    <string name="battery_settings_failed">Android would not open its battery settings on this device</string>
+    <string name="settings_paired">Paired</string>
+    <string name="settings_unpaired">Not paired</string>
 </resources>

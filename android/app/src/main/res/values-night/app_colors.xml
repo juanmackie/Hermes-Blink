@@ -17,4 +17,7 @@
     <color name="app_on_primary_container">#D3E3FD</color>
     <color name="app_outline">#8D9199</color>
     <color name="app_outline_variant">#43474F</color>
+    <color name="app_state_layer">#33E5E2E3</color>
+    <color name="paired_indicator">#7BD88F</color>
+    <color name="unpaired_indicator">#AEAEB2</color>
 </resources>

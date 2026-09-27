@@ -43,6 +43,39 @@ So this page records the split: what was adopted, what was deliberately left, an
 - Four new screens' worth of literals (`#FFFFFF`, `#000000`, `#666666`, `Color.rgb(...)`)
   were the reason the app had no dark mode at all.
 
+## Round 6 — "the buttons do nothing"
+
+Reported on the Diagnostics screen, and worth writing down because the cause was not the
+obvious one:
+
+| Button | What was actually wrong |
+| --- | --- |
+| Add widget | `offer()` returned `false` and said nothing whenever the once-per-pairing flag was set, so after the first automatic offer the button was permanently dead *and mute*. Split into `offerOnceAfterPairing` (automatic, still once) and `offerNow` (manual, always acts and always reports: requested / already added / launcher cannot pin / system refused). |
+| Review battery | Opened `ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`, which modern Android routes to a per-app screen that returns immediately for apps without a direct-exemption entitlement — and `startActivity` does not throw, so the old `runCatching` fallback never fired. Now: say "already exempt" when it is, otherwise open the battery **list** and say what was opened. |
+| Close | Worked, but was last in a long scroll and gave no press feedback at all. |
+
+The shared cause behind all three: **the custom button backgrounds were plain `<shape>`
+elements with no state layer.** A tap produced no ripple and no colour change, so a button
+that acted correctly still read as dead. All button backgrounds are now `<ripple>` with a
+mask (the mask matters for the outlined button, whose fill is transparent), and text fields
+have a focused state. `AppSurfaceTest` and `check-contract-parity.py` both fail if a button
+background loses its ripple.
+
+## Settings: a paired status that keeps up
+
+`PairingStatus` (pure, unit-tested) renders one line plus an optional detail, polled every
+2s from `onResume` and cancelled in `onPause`:
+
+- **Unpaired** — names the next step (`hermes widget code`).
+- **Pairing…** — an attempt is in flight.
+- **Paired as &lt;deviceId&gt;** — with "polled 30s ago · fetched 25s ago" from local state.
+- **Pairing expired** / **Connected earlier, now failing** — a revoked or errored pairing is
+  a *problem* tone, not "unpaired"; the two look identical if you only check for a token.
+- **Offline** — and it never claims a cached publication before one has been fetched.
+
+The tick reads only the encrypted store and prefs: no network, no battery cost, and no way
+for a 2-second cadence to hammer a private server.
+
 ## Gates
 
 `AppSurfaceTest` (JVM, runs in CI):

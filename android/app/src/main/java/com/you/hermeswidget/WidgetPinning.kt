@@ -1,50 +1,97 @@
 package com.you.hermeswidget
 
+import android.app.Activity
 import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
 import android.util.Log
 import android.widget.Toast
+import com.you.hermeswidget.widget.HermesWidgetReceiver
 
 /**
  * Discovery and promotion (Android's widget guidance): a widget nobody adds is a widget
  * nobody sees, and the guidance's answer is `requestPinAppWidget` — the system shows its
  * own "add widget" sheet, so there is no in-app widget picker to build or maintain.
  *
- * Three rules keep this from becoming nagging:
- *  - it is only offered after a successful pairing, when the user is already in the flow;
- *  - it is never blocking: a launcher that cannot pin, or a user who dismisses the sheet,
- *    changes nothing else;
- *  - it is offered once per pairing, tracked in prefs, so a returning user is not asked
- *    again. Android 8+ requires the target to be in the foreground for the request, which
- *    is why the caller is an Activity, not a worker.
+ * Two entry points, because "offered once" is right for an unsolicited prompt and wrong
+ * for a button the user deliberately pressed:
+ *
+ *  - [offerOnceAfterPairing] is the automatic, non-nagging one: at most once per pairing.
+ *  - [offerNow] is what the Diagnostics button calls. It always acts, and it always
+ *    reports what happened — including "the launcher cannot pin this", which is the
+ *    difference between a control that works and a control that looks broken.
  */
 object WidgetPinning {
     private const val TAG = "HermesWidgetPinning"
     private const val KEY_OFFERED = "widget_pin_offered"
 
+    /** What happened, so the UI can say something true rather than nothing. */
+    enum class Result {
+        /** The system accepted the request and is showing its sheet. */
+        REQUESTED,
+
+        /** The provider already has instances on the home screen. */
+        ALREADY_ADDED,
+
+        /** The launcher does not support pinning (some launchers and work profiles). */
+        UNSUPPORTED,
+
+        /** Supported, but the system refused this request. */
+        REFUSED,
+    }
+
     /** True when the launcher supports pinning this provider. */
     fun isSupported(context: Context): Boolean =
         AppWidgetManager.getInstance(context).isRequestPinAppWidgetSupported
 
-    /** Offer the system pin sheet. Returns true when the request was accepted. */
-    fun offer(context: Context, activity: android.app.Activity): Boolean {
-        val provider = ComponentName(context, com.you.hermeswidget.widget.HermesWidgetReceiver::class.java)
-        val manager = AppWidgetManager.getInstance(context)
+    fun instanceCount(context: Context): Int {
+        val provider = ComponentName(context, HermesWidgetReceiver::class.java)
+        return AppWidgetManager.getInstance(context).getAppWidgetIds(provider).size
+    }
+
+    /** The automatic path: at most one prompt per pairing, and never blocking. */
+    fun offerOnceAfterPairing(context: Context, activity: Activity): Result {
         val prefs = context.getSharedPreferences("hermes", Context.MODE_PRIVATE)
-        if (prefs.getBoolean(KEY_OFFERED, false)) return false
-        val requested = runCatching { requestPin(manager, provider) }.getOrDefault(false)
-        // Marked offered either way: if the launcher refused, asking again will not help.
+        if (prefs.getBoolean(KEY_OFFERED, false)) return Result.ALREADY_ADDED
+        val result = request(context)
+        // Recorded either way: a launcher that refused will refuse again, and a returning
+        // user should not be asked a second time.
         prefs.edit().putBoolean(KEY_OFFERED, true).apply()
-        Log.i(TAG, "pin requested=$requested provider=$provider sdk=${android.os.Build.VERSION.SDK_INT}")
-        if (requested) {
-            Toast.makeText(
-                context,
-                context.getString(R.string.widget_pin_offered),
-                Toast.LENGTH_LONG,
-            ).show()
+        if (result == Result.REQUESTED) {
+            Toast.makeText(context, context.getString(R.string.widget_pin_offered), Toast.LENGTH_LONG).show()
         }
-        return requested
+        return result
+    }
+
+    /**
+     * The manual path. Never suppressed: a user who presses this button is asking again,
+     * and the old behaviour — a permanent silent `return false` once the pref was set — is
+     * exactly what made the button look dead.
+     */
+    fun offerNow(context: Context, activity: Activity): Result {
+        val result = request(context)
+        Log.i(
+            TAG,
+            "manual pin request result=$result instances=${instanceCount(context)} " +
+                "sdk=${android.os.Build.VERSION.SDK_INT}",
+        )
+        val message = when (result) {
+            Result.REQUESTED -> context.getString(R.string.widget_pin_requested)
+            Result.ALREADY_ADDED -> context.getString(R.string.widget_pin_already)
+            Result.UNSUPPORTED -> context.getString(R.string.widget_pin_unsupported)
+            Result.REFUSED -> context.getString(R.string.widget_pin_refused)
+        }
+        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        return result
+    }
+
+    private fun request(context: Context): Result {
+        val manager = AppWidgetManager.getInstance(context)
+        if (instanceCount(context) > 0) return Result.ALREADY_ADDED
+        if (!manager.isRequestPinAppWidgetSupported) return Result.UNSUPPORTED
+        val provider = ComponentName(context, HermesWidgetReceiver::class.java)
+        val accepted = runCatching { requestPin(manager, provider) }.getOrDefault(false)
+        return if (accepted) Result.REQUESTED else Result.REFUSED
     }
 
     /**
@@ -61,7 +108,7 @@ object WidgetPinning {
         } else {
             val legacy = Class.forName("android.appwidget.PinAppWidgetRequest\$Builder")
             val builder = legacy.getDeclaredConstructor().newInstance() as Any
-            val request = legacy.let { it.enclosingClass }!!
+            val request = legacy.enclosingClass!!
                 .getDeclaredMethod("build")
                 .invoke(builder)
             val method = AppWidgetManager::class.java.getMethod(

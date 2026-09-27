@@ -22,4 +22,9 @@
     <color name="app_on_primary_container">#2A1373</color>
     <color name="app_outline">#8E86A6</color>
     <color name="app_outline_variant">#DDD6EC</color>
+    <!-- Press/hover overlay. A button without a state layer gives no feedback at all,
+         and a tap then reads as a dead control. -->
+    <color name="app_state_layer">#1F1B1B1F</color>
+    <color name="paired_indicator">#1E7D3C</color>
+    <color name="unpaired_indicator">#5F5F66</color>
 </resources>

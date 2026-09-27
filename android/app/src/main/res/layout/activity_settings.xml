@@ -28,11 +28,51 @@
             android:layout_marginTop="@dimen/space_sm"
             android:text="@string/pairing_instructions" />
 
+        <!-- Live pairing state. Polled every 2s while this screen is open, so a pairing
+             that completes in another window shows up here without a manual refresh. -->
         <LinearLayout
             style="@style/SurfaceCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="@dimen/space_md"
+            android:orientation="vertical">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal">
+
+                <View
+                    android:id="@+id/pairing_status_dot"
+                    android:layout_width="10dp"
+                    android:layout_height="10dp"
+                    android:background="@drawable/status_dot" />
+
+                <TextView
+                    android:id="@+id/pairing_status"
+                    style="@style/TextBody"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="@dimen/space_sm"
+                    android:text="@string/settings_unpaired"
+                    android:textStyle="bold" />
+            </LinearLayout>
+
+            <TextView
+                android:id="@+id/pairing_status_detail"
+                style="@style/TextBodySmall"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_xs"
+                android:visibility="gone" />
+        </LinearLayout>
+
+        <LinearLayout
+            style="@style/SurfaceCard"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_sm"
             android:orientation="vertical">
 
             <EditText

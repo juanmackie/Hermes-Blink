@@ -2,12 +2,12 @@ package com.you.hermeswidget
 
 import android.app.Activity
 import android.content.Intent
-import android.net.Uri
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
 import android.widget.Button
 import android.widget.TextView
+import android.widget.Toast
 import org.json.JSONObject
 import android.util.Log
 import com.you.hermeswidget.net.AppIdentity
@@ -37,11 +37,17 @@ class DiagnosticsActivity : Activity() {
         findViewById<Button>(R.id.request_battery_exemption).setOnClickListener {
             requestExemption()
         }
-        // Manual entry point for the same one-shot pin offer pairing makes (discovery guide).
+        // The manual pin button always acts and always reports: it used to return silently
+        // once an automatic offer had been made, which is what made it look broken.
         findViewById<Button>(R.id.pin_widget).setOnClickListener {
-            WidgetPinning.offer(this, this)
+            WidgetPinning.offerNow(this, this)
         }
-        findViewById<Button>(R.id.close_diagnostics).setOnClickListener { finish() }
+        findViewById<Button>(R.id.close_diagnostics).setOnClickListener {
+            // No transition: this is a plain screen closing, and the system animation on a
+            // diagnostics panel read as the button not having worked.
+            finish()
+            overridePendingTransition(0, 0)
+        }
     }
 
     override fun onResume() {
@@ -141,13 +147,34 @@ class DiagnosticsActivity : Activity() {
         Log.i("HermesDiagnostics", instances.text.toString().replace("\n", " | "))
     }
 
+    /**
+     * Battery optimisation.
+     *
+     * Two things made this button look dead. It opened
+     * ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS, which modern Android routes to a
+     * per-app screen that immediately returns for apps without a direct-exemption
+     * entitlement — and `startActivity` does not throw, so the old `runCatching` fallback
+     * never fired. And when the exemption was already held there was nothing to do, with
+     * no message saying so.
+     *
+     * So: report "already exempt" first, open the system list (the screen that actually
+     * works everywhere), and say what was opened.
+     */
     private fun requestExemption() {
-        val intent = Intent(
-            Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS,
-            Uri.parse("package:$packageName"),
-        )
-        runCatching { startActivity(intent) }.onFailure {
-            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+        val manager = getSystemService(POWER_SERVICE) as PowerManager
+        if (manager.isIgnoringBatteryOptimizations(packageName)) {
+            Toast.makeText(this, R.string.battery_exempt, Toast.LENGTH_SHORT).show()
+            return
         }
+        val opened = runCatching {
+            startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            true
+        }.getOrDefault(false)
+        Toast.makeText(
+            this,
+            if (opened) R.string.battery_settings_opened else R.string.battery_settings_failed,
+            Toast.LENGTH_LONG,
+        ).show()
+        Log.i("HermesDiagnostics", "battery settings opened=$opened")
     }
 }

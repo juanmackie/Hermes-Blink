@@ -1,7 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Filled button: primary fill, pill, 48dp touch target. -->
-<shape xmlns:android="http://schemas.android.com/apk/res/android"
-    android:shape="rectangle">
-    <solid android:color="@color/app_primary" />
-    <corners android:radius="@dimen/shape_pill" />
-</shape>
+<!-- Filled button: primary fill, pill, 48dp touch target.
+     The ripple is not decoration: without a state layer a button gives no press feedback
+     at all, and a tap reads as "this does nothing" even when the click lands. -->
+<ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    android:color="@color/app_state_layer">
+    <item android:id="@android:id/mask">
+        <shape android:shape="rectangle">
+            <solid android:color="#FFFFFFFF" />
+            <corners android:radius="@dimen/shape_pill" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/app_primary" />
+            <corners android:radius="@dimen/shape_pill" />
+        </shape>
+    </item>
+</ripple>
