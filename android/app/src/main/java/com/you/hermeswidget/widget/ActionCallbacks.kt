@@ -7,6 +7,7 @@ import androidx.glance.action.ActionParameters
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.HermesApi
 import com.you.hermeswidget.net.Outcome
+import com.you.hermeswidget.net.RequestUpdateEvent
 import com.you.hermeswidget.net.SecureStore
 import com.you.hermeswidget.work.RefreshWorker
 import org.json.JSONObject
@@ -17,24 +18,50 @@ object ActionCallbacks {
         override suspend fun onAction(
             context: Context, glanceId: GlanceId, parameters: ActionParameters
         ) {
+            // Counted first, before anything can throw or return. This is the only place in
+            // the app that observes a Glance action dispatch: the broadcast is delivered to
+            // Glance's own merged ActionCallbackBroadcastReceiver, never to
+            // HermesWidgetReceiver, so counting it there counted nothing at all.
+            val instanceId = runCatching { WidgetInstanceIds.of(glanceId) }.getOrNull()
+            val eventName = runCatching { parameters[WidgetParams.eventKey] }.getOrNull()
+            runCatching { Config.recordActionReached(context, eventName, instanceId) }
+            android.util.Log.i(
+                TAG,
+                "action reached instance=$instanceId event=$eventName " +
+                    "kind=${runCatching { parameters[WidgetParams.kindKey] }.getOrNull()}",
+            )
+            // Any throw from here is recorded rather than vanishing into a log nobody reads.
+            try {
+                handle(context, glanceId, parameters, instanceId, eventName)
+            } catch (error: Throwable) {
+                runCatching {
+                    Config.recordCallbackException(
+                        context, "${error.javaClass.simpleName}: ${error.message.orEmpty()}",
+                    )
+                    Config.recordActionOutcome(
+                        context, eventName ?: "<no event>", instanceId, 0, "callback_exception",
+                        error.message?.take(200),
+                    )
+                }
+                android.util.Log.e(TAG, "action handler threw", error)
+            }
+        }
+
+        private suspend fun handle(
+            context: Context,
+            glanceId: GlanceId,
+            parameters: ActionParameters,
+            instanceId: String?,
+            eventFromEntry: String?,
+        ) {
             val widgetId = parameters[WidgetParams.widgetIdKey]
                 ?: Config.getWidgetId(context)
-            val instanceId = WidgetInstanceIds.of(glanceId)
-            // Log the entry before anything can bail out. Round 6 learned that a press
-            // which produces no record is indistinguishable from a press that never
-            // happened; this line is where that is settled.
-            android.util.Log.i(
-                "HermesWidgetAction",
-                "onAction instance=$instanceId event=${parameters[WidgetParams.eventKey]} " +
-                    "kind=${parameters[WidgetParams.kindKey]} " +
-                    "hasPayload=${!parameters[WidgetParams.payloadKey].isNullOrBlank()}",
-            )
-            val event = parameters[WidgetParams.eventKey].also {
+            val event = (eventFromEntry ?: parameters[WidgetParams.eventKey]).also {
                 if (it == null) {
                     // The last silent exit, removed: a callback with no event name is a
                     // wiring bug, and a wiring bug that says nothing is how a round is lost.
                     android.util.Log.e(
-                        "HermesWidgetAction",
+                        TAG,
                         "callback fired with no event parameter " +
                             "kind=${parameters[WidgetParams.kindKey]}",
                     )
@@ -71,6 +98,11 @@ object ActionCallbacks {
                 body.put("clientEventId", clientEventId)
                 if (itemId.isNotBlank()) body.put("itemId", itemId)
                 if (instanceId != null) body.put("instanceId", instanceId)
+                // Which control was pressed. A widget tap and the in-app button post the
+                // same event, and only this field tells them apart afterwards.
+                if (event == "request_update") {
+                    body.put("source", RequestUpdateEvent.SOURCE_WIDGET_ACTION)
+                }
                 HermesApi.postEventWithFields(url, widgetId, event, body, token)
             }
             if (result.code in 200..299) {
@@ -104,7 +136,10 @@ object ActionCallbacks {
                 context, event, instanceId, outcome.httpStatus ?: -1, outcome.code, outcome.message,
             )
         }
+
     }
+
+    private const val TAG = "HermesWidgetAction"
 }
 
 /**

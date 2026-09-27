@@ -21,6 +21,7 @@ import androidx.appcompat.app.AlertDialog
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.HermesApi
 import com.you.hermeswidget.net.Outcome
+import com.you.hermeswidget.net.RequestUpdateEvent
 import com.you.hermeswidget.net.PublicationAction
 import com.you.hermeswidget.net.PublicationContent
 import com.you.hermeswidget.net.PublicationRepository
@@ -173,9 +174,9 @@ class PublicationActivity : Activity() {
         Thread {
             val result = HermesApi.postEventWithFields(
                 url, Config.getWidgetId(this), "request_update",
-                JSONObject()
-                    .put("clientEventId", UUID.randomUUID().toString())
-                    .apply { instanceId()?.let { put("instanceId", it) } },
+                // The same builder the widget path would use, with the other source: a
+                // request_update from this screen is never the home-screen button.
+                RequestUpdateEvent.inAppBody(instanceId()),
                 deviceToken,
             )
             val resolved = Outcome.from(result, "Update requested", "Request update")

@@ -63,7 +63,8 @@ def source_of(path: pathlib.Path | str) -> str:
     turning a good comment into a false positive, so the stripping is centralised here.
     """
     text = pathlib.Path(path).read_text(encoding="utf-8")
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)   # C-style block
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)   # C-style block (Kotlin, C)
+    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)   # XML / Android resource
     text = "\n".join(                                     # Python and shell line comments
         line for line in text.splitlines() if not line.lstrip().startswith("#")
     )
@@ -462,6 +463,79 @@ def main() -> int:
         if needed not in settings:
             fail("app-action-feedback", f"SettingsActivity is missing {needed!r}")
 
+    # --- the palette must be the Material 3 baseline, not a lookalike -------------
+    # Values are the M3 baseline system tokens (m3.material.io/styles/color/static/
+    # baseline). A lookalike palette passes every contrast test and still is not the system
+    # the guidance points at, so the values themselves are pinned.
+    m3_baseline = {
+        "values/app_colors.xml": {
+            "app_surface": "#FEF7FF", "app_surface_container_lowest": "#FFFFFF",
+            "app_surface_container_low": "#F7F2FA", "app_surface_container": "#F3EDF7",
+            "app_surface_container_high": "#ECE6F0", "app_surface_container_highest": "#E6E0E9",
+            "app_on_surface": "#1D1B20", "app_on_surface_variant": "#49454F",
+            "app_primary": "#6750A4", "app_on_primary": "#FFFFFF",
+            "app_primary_container": "#EADDFF", "app_on_primary_container": "#4F378B",
+            "app_outline": "#79747E", "app_outline_variant": "#CAC4D0", "app_error": "#B3261E",
+        },
+        "values-night/app_colors.xml": {
+            "app_surface": "#141218", "app_surface_container_lowest": "#0F0D13",
+            "app_surface_container_low": "#1D1B20", "app_surface_container": "#211F26",
+            "app_surface_container_high": "#2B2930", "app_surface_container_highest": "#36343B",
+            "app_on_surface": "#E6E0E9", "app_on_surface_variant": "#CAC4D0",
+            "app_primary": "#D0BCFF", "app_on_primary": "#381E72",
+            "app_primary_container": "#4F378B", "app_on_primary_container": "#EADDFF",
+            "app_outline": "#938F99", "app_outline_variant": "#49454F", "app_error": "#F2B8B5",
+        },
+    }
+    for relative, expected in m3_baseline.items():
+        palette_path = app_res / relative
+        if not palette_path.is_file():
+            fail("m3-palette", f"{relative} is missing")
+            continue
+        found = {
+            match.group(1): match.group(2).upper()
+            for match in re.finditer(
+                r'<color name="([a-z_]+)">(#[0-9A-Fa-f]{6})</color>',
+                palette_path.read_text(encoding="utf-8"),
+            )
+        }
+        for token, value in expected.items():
+            if found.get(token) != value.upper():
+                fail("m3-palette",
+                     f"{relative}: {token} is {found.get(token)}, the Material 3 baseline value "
+                     f"is {value} (m3.material.io/styles/color/static/baseline)")
+    # Material You: on Android 12+ the scheme is derived, not the static baseline.
+    for relative in ("values-v31/app_colors.xml", "values-night-v31/app_colors.xml"):
+        dynamic_path = app_res / relative
+        if not dynamic_path.is_file():
+            fail("m3-palette",
+                 f"{relative} is missing: dynamic colour is the key part of Material You")
+            continue
+        if "@android:color/system_" not in dynamic_path.read_text(encoding="utf-8"):
+            fail("m3-palette", f"{relative} has no platform tonal aliases")
+    # Shape: the M3 corner radius scale, by name.
+    app_dimens = (app_res / "values" / "app_dimens.xml").read_text(encoding="utf-8")
+    for step, dp in (("xs", 4), ("sm", 8), ("md", 12), ("lg", 16), ("xl", 28)):
+        if f'name="shape_{step}">{dp}dp' not in app_dimens:
+            fail("m3-shape", f"the corner radius scale needs shape_{step} = {dp}dp")
+    # A state layer is the control's own ink at the M3 opacities, not one shared grey.
+    for token in ("app_state_layer_filled", "app_state_layer_tonal", "app_state_layer_outlined"):
+        for relative in ("values/app_colors.xml", "values-night/app_colors.xml"):
+            if token not in (app_res / relative).read_text(encoding="utf-8"):
+                fail("m3-state", f"{token} is missing from {relative}")
+    # Type roles carry the M3 line height on a mechanism minSdk 26 supports.
+    # Comment-stripped: a comment explaining why android:lineHeight is avoided must not
+    # read as using it.
+    themes_src = source_of(app_res / "values" / "themes.xml")
+    if "android:lineHeight" in themes_src:
+        fail("m3-type", "android:lineHeight is API 28+ and minSdk is 26; use lineSpacingExtra")
+    for style in ("TextTitle", "TextBody", "TextBodySmall", "TextLabel"):
+        match = re.search(rf'<style name="{style}".*?</style>', themes_src, re.S)
+        if not match or "lineSpacingExtra" not in match.group(0):
+            fail("m3-type", f"{style} carries no M3 line height")
+        elif "letterSpacing" not in match.group(0):
+            fail("m3-type", f"{style} carries no M3 tracking")
+
     # --- the widget action must be reachable and observable ------------------
     widget_kt = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
                  "hermeswidget" / "widget" / "HermesWidget.kt").read_text(encoding="utf-8")
@@ -485,15 +559,12 @@ def main() -> int:
         fail("widget-action",
              "the composition must record whether it drew an action, or 'no button' and "
              "'the tap went elsewhere' stay indistinguishable")
-    if "getActionFires" not in diagnostics or "renderComposition" not in diagnostics:
+    if "getActionReached" not in diagnostics or "renderComposition" not in diagnostics:
         fail("widget-action",
              "DiagnosticsActivity must render the action trail; a press that produces no "
              "record must never again be unanswerable")
-    receiver = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-                "hermeswidget" / "widget" / "HermesWidgetReceiver.kt").read_text(encoding="utf-8")
-    if "ActionCallbackBroadcastReceiver:callbackClass" not in receiver:
-        fail("widget-action",
-             "the receiver must count action broadcasts before Glance dispatches them")
+    # Deliberately no requirement on the receiver: it never sees an action broadcast. The
+    # count is required in the callback instead, further down.
 
     _SERVER_SRC = (PLUGIN / "server.py").read_text(encoding="utf-8")
     _STORE_SRC = (PLUGIN / "store.py").read_text(encoding="utf-8")
@@ -585,39 +656,153 @@ def main() -> int:
                  "the widget root must not be a click target while the action lives inside "
                  "it: a press on the action then reaches the surface and silently opens the "
                  "app (round 11)")
+        # Round 12: the action is composed as the last child of the root Box, after the
+        # column that holds the LazyColumn, so a RemoteViews collection view cannot cover
+        # it no matter how it measures. Inside the column (round 11) or below the scroll
+        # region (round 8) are both shapes that have lost the button on a real device.
+        # Where the content column starts and ends, in the *raw* file: comment stripping
+        # removes multi-line KDoc blocks, so raw and stripped offsets are not comparable.
+        # The content of the region is then read line by line, ignoring comment lines, so a
+        # comment that merely names the action cannot fail this check.
+        raw_lines = widget_kt.splitlines()
+        surface_line = next(
+            (i for i, l in enumerate(raw_lines) if "private fun PublicationSurface(" in l), -1
+        )
+        column_line = next(
+            (i for i, l in enumerate(raw_lines) if "Column(" in l and i > surface_line), -1
+        )
+        marker_line = next(
+            (i for i, l in enumerate(raw_lines) if "} // end content column" in l), -1
+        )
+        action_line = next(
+            (i for i, l in enumerate(raw_lines) if "RequestActionRow(dark)" in l), -1
+        )
+        if surface_line < 0 or column_line < 0 or action_line < 0:
+            fail("widget-action",
+                 f"expected a content Column and an action row inside PublicationSurface "
+                 f"(surface {surface_line}, column {column_line}, action {action_line}); "
+                 f"this check is stale and must be updated, not skipped")
+        elif action_line < column_line:
+            fail("widget-action",
+                 "the request action must be declared after the content column, so it is the "
+                 "topmost view and the first to receive a press (round 12)")
+        elif marker_line < 0:
+            fail("widget-action",
+                 "the content column lost its `// end content column` marker, so this check "
+                 "can no longer tell what is inside the column; update the check rather than "
+                 "letting it fall back to a weaker region")
+        else:
+            # The row that overlays the action must not itself be clickable: it is a
+            # sibling, not a nested target, and a clickable one would cover the hero.
+            row_line = next(
+                (i for i, l in enumerate(raw_lines) if "private fun RequestActionRow(" in l), -1
+            )
+            row_end = next(
+                (i for i, l in enumerate(raw_lines)
+                 if i > row_line and l.startswith("private fun ")), len(raw_lines)
+            )
+            if row_line < 0:
+                fail("widget-action", "RequestActionRow is missing; update this check")
+            else:
+                # Only the Row's own modifier chain: from `Row(` up to the first child,
+                # so the button's own clickable further down is not counted.
+                row_text = "\n".join(raw_lines[row_line:row_end])
+                row_at = row_text.find("Row(")
+                first_child = min(
+                    (i for i in (row_text.find("Spacer("), row_text.find("Text("))
+                     if i >= 0),
+                    default=len(row_text),
+                )
+                head = row_text[row_at:first_child] if row_at >= 0 else ""
+                if "clickable(" in head:
+                    fail("widget-action",
+                         "the row that overlays the action must not itself be clickable: it "
+                         "would be a third nested target and would cover the hero (round 12)")
+            for line in raw_lines[column_line:marker_line]:
+                at = line.find("requestUpdateAction()")
+                if at < 0:
+                    continue
+                before = line[:at]
+                if "//" in before or before.strip().startswith("*"):
+                    continue  # a comment that names the action
+                fail("widget-action",
+                     "the request action must not be composed inside the column that holds "
+                     "the LazyColumn: a RemoteViews collection view can measure past the "
+                     "height it is given and cover whatever sits below it (round 12)")
         header_block = widget_code[header_start:footer_start]
-        # Both the guard and the action: a dead `if (false)` around the action would still
-        # contain the call, and the button would be gone while the gate stayed green.
-        if "requestUpdateAction()" not in header_block or "showsRequestAction" not in header_block:
+        if "showsRequestAction" not in header_block or "48.dp" not in header_block:
             fail("widget-action",
-                 "the request action must be composed in the header row: a Glance lazy "
-                 "collection can measure past its height and push anything below it out of "
-                 "the cell, which is how the button became unreachable (round 11)")
-        # Below the header and before the body helper: the footer, and nothing else. The
-        # action's own definition lives further down and must not count.
-        body_start = widget_code.find("private fun PublicationBody(", footer_start)
-        if "requestUpdateAction()" in widget_code[footer_start:body_start if body_start > 0 else len(widget_code)]:
-            fail("widget-action",
-                 "the action must not also be composed below the scroll region")
+                 "the header must reserve the strip the action overlays, or the hero sits "
+                 "underneath it (round 12)")
+
+    # --- the two request_update senders must be distinguishable (round 13) ------
+    # Not merely the word: the field has to be copied from the envelope into the stored
+    # payload, or it never reaches the database and the two paths stay indistinguishable.
+    if not re.search(r'"instanceId",\s*"source"\)\s*:', _SERVER_SRC) and \
+            not re.search(r'"source",\s*"instanceId"\)\s*:', _SERVER_SRC):
+        fail("request-update-source",
+             "the event route must copy `source` from the envelope into the stored payload, "
+             "or a widget-pill press and an in-app press are indistinguishable afterwards "
+             "(round 13)")
+    if "EVENT_SOURCES" not in _SERVER_SRC:
+        fail("request-update-source",
+             "`source` must be a closed vocabulary; it is metadata, not a place for content")
+    identity = source_of(
+        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
+        / "net" / "RequestUpdateEvent.kt"
+    )
+    for token in ("SOURCE_WIDGET_ACTION", "SOURCE_IN_APP_BUTTON", "fun widgetBody", "fun inAppBody"):
+        if token not in identity:
+            fail("request-update-source", f"RequestUpdateEvent is missing {token}")
+    for sender, token in (
+        ("ActionCallbacks.kt", "SOURCE_WIDGET_ACTION"),
+        ("PublicationActivity.kt", "inAppBody"),
+    ):
+        text = source_of(
+            REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
+            / "widget" / sender if sender.endswith("Callbacks.kt")
+            else REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you"
+            / "hermeswidget" / sender
+        )
+        if token not in text:
+            fail("request-update-source",
+                 f"{sender} must send its own source ({token}); the two paths were "
+                 f"indistinguishable and the 14:07 event proved nothing about the pill")
 
     # --- the client-side action trail must survive a Glance rename (round 11) ----
     receiver_src = source_of(
         REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
         / "widget" / "HermesWidgetReceiver.kt"
     )
-    if "actionCallbackClass()" not in receiver_src or "endsWith(\":callbackClass\")" not in receiver_src:
+    callbacks_src = source_of(
+        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
+        / "widget" / "ActionCallbacks.kt"
+    )
+    # Round 13: the counter lived in the widget receiver, which never sees a Glance action
+    # broadcast — Glance routes it to its own merged ActionCallbackBroadcastReceiver — so it
+    # could never increment and its zero was read as evidence. It must be counted in the
+    # callback, and it must stay out of the receiver.
+    if "recordActionFired" in receiver_src or "ActionCallbackBroadcastReceiver:" in receiver_src:
         fail("widget-action",
-             "the action-fire detector must match Glance's internal callback extra by "
-             "suffix; matching one exact name means a Glance upgrade silences the trail "
-             "with no signal, which is how it hid twice (round 11)")
-    if "recordActionFired(context, \"unnamed(" not in receiver_src:
+             "HermesWidgetReceiver must not count widget actions: Glance delivers them to "
+             "its own merged ActionCallbackBroadcastReceiver, so a counter there can never "
+             "move and its zero is not evidence of anything (round 13)")
+    if "recordActionReached" not in callbacks_src:
         fail("widget-action",
-             "an action broadcast whose callback extra cannot be named must still be "
-             "counted, or the trail goes quiet when the library changes")
-    if "EXTRA_PARAMETERS" not in receiver_src:
+             "the action counter must be recorded in ActionCallbacks.EventAction, the only "
+             "place that observes the dispatch from inside this app (round 13)")
+    # Both the call and the catch that would trigger it: either alone is decorative.
+    if "recordCallbackException" not in callbacks_src or "catch (error: Throwable)" not in callbacks_src:
         fail("widget-action",
-             "the fallback detector needs the parameters extra to recognise an action "
-             "broadcast at all")
+             "a callback that throws must be caught and recorded; a handler that dies "
+             "silently is indistinguishable from a press that never arrived (round 13)")
+    if "getActionFires" in source_of(
+        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
+        / "DiagnosticsActivity.kt"
+    ):
+        fail("widget-action",
+             "Diagnostics must read the counter that can move (getActionReached), not the "
+             "one that could not (getActionFires)")
     config_kt = source_of(
         REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
         / "net" / "Config.kt"

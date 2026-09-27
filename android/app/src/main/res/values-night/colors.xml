@@ -1,14 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="widget_surface">#1C1C1E</color>
-    <color name="widget_on_surface">#F2F2F7</color>
-    <color name="widget_secondary">#AEAEB2</color>
-    <color name="widget_accent">#B9A6FF</color>
-    <color name="widget_on_accent">#1C1C1E</color>
-    <color name="widget_hairline">#3A3A3C</color>
+    <!--
+      The widget's dark chrome, on the M3 baseline dark roles (surfaces neutral 6 / 4 / 12 /
+      17 / 22, on-surface neutral 90, on-surface-variant neutral-variant 80, primary 80).
+
+      Canonical state, and the one a device in dark mode uses.
+    -->
+    <color name="widget_surface">#141218</color>
+    <color name="widget_on_surface">#E6E0E9</color>
+    <color name="widget_secondary">#CAC4D0</color>
+    <color name="widget_accent">#D0BCFF</color>
+    <color name="widget_on_accent">#381E72</color>
+    <color name="widget_hairline">#49454F</color>
 
     <color name="widget_status_fresh">#7BD88F</color>
     <color name="widget_status_aged">#FFB020</color>
-    <color name="widget_status_stale">#FF6B60</color>
-    <color name="widget_status_offline">#AEAEB2</color>
+    <color name="widget_status_stale">#F2B8B5</color>
+    <color name="widget_status_offline">#CAC4D0</color>
 </resources>

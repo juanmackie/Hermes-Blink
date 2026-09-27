@@ -49,20 +49,21 @@ SHAPES: tuple[tuple[str, int, int], ...] = (
 # values-night/colors.xml. scripts/check-contract-parity.py fails if these drift from the
 # device resources, so the preview cannot flatter a palette the phone would reject.
 WIDGET_SURFACE: dict[str, dict[str, str]] = {
+    # The Material 3 baseline roles, same values as android/app/src/main/res/values*/colors.xml.
     "day": {
-        "surface": "#F7F2FF",
-        "on_surface": "#1B1B1F",
-        "secondary": "#5F5F66",
-        "accent": "#5B3CC4",
-        "on_accent": "#FFFFFF",
+        "surface": "#FEF7FF",          # neutral 98
+        "on_surface": "#1D1B20",       # neutral 10
+        "secondary": "#49454F",        # neutral-variant 30
+        "accent": "#6750A4",           # primary 40
+        "on_accent": "#FFFFFF",        # primary 100
         "status_fresh": "#1E7D3C",
     },
     "night": {
-        "surface": "#1C1C1E",
-        "on_surface": "#F2F2F7",
-        "secondary": "#AEAEB2",
-        "accent": "#B9A6FF",
-        "on_accent": "#1C1C1E",
+        "surface": "#141218",          # neutral 6
+        "on_surface": "#E6E0E9",       # neutral 90
+        "secondary": "#CAC4D0",        # neutral-variant 80
+        "accent": "#D0BCFF",           # primary 80
+        "on_accent": "#381E72",        # primary 20
         "status_fresh": "#7BD88F",
     },
 }

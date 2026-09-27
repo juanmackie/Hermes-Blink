@@ -1,22 +1,40 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Spacing: an 8dp baseline grid with 4dp sub-increments, per the design system.
-         The four companion screens use margin/gutter (16dp) and space-sm (8dp) only. -->
+    <!--
+      Spacing: an 8dp baseline grid with 4dp sub-increments. The companion screens use
+      margin/gutter (16dp) and the inner rhythm (8dp) only.
+    -->
     <dimen name="space_xs">4dp</dimen>
     <dimen name="space_sm">8dp</dimen>
     <dimen name="space_md">16dp</dimen>
     <dimen name="space_lg">24dp</dimen>
     <dimen name="gutter">16dp</dimen>
 
-    <!-- Shape: 24dp inner card radii inside the 28dp widget root, and full pills for
-         anything a finger presses. -->
-    <dimen name="shape_card">24dp</dimen>
-    <dimen name="shape_widget_root">28dp</dimen>
-    <dimen name="shape_pill">9999dp</dimen>
-    <dimen name="shape_field">12dp</dimen>
+    <!--
+      Shape: the Material 3 corner radius scale, by name.
+      Material uses a size-based scale, and each component takes a step from it: a pill for
+      anything pressed, `medium` for fields and small chips, `large` for cards and dialogs,
+      `extra large` for the widget root and full-screen surfaces.
+    -->
+    <dimen name="shape_xs">4dp</dimen>
+    <dimen name="shape_sm">8dp</dimen>
+    <dimen name="shape_md">12dp</dimen>
+    <dimen name="shape_lg">16dp</dimen>
+    <dimen name="shape_xl">28dp</dimen>
+    <dimen name="shape_full">9999dp</dimen>
+
+    <!-- Named component steps, so a layout never invents a radius. -->
+    <dimen name="shape_button">@dimen/shape_full</dimen>
+    <dimen name="shape_container">@dimen/shape_lg</dimen>
+    <dimen name="shape_field">@dimen/shape_md</dimen>
+    <dimen name="shape_badge">@dimen/shape_sm</dimen>
+
     <dimen name="hairline">1dp</dimen>
 
-    <!-- Touch targets stay at the 48dp floor rather than the design system's 40dp
-         button: a 40dp pill is under the platform minimum for a finger target. -->
+    <!--
+      M3's button is a 40dp visual height; the platform's minimum touch target is 48dp. The
+      visual height follows the spec's rhythm and the touch target keeps the accessibility
+      floor, which is why this is not simply 40.
+    -->
     <dimen name="touch_target">48dp</dimen>
 </resources>

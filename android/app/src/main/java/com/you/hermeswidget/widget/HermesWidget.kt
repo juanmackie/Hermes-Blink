@@ -3,6 +3,7 @@ package com.you.hermeswidget.widget
 import android.content.Context
 import android.content.Intent
 import androidx.compose.runtime.Composable
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.glance.GlanceId
@@ -233,11 +234,13 @@ private fun PublicationSurface(
     // given and push whatever sits below it out of the cell, and because a clickable nested
     // inside another clickable has no guaranteed winner. Now: the action is the header, the
     // drill-down is the hero, and a press can mean exactly one thing.
+    Box(modifier = GlanceModifier.fillMaxSize()) {
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
             .padding(12.dp),
     ) {
+        // Reserves the strip the action overlays, so the hero is never underneath it.
         HeaderRow(publication, snapshot.connectionState, spec, dark)
         // An explicit height, not defaultWeight(): a weight-constrained lazy list is
         // measured by the platform at draw time, and when that resolution misses, the
@@ -290,6 +293,41 @@ private fun PublicationSurface(
         if (spec.showsFooter) {
             FooterRow(publication, snapshot.connectionState, spec, dark)
         }
+    } // end content column
+        // The request action, as the *last* child of the Box and therefore the topmost
+        // view. Round 12: while it lived inside the content column it was, in effect, at
+        // the mercy of a RemoteViews collection view that can measure past the height we
+        // give it — when it did, the button left the cell and a press aimed at it landed
+        // on the surface, which opened the app and recorded `review` instead. As a later
+        // sibling it is laid out and hit-tested after the collection, so its reachability
+        // no longer depends on the collection's measurement at all. The Row carries no
+        // clickable of its own, so the hero underneath still receives its own taps.
+        if (spec.showsRequestAction) {
+            RequestActionRow(dark)
+        }
+    }
+}
+
+/** The pinned request action, 48dp, top-end. The only control that must stay reachable. */
+@Composable
+private fun RequestActionRow(dark: Boolean) {
+    val context = LocalContext.current
+    Row(
+        modifier = GlanceModifier.fillMaxWidth().padding(top = 12.dp, end = 12.dp),
+        verticalAlignment = Alignment.Vertical.CenterVertically,
+    ) {
+        Spacer(GlanceModifier.defaultWeight())
+        Text(
+            text = context.getString(R.string.widget_request_update),
+            modifier = GlanceModifier
+                .height(48.dp)
+                .background(WidgetTheme.accent(context, dark, null))
+                .cornerRadius(8.dp)
+                .clickable(requestUpdateAction())
+                .padding(horizontal = 12.dp, vertical = 12.dp),
+            style = Typo.textStyle("label", WidgetTheme.onAccent(context, dark, null)),
+            maxLines = 1,
+        )
     }
 }
 
@@ -343,6 +381,8 @@ private fun HeaderRow(
         modifier = GlanceModifier
             .fillMaxWidth()
             .padding(bottom = 4.dp)
+            // Reserve the strip the request action overlays so the hero stays clear of it.
+            .height(if (spec.showsRequestAction) 48.dp else Dp.Unspecified)
             .semantics { contentDescription = statusDescription(publication, connectionState) },
         verticalAlignment = Alignment.Vertical.CenterVertically,
     ) {
@@ -367,27 +407,10 @@ private fun HeaderRow(
                 .size(6.dp)
                 .background(WidgetTheme.status(context, statusLevel(publication, connectionState))),
         ) {}
-        if (spec.showsRequestAction) {
-            // Pinned at the top, not at the bottom. The header is the first child, so
-            // nothing the scroll region does can move the action out of the cell - and the
-            // action is the one thing that has to stay reachable.
-            Spacer(GlanceModifier.defaultWeight())
-            Text(
-                text = context.getString(R.string.widget_request_update),
-                modifier = GlanceModifier
-                    .height(48.dp)
-                    .background(WidgetTheme.accent(context, dark, null))
-                    .cornerRadius(8.dp)
-                    .clickable(requestUpdateAction())
-                    .padding(horizontal = 12.dp, vertical = 12.dp),
-                style = Typo.textStyle("label", WidgetTheme.onAccent(context, dark, null)),
-                maxLines = 1,
-            )
-        }
     }
 }
 
-/** The delivery state, pinned below the scroll region. The action is in the header. */
+/** The delivery state, pinned below the scroll region. The action is overlaid above. */
 @Composable
 private fun FooterRow(
     publication: Publication,

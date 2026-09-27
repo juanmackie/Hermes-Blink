@@ -31,7 +31,7 @@ object Config {
     private const val KEY_LAST_PUSH_WAKE = "last_push_wake"
     private const val KEY_ACTION_OUTCOMES = "action_outcomes"
     private const val KEY_LAST_COMPOSITION = "last_composition"
-    private const val KEY_ACTION_FIRES = "action_fires"
+    private const val KEY_ACTION_REACHED = "action_reached"
     private const val KEY_COMPOSITIONS = "composition_history"
 
     private fun prefs(context: Context): SharedPreferences {
@@ -364,24 +364,50 @@ object Config {
     }
 
     /**
-     * A widget action broadcast that actually reached this process.
+     * A widget action that reached `ActionCallbacks.EventAction.onAction`.
      *
-     * Counted before Glance dispatches it, so a count with no matching outcome means the
-     * dispatch failed, and a count of zero means the tap never produced a broadcast at all
-     * — the tap landed somewhere else (typically the surface, which opens the app).
+     * This used to be counted in `HermesWidgetReceiver.onReceive`, which is where the
+     * round-11 note said a press would be observed. It never was: Glance routes an
+     * `actionRunCallback` broadcast to its own merged
+     * `androidx.glance.appwidget.action.ActionCallbackBroadcastReceiver`, so that counter
+     * was structurally incapable of incrementing. It read 0 on a real press and that 0 was
+     * then read as evidence. A measurement that cannot fail must never be treated as one.
+     *
+     * So it is counted at the first statement of the callback, which is the only place
+     * that observes the dispatch from inside this app, and it is named for what it
+     * measures: "reached", not "fired". A press that leaves this unchanged never got past
+     * the touch, whatever the reason.
      */
-    fun recordActionFired(context: Context, callbackClass: String?, at: Long = System.currentTimeMillis()) {
+    fun recordActionReached(
+        context: Context,
+        event: String?,
+        instanceId: String?,
+        at: Long = System.currentTimeMillis(),
+    ) {
         val current = runCatching {
-            JSONObject(prefs(context).getString(KEY_ACTION_FIRES, "{}") ?: "{}")
+            JSONObject(prefs(context).getString(KEY_ACTION_REACHED, "{}") ?: "{}")
         }.getOrElse { JSONObject() }
         current.put("count", current.optInt("count", 0) + 1)
-        current.put("callback", callbackClass ?: "unknown")
+        current.put("lastEvent", event ?: "-")
+        current.put("lastInstance", instanceId ?: "-")
+        current.put("exceptions", current.optInt("exceptions", 0))
         current.put("at", at)
-        prefs(context).edit().putString(KEY_ACTION_FIRES, current.toString()).apply()
+        prefs(context).edit().putString(KEY_ACTION_REACHED, current.toString()).apply()
     }
 
-    fun getActionFires(context: Context): JSONObject? = runCatching {
-        JSONObject(prefs(context).getString(KEY_ACTION_FIRES, "{}") ?: "{}")
+    /** A callback that threw: counted separately, because it is the one failure the
+     *  outcome trail would otherwise hide behind a partially-written record. */
+    fun recordCallbackException(context: Context, error: String, at: Long = System.currentTimeMillis()) {
+        val current = getActionReached(context) ?: JSONObject()
+        current.put("count", current.optInt("count", 0))
+        current.put("exceptions", current.optInt("exceptions", 0) + 1)
+        current.put("lastException", error.take(120))
+        current.put("at", at)
+        prefs(context).edit().putString(KEY_ACTION_REACHED, current.toString()).apply()
+    }
+
+    fun getActionReached(context: Context): JSONObject? = runCatching {
+        JSONObject(prefs(context).getString(KEY_ACTION_REACHED, "{}") ?: "{}")
     }.getOrNull()?.takeIf { it.length() > 2 }
 
     fun markAttentionRendered(context: Context, revision: Int): Boolean {

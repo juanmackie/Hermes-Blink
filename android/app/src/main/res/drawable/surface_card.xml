@@ -4,7 +4,7 @@
 <shape xmlns:android="http://schemas.android.com/apk/res/android"
     android:shape="rectangle">
     <solid android:color="@color/app_surface_container" />
-    <corners android:radius="@dimen/shape_card" />
+    <corners android:radius="@dimen/shape_container" />
     <stroke
         android:width="@dimen/hairline"
         android:color="@color/app_outline_variant" />

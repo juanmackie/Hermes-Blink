@@ -32,27 +32,39 @@
          title-lg 22, body-lg 16, body-md 14, label-md 12. The widget's own closed scale
          (Typo.kt) is a publisher-facing contract and is deliberately not shared. -->
     <style name="TextTitle" parent="">
+        <!-- title-lg: 22sp on a 28sp line (22 + 6), 500 weight, -0.15sp tracking.
+             The line height is size + spacing extra rather than android:lineHeight, which
+             is API 28+ and this app supports 26. -->
         <item name="android:textSize">22sp</item>
+        <item name="android:lineSpacingExtra">6sp</item>
+        <item name="android:letterSpacing">-0.0068</item>
         <item name="android:textColor">@color/app_on_surface</item>
-        <item name="android:fontFamily">sans-serif</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
     </style>
 
     <style name="TextBody" parent="">
+        <!-- body-lg: 16sp on a 24sp line (16 + 8), 0.5sp tracking -->
         <item name="android:textSize">16sp</item>
+        <item name="android:lineSpacingExtra">8sp</item>
+        <item name="android:letterSpacing">0.0156</item>
         <item name="android:textColor">@color/app_on_surface</item>
-        <item name="android:lineSpacingMultiplier">1.25</item>
     </style>
 
     <style name="TextBodySmall" parent="TextBody">
+        <!-- body-md: 14sp on a 20sp line (14 + 6), 0.25sp tracking -->
         <item name="android:textSize">14sp</item>
+        <item name="android:lineSpacingExtra">6sp</item>
+        <item name="android:letterSpacing">0.0089</item>
         <item name="android:textColor">@color/app_on_surface_variant</item>
     </style>
 
     <style name="TextLabel" parent="">
+        <!-- label-md: 12sp on a 16sp line (12 + 4), 500, 0.5sp tracking -->
         <item name="android:textSize">12sp</item>
+        <item name="android:lineSpacingExtra">4sp</item>
+        <item name="android:letterSpacing">0.0208</item>
         <item name="android:textColor">@color/app_on_surface_variant</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
     </style>
 
     <!-- Monospace only where a value is compared across refreshes (a device id, a
@@ -60,6 +72,7 @@
          sans-serif-monospace is the platform equivalent. -->
     <style name="TextMono" parent="TextBodySmall">
         <item name="android:fontFamily">monospace</item>
+        <item name="android:letterSpacing">0</item>
         <item name="android:textColor">@color/app_on_surface</item>
     </style>
 
@@ -69,11 +82,13 @@
         <item name="android:background">@drawable/bg_button_filled</item>
         <item name="android:textColor">@color/app_on_primary</item>
         <item name="android:textSize">14sp</item>
-        <item name="android:textStyle">bold</item>
+        <item name="android:lineSpacingExtra">6sp</item>   <!-- label-lg: 20sp line -->
+        <item name="android:letterSpacing">0.0071</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
         <item name="android:minHeight">@dimen/touch_target</item>
         <item name="android:minWidth">88dp</item>
-        <item name="android:paddingStart">@dimen/space_lg</item>
-        <item name="android:paddingEnd">@dimen/space_lg</item>
+        <item name="android:paddingStart">@dimen/gutter</item>
+        <item name="android:paddingEnd">@dimen/gutter</item>
         <item name="android:paddingTop">0dp</item>
         <item name="android:paddingBottom">0dp</item>
         <item name="android:textAllCaps">false</item>
@@ -88,7 +103,6 @@
     <style name="ButtonOutlined" parent="ButtonFilled">
         <item name="android:background">@drawable/bg_button_outlined</item>
         <item name="android:textColor">@color/app_primary</item>
-        <item name="android:textStyle">normal</item>
     </style>
 
     <style name="TextField" parent="">

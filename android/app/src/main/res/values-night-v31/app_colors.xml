@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material You, dark (Android 12+, device in dark mode).
+
+  In dark mode the tonal mapping inverts: low tones become surfaces and high tones become
+  ink, which is what keeps a wallpaper-derived scheme legible in the dark.
+-->
+<resources>
+    <color name="app_surface">@android:color/system_neutral1_10</color>
+    <color name="app_surface_container_lowest">@android:color/system_neutral1_0</color>
+    <color name="app_surface_container_low">@android:color/system_neutral1_100</color>
+    <color name="app_surface_container">@android:color/system_neutral1_100</color>
+    <color name="app_surface_container_high">@android:color/system_neutral1_200</color>
+    <color name="app_surface_container_highest">@android:color/system_neutral1_200</color>
+    <color name="app_surface_dim">@android:color/system_neutral1_10</color>
+    <color name="app_surface_bright">@android:color/system_neutral1_400</color>
+    <color name="app_surface_variant">@android:color/system_neutral2_700</color>
+
+    <color name="app_on_surface">@android:color/system_neutral1_900</color>
+    <color name="app_on_surface_variant">@android:color/system_neutral2_300</color>
+
+    <color name="app_primary">@android:color/system_accent1_200</color>
+    <color name="app_on_primary">@android:color/system_accent1_900</color>
+    <color name="app_primary_container">@android:color/system_accent1_700</color>
+    <color name="app_on_primary_container">@android:color/system_accent1_100</color>
+
+    <color name="app_error">#F2B8B5</color>
+
+    <color name="app_outline">@android:color/system_neutral2_400</color>
+    <color name="app_outline_variant">@android:color/system_neutral2_700</color>
+
+    <color name="app_state_layer_field">@android:color/system_neutral1_200</color>
+</resources>

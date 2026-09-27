@@ -357,6 +357,48 @@ contained the call, so the gate stayed green on a widget with no button. A check
 that cannot distinguish live code from dead code is a check that has not been
 written yet.
 
+## Material 3 adoption (round 14)
+
+Read from m3.material.io, the Android Material 3 guidance, Google's Expressive research and
+the M3 design kit. As with the earlier design document, the split matters: this is a Glance
+widget plus four XML screens, and the parts of M3 that suit it are taken whole while the
+parts that describe a different product are named and skipped.
+
+### Adopted, with the source of each decision
+
+| Principle | What we do | Source |
+| --- | --- | --- |
+| Baseline is the fallback, **dynamic colour is the point** | `values-v31` and `values-night-v31` alias the platform's own tonal roles (`system_neutral1_*`, `system_neutral2_*`, `system_accent1_*`), so the screens follow the wallpaper-derived scheme on Android 12+; `values*/` hold the static baseline below that | "Dynamic color is the key part of Material You" — M3 in Compose |
+| Surfaces are **tonal containers, not elevation overlays** | The full `surfaceContainerLowest → Highest` ladder, plus `surfaceDim/Bright`, replacing three hand-picked steps | "Introducing tone-based surfaces in Material 3" |
+| Roles, not colours, in the code | Layouts and drawables reference `app_surface_container*`, `app_on_surface_variant`, `app_outline`; no screen names a hex value | M3 colour roles |
+| Canonical values, not a lookalike | Values are the M3 baseline system tokens with the reference tone noted beside each (neutral 98/100/96/94/92/90 light, 6/4/10/12/17/22 dark; primary 40/80; error 40/80) and a parity check pins them | m3.material.io/styles/color/static/baseline |
+| Colour is accessible by construction | Every text pair clears 4.5:1 and every non-text pair clears 3:1, asserted per mode; the tonal ladder's direction is asserted too | "Tonal palettes are critical to making any colour scheme accessible by default" |
+| Shape is a **named size-based scale** | `shape_xs/sm/md/lg/xl/full` (4/8/12/16/28/full) with component steps: buttons pill, fields `md`, cards `lg`, widget root `xl` | M3 corner radius scale |
+| A state layer is the **control's own ink** | Four layers, each that control's foreground at the M3 opacities (8–10%): filled `onPrimary`, tonal `onPrimaryContainer`, outlined `primary`, field `onSurface` | M3 state layers |
+| Type is a role scale with line height **and** tracking | `title-lg 22/28`, `body-lg 16/24`, `body-md 14/20`, `label-md 12/16`, each with its M3 tracking; expressed as size + `lineSpacingExtra` because `android:lineHeight` is API 28+ and minSdk is 26 | M3 type scale |
+| The app follows the device's theme | `WidgetTheme` and the activity theme resolve day/night; nothing forces dark | "A dark theme… to fit your branding" |
+
+### Deliberately not adopted
+
+| Not taken | Why |
+| --- | --- |
+| `com.google.android.material` / Compose components | A dependency and APK-weight decision, and the project already removed Compose/glance-material3 on purpose. Every role here is expressible in a style plus a drawable. |
+| Spring-physics motion, shape morphing, expressive springs | There is no animation surface to apply them to: RemoteViews layouts are static and the one transition in the app is deliberately suppressed. |
+| Chips, switches, checkboxes, progress, FABs, bottom sheets, nav bars | No such feature exists. Adding them to a diagnostics screen would be decoration, not design. |
+| Fixed / add-on colour roles (`primary-fixed` and friends) | The spec itself scopes them to a hero-CTA use case we do not have. |
+| Roboto Flex | No font file, and the widget cannot set a family at all; the system sans is the platform equivalent. |
+| 40dp buttons | M3's button is a 40dp *visual* height; the platform's minimum touch target is 48dp. We keep 48 and say so rather than shipping an unreachable control. |
+| Forcing dark | Dark is the canonical *authored* state and the device default on dark; it is not imposed. |
+
+### One thing the alignment exposed
+
+The widget's chrome tokens were a lookalike palette — close enough to pass every contrast
+test, not the M3 roles. They are now the baseline, and the host preview mirror
+(`preview.py::WIDGET_SURFACE`) was realigned with them, which is why the parity check
+compares the two. The publisher-facing contract (`Typo.kt`, `layout.schema.json`) is
+deliberately untouched: it is a closed wire contract, and `ContrastTest` now also proves its
+`SECONDARY` still clears 4.5:1 on every new light surface (worst case 4.89:1).
+
 ## Gates
 
 `AppSurfaceTest` (JVM, runs in CI):

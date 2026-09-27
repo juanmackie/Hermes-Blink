@@ -1,23 +1,46 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Material 3 baseline colour roles, dark scheme. Same roles as the light file, with the
+  dark reference tones: surfaces neutral 6 / 4 / 10 / 12 / 17 / 22, on-surface neutral 90,
+  on-surface-variant neutral-variant 80, primary 80, error 80.
+
+  This is the canonical state, and the one the device uses whenever it is in dark mode.
+-->
 <resources>
-    <!--
-      The canonical state: Material 3 dark tonal tiers, exactly as the design system
-      specifies them. Depth comes from luminance (surface 6% -> container-high 17%), never
-      from a drop shadow, which is also what lets a widget and its companion screen read as
-      one surface on a dark launcher.
-    -->
-    <color name="app_surface">#131314</color>
-    <color name="app_surface_container">#1C1B1C</color>
-    <color name="app_surface_container_high">#2A2A2B</color>
-    <color name="app_on_surface">#E5E2E3</color>
-    <color name="app_on_surface_variant">#C3C6D0</color>
-    <color name="app_primary">#A8C7FA</color>
-    <color name="app_on_primary">#062E6F</color>
-    <color name="app_primary_container">#0842A0</color>
-    <color name="app_on_primary_container">#D3E3FD</color>
-    <color name="app_outline">#8D9199</color>
-    <color name="app_outline_variant">#43474F</color>
-    <color name="app_state_layer">#33E5E2E3</color>
+    <!-- Surfaces: neutral 6 / 4 / 10 / 12 / 17 / 22 -->
+    <color name="app_surface">#141218</color>
+    <color name="app_surface_container_lowest">#0F0D13</color>
+    <color name="app_surface_container_low">#1D1B20</color>
+    <color name="app_surface_container">#211F26</color>
+    <color name="app_surface_container_high">#2B2930</color>
+    <color name="app_surface_container_highest">#36343B</color>
+    <color name="app_surface_dim">#141218</color>
+    <color name="app_surface_bright">#3B383E</color>
+    <color name="app_surface_variant">#49454F</color>
+
+    <!-- Ink: on-surface neutral 90, on-surface-variant neutral-variant 80 -->
+    <color name="app_on_surface">#E6E0E9</color>
+    <color name="app_on_surface_variant">#CAC4D0</color>
+
+    <!-- Brand: primary 80, on-primary 20, primary-container 30, on-container 90 -->
+    <color name="app_primary">#D0BCFF</color>
+    <color name="app_on_primary">#381E72</color>
+    <color name="app_primary_container">#4F378B</color>
+    <color name="app_on_primary_container">#EADDFF</color>
+
+    <!-- Status: error 80 -->
+    <color name="app_error">#F2B8B5</color>
+
+    <!-- Outline: neutral-variant 60 / 30 -->
+    <color name="app_outline">#938F99</color>
+    <color name="app_outline_variant">#49454F</color>
+
+    <!-- State layers, same opacities over the dark fills -->
+    <color name="app_state_layer_filled">#C1ACF1</color>
+    <color name="app_state_layer_tonal">#5F4897</color>
+    <color name="app_state_layer_outlined">#27232F</color>
+    <color name="app_state_layer_field">#2B2930</color>
+
     <color name="paired_indicator">#7BD88F</color>
-    <color name="unpaired_indicator">#AEAEB2</color>
+    <color name="unpaired_indicator">#CAC4D0</color>
 </resources>

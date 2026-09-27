@@ -56,11 +56,15 @@ class DiagnosticsActivity : Activity() {
                 "scroll=${row.optInt("scrollDp", 0)}dp source=${row.optString("source")}"
         }
         if (Config.compositionHistory(this).isEmpty()) lines += "composed: (none recorded)"
-        val fires = Config.getActionFires(this)
-        lines += "fired count=${fires?.optInt("count", 0) ?: 0} " +
-            "last=${at(fires?.optLong("at", 0L) ?: 0L)} " +
-            "callback=${fires?.optString("callback") ?: "-"}"
+        val reached = Config.getActionReached(this)
         val outcomes = Config.actionOutcomes(this)
+        val verdict = ActionVerdict.of(reached, outcomes.size)
+        lines += "reached count=${reached?.optInt("count", 0) ?: 0} " +
+            "exceptions=${reached?.optInt("exceptions", 0) ?: 0} " +
+            "last=${at(reached?.optLong("at", 0L) ?: 0L)} " +
+            "lastEvent=${reached?.optString("lastEvent")?.ifBlank { "-" } ?: "-"} " +
+            "lastException=${reached?.optString("lastException")?.ifBlank { "-" } ?: "-"}"
+        lines += "verdict: ${verdict.line}"
         if (outcomes.isEmpty()) lines += "outcome: (none recorded)"
         outcomes.forEach { row ->
             lines += "outcome ${at(row.optLong("at", 0L))} " +
@@ -171,11 +175,13 @@ class DiagnosticsActivity : Activity() {
         val format = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
         fun at(value: Long) = value.takeIf { it > 0 }?.let { format.format(Date(it)) } ?: "never"
         val last = Config.getLastComposition(this)
-        val fires = Config.getActionFires(this)
+        val reached = Config.getActionReached(this)
         val band = last?.optString("band") ?: "?"
         val available = last?.optBoolean("actionAvailable", false) ?: false
         val scroll = last?.optInt("scrollHeightDp", 0) ?: 0
-        val count = fires?.optInt("count", 0) ?: 0
+        val count = reached?.optInt("count", 0) ?: 0
+        val exceptions = reached?.optInt("exceptions", 0) ?: 0
+        val verdict = ActionVerdict.of(reached, Config.actionOutcomes(this).size)
         val history = Config.compositionHistory(this)
         composition.text = buildString {
             if (history.size > 1) {
@@ -195,16 +201,18 @@ class DiagnosticsActivity : Activity() {
                 if (available) "action available" else "NO ACTION DRAWN")
             if (scroll > 0) append(" · scroll region ${scroll}dp")
             append(" (${at(last?.optLong("at", 0L) ?: 0L)})\n")
-            append("2. fired: $count action broadcast(s) received")
+            append("2. reached: $count widget action(s) reached the callback")
             if (count > 0) {
-                append(" · last ${at(fires?.optLong("at", 0L) ?: 0L)}")
-                append(" via ${fires?.optString("callback")?.takeIf { it.isNotBlank() } ?: "unknown"}")
+                append(" · last ${at(reached?.optLong("at", 0L) ?: 0L)}")
+                append(" · ${reached?.optString("lastEvent")?.ifBlank { "-" } ?: "-"}")
             }
             append("\n3. outcome: see Widget actions below")
+            append("\nverdict: ${verdict.line}")
         }
         Log.i(
             "HermesDiagnostics",
-            "trail composed band=$band action=$available scroll=${scroll}d fires=$count",
+            "trail composed band=$band action=$available scroll=${scroll}d " +
+                "reached=$count exceptions=$exceptions verdict=${verdict.line}",
         )
     }
 

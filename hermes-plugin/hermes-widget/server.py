@@ -116,6 +116,9 @@ def _is_loopback(client_address: Any) -> bool:
     return host in _LOOPBACK_HOSTS
 
 
+# Which control sent an event. Closed on purpose; see _widget_events.
+EVENT_SOURCES = frozenset({"widget_action", "in_app_button"})
+
 # Fields the attention route needs for routing, and that the store must never see.
 _ATTENTION_ROUTING_FIELDS = frozenset({"widgetId", "widget_id"})
 
@@ -1044,9 +1047,14 @@ class _Handler(BaseHTTPRequestHandler):
         else:
             payload = {}
         for field in ("clientEventId", "itemId", "actionClass", "confirmOnDevice", "revision",
-                      "instanceId"):
+                      "instanceId", "source"):
             if field in body:
                 payload.setdefault(field, body[field])
+        # `source` says which control was pressed. It is a closed vocabulary, so an
+        # unexpected value is dropped rather than stored: this field must never become a
+        # place to put content.
+        if "source" in payload and payload.get("source") not in EVENT_SOURCES:
+            payload.pop("source", None)
         if payload:
             body["payload"] = payload
         else:

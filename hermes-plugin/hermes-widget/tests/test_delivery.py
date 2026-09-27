@@ -27,6 +27,11 @@ from pathlib import Path
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 
+# A widget id of its own for the route tests. `check_push_rate` keeps one 30-per-hour
+# budget per widget id for the whole process, so publishing on the default id here starves
+# whichever suite runs after this one. This has bitten the suite twice, hence the note.
+ROUTES_WIDGET = "hermes-routes"
+
 
 @contextlib.contextmanager
 def open_db(path):
@@ -1001,3 +1006,180 @@ class AccessLogContexts(unittest.TestCase):
             self.server_module.configure_access_log()
         finally:
             logging.getLogger = original
+
+
+class RequestUpdatePathsAreDistinct(unittest.TestCase):
+    """Field round 13: the widget pill had never been proven to work.
+
+    The reviewer's correction, from the source: the widget surface put the whole Column
+    under `clickable(actionStartActivity(intent))` while the inner footer Text carried
+    `clickable(requestUpdateAction())`, and `PublicationActivity` has its own "Request
+    update" button that posts the same `request_update` event. So a `review` event followed
+    by a `request_update` is ambiguous: it is consistent with the pill working, and equally
+    consistent with the pill opening the app and the in-app button being pressed inside it.
+
+    Two things follow, and both are tested here. The two senders now declare themselves, so
+    a support question is a query. And a press on the widget pill must leave *no* `review`
+    behind — that is the signature of the two paths, and the thing a press that went to the
+    parent action cannot fake.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        _load_plugin()
+        cls.store = importlib.import_module("hermes_plugins.hermes_widget.store")
+        cls.server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
+        cls.server = cls.server_module.make_server("127.0.0.1", 0)
+        cls.port = cls.server.server_address[1]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+        os.environ.pop("HERMES_WIDGET_DIR", None)
+
+    def setUp(self):
+        self._dir = Path(tempfile.mkdtemp(prefix="hermes-routes-"))
+        os.environ["HERMES_WIDGET_DIR"] = str(self._dir)
+        self.addCleanup(shutil.rmtree, self._dir, ignore_errors=True)
+        self.store.init_db()
+        self.agent_token = self.store.get_agent_token()
+        self.store.put_publication(ROUTES_WIDGET, title="T", summary="S", text="body")
+        _, minted = self.request("POST", "/v1/pairing-codes", {}, self.agent_token)
+        _, paired = self.request(
+            "POST", "/v1/pair", {"code": minted["code"], "deviceLabel": "Pixel 10 Pro XL"}
+        )
+        self.token = paired["token"]
+
+    def request(self, method, path, body=None, token=None):
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        headers = {"Content-Type": "application/json"} if body is not None else {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.request(method, path, body=data, headers=headers)
+            response = connection.getresponse()
+            raw = response.read().decode("utf-8") or "{}"
+            try:
+                return response.status, json.loads(raw)
+            except json.DecodeError:
+                return response.status, {"raw": raw}
+        finally:
+            connection.close()
+
+    def _events(self):
+        return self.store.get_events(widget_id=ROUTES_WIDGET)
+
+    def _press_pill(self, client_event_id, instance_id="40"):
+        """The widget pill: exactly the payload ActionCallbacks builds for a tap."""
+        with unittest.mock.patch.object(self.server_module, "proactive") as host:
+            host.trigger_refresh.return_value = {"triggered": True, "pid": 1}
+            return self.request(
+                "POST", f"/v1/widgets/{ROUTES_WIDGET}/events",
+                {
+                    "event": "request_update",
+                    "clientEventId": client_event_id,
+                    "instanceId": instance_id,
+                    "source": "widget_action",
+                },
+                self.token,
+            )
+
+    def _press_in_app_button(self, client_event_id, instance_id="40"):
+        with unittest.mock.patch.object(self.server_module, "proactive") as host:
+            host.trigger_refresh.return_value = {"triggered": True, "pid": 1}
+            return self.request(
+                "POST", f"/v1/widgets/{ROUTES_WIDGET}/events",
+                {
+                    "event": "request_update",
+                    "clientEventId": client_event_id,
+                    "instanceId": instance_id,
+                    "source": "in_app_button",
+                },
+                self.token,
+            )
+
+    def _open_detail_view(self):
+        """What the surface target does: the activity posts review when it closes."""
+        return self.request(
+            "POST", f"/v1/widgets/{ROUTES_WIDGET}/events", {"event": "review"}, self.token
+        )
+
+    def test_a_widget_press_produces_request_update_and_no_review(self):
+        # This is the path that was never proven. The discriminator is not the event name -
+        # both senders use it - but the absence of a review alongside it.
+        status, body = self._press_pill("pill-1")
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["instanceId"], "40")
+        self.assertTrue(body["request"]["requestId"])
+
+        events = self._events()
+        self.assertEqual([e["event"] for e in events], ["request_update"])
+        self.assertEqual(events[0]["payload"]["source"], "widget_action")
+        self.assertEqual(events[0]["payload"]["instanceId"], "40")
+        self.assertEqual(
+            [r["status"] for r in self.store.list_update_requests(ROUTES_WIDGET)],
+            ["triggered"],
+        )
+
+    def test_the_two_paths_are_distinguishable_afterwards(self):
+        self._press_pill("pill-2")
+        self._open_detail_view()
+        self._press_in_app_button("inapp-2")
+        events = {e["event"]: e for e in self._events()}
+        self.assertIn("request_update", events)
+        self.assertIn("review", events)
+        sources = [
+            e["payload"].get("source")
+            for e in self._events() if e["event"] == "request_update"
+        ]
+        self.assertEqual(sorted(s for s in sources if s), ["in_app_button", "widget_action"])
+
+    def test_the_ambiguous_14_07_shape_is_reproducible_and_now_explained(self):
+        # review, then request_update three seconds later: what the live evidence showed.
+        self._open_detail_view()
+        self._press_in_app_button("inapp-3")
+        self.assertEqual(
+            [e["event"] for e in self._events()], ["request_update", "review"],
+        )
+        # With the source field, that sequence is provably the in-app button, not the pill.
+        sources = {
+            e["payload"].get("source") for e in self._events() if e["event"] == "request_update"
+        }
+        self.assertEqual(sources, {"in_app_button"})
+
+    def test_a_press_that_reached_the_parent_leaves_only_review(self):
+        # The failure being fixed: the pill press landed on the surface, so the only event
+        # is review, and no update request is ever recorded.
+        self._open_detail_view()
+        self.assertEqual([e["event"] for e in self._events()], ["review"])
+        self.assertEqual(self.store.list_update_requests(ROUTES_WIDGET), [])
+        with open_db(self.store.db_path()) as conn:
+            rows = conn.execute(
+                "SELECT COUNT(*) FROM widget_update_requests"
+            ).fetchone()[0]
+        self.assertEqual(rows, 0, "a press that reached the parent must not create a request")
+
+    def test_an_unknown_source_is_dropped_rather_than_stored(self):
+        status, _ = self.request(
+            "POST", f"/v1/widgets/{ROUTES_WIDGET}/events",
+            {"event": "request_update", "clientEventId": "x-1", "source": "free text here"},
+            self.token,
+        )
+        self.assertEqual(status, 200)
+        payload = self._events()[0]["payload"]
+        self.assertNotIn("source", payload, "source must stay a closed vocabulary")
+
+    def test_the_source_does_not_cost_idempotency(self):
+        status, first = self._press_pill("pill-4")
+        self.assertEqual(status, 200)
+        with unittest.mock.patch.object(self.server_module, "proactive") as host:
+            host.trigger_refresh.return_value = {"triggered": True, "pid": 2}
+            status, again = self._press_pill("pill-4")
+        self.assertEqual(status, 200)
+        self.assertEqual(again["request"]["requestId"], first["request"]["requestId"])
+        self.assertEqual(len(self._events()), 1, "a duplicate must not create a second event")

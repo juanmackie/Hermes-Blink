@@ -1,8 +1,13 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- WS-2 fallback: launchers that do not expose system_app_widget_background_radius
-         (pre-31) and the picker preview drawable both use this value. On API 31+
-         WidgetRadius resolves the platform dimension first and this is the last resort;
-         scripts/check-contract-parity.py fails if the radius ever leaves this resource. -->
-    <dimen name="widget_corner_radius">24dp</dimen>
+    <!--
+      Widget-only dimensions. The shared spacing, shape and type scales live in
+      app_dimens.xml / themes.xml so the screens and the widget cannot drift apart.
+
+      WS-2 fallback: launchers that do not expose system_app_widget_background_radius
+      (pre-31) and the picker preview drawable both use this value. On API 31+ WidgetRadius
+      resolves the platform dimension first, so this is the last resort; a parity check
+      fails if the radius ever leaves this resource.
+    -->
+    <dimen name="widget_corner_radius">28dp</dimen>
 </resources>

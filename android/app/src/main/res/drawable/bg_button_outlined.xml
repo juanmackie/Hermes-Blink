@@ -3,17 +3,17 @@
      The mask matters here: the fill is transparent, so without it the ripple would spill
      past the pill's rounded corners. -->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
-    android:color="@color/app_state_layer">
+    android:color="@color/app_state_layer_outlined">
     <item android:id="@android:id/mask">
         <shape android:shape="rectangle">
             <solid android:color="#FFFFFFFF" />
-            <corners android:radius="@dimen/shape_pill" />
+            <corners android:radius="@dimen/shape_button" />
         </shape>
     </item>
     <item>
         <shape android:shape="rectangle">
             <solid android:color="@android:color/transparent" />
-            <corners android:radius="@dimen/shape_pill" />
+            <corners android:radius="@dimen/shape_button" />
             <stroke
                 android:width="@dimen/hairline"
                 android:color="@color/app_outline" />
