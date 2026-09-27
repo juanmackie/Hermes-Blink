@@ -1,38 +1,52 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pairing: one field, one primary action, and the code's expiry stated plainly. The form
+  reads top-down with 16dp gutters, the way the design system's mobile layout does.
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="24dp"
-    android:gravity="center">
+    android:padding="@dimen/space_lg">
 
     <TextView
-        android:layout_width="wrap_content"
+        style="@style/TextTitle"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Enter pairing code from Hermes"
-        android:textSize="16sp"
-        android:textColor="#000000" />
+        android:text="@string/pairing_title" />
+
+    <TextView
+        style="@style/TextBodySmall"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_marginTop="@dimen/space_sm"
+        android:text="@string/pairing_explainer" />
 
     <EditText
         android:id="@+id/pairing_code_input"
+        style="@style/TextField"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:hint="Code (e.g. K7QP-3M2X)"
+        android:layout_marginTop="@dimen/space_md"
+        android:autofillHints="off"
+        android:hint="@string/pairing_code_hint_short"
         android:inputType="textCapCharacters"
-        android:layout_marginTop="12dp" />
+        android:maxLength="32" />
 
     <TextView
         android:id="@+id/pairing_expiry"
-        android:layout_width="wrap_content"
+        style="@style/TextBodySmall"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:textSize="13sp"
-        android:textColor="#666666" />
+        android:layout_marginTop="@dimen/space_sm"
+        android:textSize="13sp" />
 
     <Button
         android:id="@+id/pair_btn"
+        style="@style/ButtonFilled"
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="Pair"
-        android:layout_marginTop="16dp" />
+        android:layout_gravity="end"
+        android:layout_marginTop="@dimen/space_md"
+        android:text="@string/pair" />
 </LinearLayout>

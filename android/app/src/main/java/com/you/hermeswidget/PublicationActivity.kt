@@ -45,18 +45,20 @@ class PublicationActivity : Activity() {
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Color.rgb(20, 20, 20))
+            // Themed surface, not a hard-coded near-black: the zoom view used to be a dark
+            // screen in every mode, which is a jarring jump out of a light launcher.
+            setBackgroundColor(color(R.color.app_surface))
             setPadding(dp(20), dp(18), dp(20), dp(20))
         }
         root.addView(TextView(this).apply {
             text = publication.title
-            setTextColor(Color.WHITE)
-            textSize = 24f
+            setTextColor(color(R.color.app_on_surface))
+            textSize = 22f
             typeface = android.graphics.Typeface.DEFAULT_BOLD
         })
         root.addView(TextView(this).apply {
             text = publication.summary
-            setTextColor(Color.rgb(205, 205, 205))
+            setTextColor(color(R.color.app_on_surface_variant))
             textSize = 15f
             setPadding(0, dp(8), 0, dp(14))
         })
@@ -84,25 +86,29 @@ class PublicationActivity : Activity() {
         }
         publication.question?.takeIf { it.status == "open" }?.let { question ->
             root.addView(android.widget.Button(this).apply {
-                text = "Answer: ${question.prompt}"
+                text = getString(R.string.answer_question, question.prompt)
                 setOnClickListener { showQuestionDialog(question.questionId, question.prompt) }
             })
         }
         publication.ticker?.takeUnless { it.decayed }?.let { ticker ->
             val rotating = ticker.rotation.firstOrNull { !it.pinned }
             root.addView(TextView(this).apply {
-                text = "${ticker.title} · ${rotating?.summary ?: ticker.summary}"
-                setTextColor(Color.rgb(150, 150, 155))
+                text = getString(
+                    R.string.ticker_line,
+                    ticker.title,
+                    rotating?.summary ?: ticker.summary,
+                )
+                setTextColor(color(R.color.app_on_surface_variant))
                 textSize = 14f
                 setPadding(0, dp(12), 0, dp(4))
             })
         }
         root.addView(android.widget.Button(this).apply {
-            text = "Request update"
+            text = getString(R.string.widget_request_update)
             setOnClickListener { requestUpdate() }
         })
         root.addView(android.widget.Button(this).apply {
-            text = "Previous states"
+            text = getString(R.string.previous_states)
             setOnClickListener { showHistory() }
         })
         publication.actions.forEach { action ->
@@ -117,6 +123,11 @@ class PublicationActivity : Activity() {
         setContentView(root)
         recordTapAndRefresh()
     }
+
+    /** Resolve a token, honouring the device's dark mode, with the caller's fallback. */
+    private fun color(resId: Int, fallback: Int = 0): Int =
+        runCatching { androidx.core.content.ContextCompat.getColor(this, resId) }
+            .getOrDefault(if (fallback != 0) fallback else Color.GRAY)
 
     /**
      * Opening the zoom view is the only visible interaction affordance, so it
@@ -302,7 +313,10 @@ class PublicationActivity : Activity() {
     private fun textView(value: String): ScrollView = ScrollView(this).apply {
         addView(TextView(this@PublicationActivity).apply {
             text = value
-            setTextColor(Color.WHITE)
+            // A token, not Color.WHITE: this view used to sit on a hard-coded near-black
+            // background, and would have been unreadable once the surface followed the
+            // device theme.
+            setTextColor(color(R.color.app_on_surface))
             textSize = 18f
             setLineSpacing(0f, 1.2f)
             movementMethod = ScrollingMovementMethod()

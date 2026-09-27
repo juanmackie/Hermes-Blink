@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!--
+      The canonical state: Material 3 dark tonal tiers, exactly as the design system
+      specifies them. Depth comes from luminance (surface 6% -> container-high 17%), never
+      from a drop shadow, which is also what lets a widget and its companion screen read as
+      one surface on a dark launcher.
+    -->
+    <color name="app_surface">#131314</color>
+    <color name="app_surface_container">#1C1B1C</color>
+    <color name="app_surface_container_high">#2A2A2B</color>
+    <color name="app_on_surface">#E5E2E3</color>
+    <color name="app_on_surface_variant">#C3C6D0</color>
+    <color name="app_primary">#A8C7FA</color>
+    <color name="app_on_primary">#062E6F</color>
+    <color name="app_primary_container">#0842A0</color>
+    <color name="app_on_primary_container">#D3E3FD</color>
+    <color name="app_outline">#8D9199</color>
+    <color name="app_outline_variant">#43474F</color>
+</resources>

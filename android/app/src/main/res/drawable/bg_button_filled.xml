@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Filled button: primary fill, pill, 48dp touch target. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/app_primary" />
+    <corners android:radius="@dimen/shape_pill" />
+</shape>

@@ -377,6 +377,44 @@ def main() -> int:
     if "@layout/widget_preview" not in info:
         fail("loading-state", "previewLayout must stay @layout/widget_preview (WD-1)")
 
+    # --- the companion surfaces must not regress to literals ----------------
+    app_res = REPO / "android" / "app" / "src" / "main" / "res"
+    screens = [
+        "layout/activity_main.xml",
+        "layout/activity_pairing.xml",
+        "layout/activity_settings.xml",
+        "layout/activity_diagnostics.xml",
+    ]
+    for screen in screens:
+        path = app_res / screen
+        if not path.is_file():
+            fail("app-surface", f"{screen} is missing")
+            continue
+        text = path.read_text(encoding="utf-8")
+        for literal in sorted(set(re.findall(r"#[0-9A-Fa-f]{6,8}\b", text))):
+            fail("app-surface",
+                 f"{screen} hard-codes {literal}; a light-only literal is what made the "
+                 "pairing screen unreadable in dark mode (docs/APP_SURFACE.md)")
+    for mode in ("values", "values-night"):
+        colors_file = app_res / mode / "app_colors.xml"
+        if not colors_file.is_file():
+            fail("app-surface", f"{mode}/app_colors.xml is missing")
+            continue
+        tokens = set(re.findall(r'<color name="(app_[a-z_]+)"', colors_file.read_text(encoding="utf-8")))
+        for required in ("app_surface", "app_surface_container", "app_surface_container_high",
+                         "app_on_surface", "app_on_surface_variant", "app_primary", "app_on_primary"):
+            if required not in tokens:
+                fail("app-surface", f"{mode}/app_colors.xml has no {required}")
+    activity = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+                "hermeswidget" / "PublicationActivity.kt").read_text(encoding="utf-8")
+    body = re.sub(r"//.*", "", re.sub(r"/\*.*?\*/", "", activity, flags=re.S))
+    for literal in sorted(set(re.findall(r"Color\.(?:WHITE|BLACK)|Color\.rgb\(", body))):
+        fail("app-surface",
+             f"PublicationActivity.kt paints {literal}; the zoom view follows the device "
+             "theme now, so white text would be invisible in light mode")
+    if not (REPO / "docs" / "APP_SURFACE.md").is_file():
+        fail("app-surface", "docs/APP_SURFACE.md must record what was adopted and what was not")
+
     # --- tap observability: the trail exists on both sides and is documented ---
     _SERVER_SRC = (PLUGIN / "server.py").read_text(encoding="utf-8")
     _STORE_SRC = (PLUGIN / "store.py").read_text(encoding="utf-8")

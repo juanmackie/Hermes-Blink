@@ -1,30 +1,57 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  The launcher surface. Tonal container on the themed canvas, one filled primary action,
+  one tonal secondary. Previously this was a white box with black text and no dark mode.
+-->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
-    android:layout_width="wrap_content"
-    android:layout_height="wrap_content"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
     android:orientation="vertical"
-    android:padding="24dp"
-    android:background="#FFFFFF"
-    android:gravity="center"
-    android:layout_gravity="center">
+    android:padding="@dimen/space_lg"
+    android:gravity="center_vertical">
+
+    <ImageView
+        android:layout_width="32dp"
+        android:layout_height="32dp"
+        android:contentDescription="@null"
+        android:src="@drawable/ic_hermes_mono"
+        android:background="@drawable/bg_button_filled"
+        android:padding="6dp" />
 
     <TextView
         android:id="@+id/status_text"
-        android:layout_width="wrap_content"
+        style="@style/TextBody"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/status_disconnected"
-        android:textColor="#000000" />
+        android:layout_marginTop="@dimen/space_md"
+        android:text="@string/status_disconnected" />
 
-    <Button
-        android:id="@+id/connect_btn"
-        android:layout_width="wrap_content"
+    <TextView
+        style="@style/TextBodySmall"
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/connect" />
+        android:layout_marginTop="@dimen/space_sm"
+        android:text="@string/main_hint" />
 
-    <Button
-        android:id="@+id/diagnostics_btn"
-        android:layout_width="wrap_content"
+    <LinearLayout
+        android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="8dp"
-        android:text="Delivery diagnostics" />
+        android:layout_marginTop="@dimen/space_lg"
+        android:orientation="horizontal">
+
+        <Button
+            android:id="@+id/connect_btn"
+            style="@style/ButtonFilled"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="@string/connect" />
+
+        <Button
+            android:id="@+id/diagnostics_btn"
+            style="@style/ButtonTonal"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginStart="@dimen/space_sm"
+            android:text="@string/delivery_diagnostics" />
+    </LinearLayout>
 </LinearLayout>

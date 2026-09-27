@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Companion-screen brand mark: 32dp monogram, tinted by the layout, not baked in. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="32dp"
+    android:height="32dp"
+    android:viewportWidth="32"
+    android:viewportHeight="32">
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M10.2,5.2h3.8v8.6h4V5.2h3.8v21.6h-3.8v-9.2h-4v9.2h-3.8z" />
+</vector>

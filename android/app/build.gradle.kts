@@ -43,11 +43,11 @@ android {
         applicationId = "com.you.hermeswidget"
         minSdk = 26
         targetSdk = 35
-        // Bumped per release: 3 = the 2026-09-27 widget-UX + build-reporting + tap
-        // observability round. CI fails the build when a source change lands with the
-        // same versionCode (scripts/check-version-bump.py).
-        versionCode = 3
-        versionName = "0.3.0"
+        // Bumped per release: 4 = the 2026-09-27 companion-surface pass (M3 tonal tokens,
+        // type roles, pill buttons, 16dp grid). CI fails the build when a source change
+        // lands with the same versionCode (scripts/check-version-bump.py).
+        versionCode = 4
+        versionName = "0.4.0"
     }
     buildFeatures {
         compose = true

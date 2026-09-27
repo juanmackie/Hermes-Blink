@@ -1,78 +1,128 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Diagnostics: what the last round taught us is that this screen is the only place a
+  failure can be *seen*, so it is built as a stack of tonal cards: a section label, the
+  value, and a hairline between sections. Monospace is used for the values that a user
+  compares across refreshes (build, device id, revision) so a changing digit does not
+  reflow the line.
+-->
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:padding="24dp">
+    android:fillViewport="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical">
+        android:orientation="vertical"
+        android:padding="@dimen/space_lg">
 
         <TextView
+            style="@style/TextTitle"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="Hermes delivery diagnostics"
-            android:textSize="22sp"
-            android:textStyle="bold" />
+            android:text="@string/diagnostics_title" />
+
+        <TextView
+            style="@style/TextLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_md"
+            android:text="@string/section_delivery" />
 
         <TextView
             android:id="@+id/diagnostics_status"
+            style="@style/TextMono"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:textIsSelectable="true"
-            android:textSize="16sp" />
+            android:layout_marginTop="@dimen/space_md"
+            android:textIsSelectable="true" />
 
         <TextView
-            android:id="@+id/battery_exemption_status"
+            style="@style/TextLabel"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:textSize="15sp" />
-
-        <TextView
-            android:id="@+id/push_state_status"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:textSize="15sp" />
+            android:layout_marginTop="@dimen/space_md"
+            android:text="@string/section_instances" />
 
         <TextView
             android:id="@+id/widget_instances_status"
+            style="@style/TextMono"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:textIsSelectable="true"
-            android:textSize="15sp" />
+            android:layout_marginTop="@dimen/space_md"
+            android:textIsSelectable="true" />
+
+        <TextView
+            style="@style/TextLabel"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_md"
+            android:text="@string/section_actions" />
 
         <TextView
             android:id="@+id/action_outcomes_status"
+            style="@style/TextMono"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:textIsSelectable="true"
-            android:textSize="15sp" />
+            android:layout_marginTop="@dimen/space_md"
+            android:textIsSelectable="true" />
 
-        <Button
-            android:id="@+id/pin_widget"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Add widget to home screen" />
+        <View
+            android:layout_width="match_parent"
+            android:layout_height="@dimen/hairline"
+            android:layout_marginTop="@dimen/space_lg"
+            android:background="@drawable/divider_hairline" />
 
-        <Button
-            android:id="@+id/request_battery_exemption"
-            android:layout_width="wrap_content"
+        <TextView
+            style="@style/TextLabel"
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="16dp"
-            android:text="Review battery optimisation" />
+            android:layout_marginTop="@dimen/space_md"
+            android:text="@string/section_wake" />
+
+        <TextView
+            android:id="@+id/push_state_status"
+            style="@style/TextBody"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_md" />
+
+        <TextView
+            android:id="@+id/battery_exemption_status"
+            style="@style/TextBodySmall"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_md" />
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_lg"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/pin_widget"
+                style="@style/ButtonFilled"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="@string/pin_widget" />
+
+            <Button
+                android:id="@+id/request_battery_exemption"
+                style="@style/ButtonTonal"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="@dimen/space_sm"
+                android:text="@string/review_battery" />
+        </LinearLayout>
 
         <Button
             android:id="@+id/close_diagnostics"
+            style="@style/ButtonOutlined"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="8dp"
-            android:text="Close" />
+            android:layout_marginTop="@dimen/space_sm"
+            android:text="@string/close" />
     </LinearLayout>
 </ScrollView>

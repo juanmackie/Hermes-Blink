@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Spacing: an 8dp baseline grid with 4dp sub-increments, per the design system.
+         The four companion screens use margin/gutter (16dp) and space-sm (8dp) only. -->
+    <dimen name="space_xs">4dp</dimen>
+    <dimen name="space_sm">8dp</dimen>
+    <dimen name="space_md">16dp</dimen>
+    <dimen name="space_lg">24dp</dimen>
+    <dimen name="gutter">16dp</dimen>
+
+    <!-- Shape: 24dp inner card radii inside the 28dp widget root, and full pills for
+         anything a finger presses. -->
+    <dimen name="shape_card">24dp</dimen>
+    <dimen name="shape_widget_root">28dp</dimen>
+    <dimen name="shape_pill">9999dp</dimen>
+    <dimen name="shape_field">12dp</dimen>
+    <dimen name="hairline">1dp</dimen>
+
+    <!-- Touch targets stay at the 48dp floor rather than the design system's 40dp
+         button: a 40dp pill is under the platform minimum for a finger target. -->
+    <dimen name="touch_target">48dp</dimen>
+</resources>

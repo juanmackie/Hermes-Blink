@@ -1,11 +1,108 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="AppTheme" parent="Theme.AppCompat.DayNight.DarkActionBar" />
-    <!-- The widget's own theme (WC-1): its window background and primary ink are the
-         surface tokens, so ?android:colorBackground resolves to the same day/night/dynamic
-         values HermesWidget.kt paints. Applied to the provider in the manifest. -->
+    <!--
+      The companion surfaces follow the device's light/dark setting rather than forcing
+      one: the design system calls dark canonical, and it is the default we *author*
+      (values-night), but a user in light mode gets the light tonal ladder instead of a
+      white-on-white screen. Everything below resolves to a token, so no layout needs to
+      know which mode it is in.
+    -->
+    <style name="AppTheme" parent="Theme.AppCompat.DayNight.DarkActionBar">
+        <item name="android:windowBackground">@color/app_surface</item>
+        <item name="android:textColorPrimary">@color/app_on_surface</item>
+        <item name="android:textColorSecondary">@color/app_on_surface_variant</item>
+        <item name="android:colorBackground">@color/app_surface</item>
+        <item name="colorPrimary">@color/app_primary</item>
+        <item name="colorPrimaryDark">@color/app_surface_container_high</item>
+        <item name="colorAccent">@color/app_primary</item>
+        <item name="android:colorControlHighlight">@color/app_primary_container</item>
+    </style>
+
+    <!--
+      The widget's own theme (WC-1): its window background and primary ink are the surface
+      tokens, so ?android:colorBackground resolves to the same day/night/dynamic values
+      HermesWidget.kt paints. Applied to the provider in the manifest.
+    -->
     <style name="WidgetTheme" parent="Theme.AppCompat.DayNight">
         <item name="android:windowBackground">@color/widget_surface</item>
         <item name="android:textColorPrimary">@color/widget_on_surface</item>
+    </style>
+
+    <!-- Type roles. The design system's scale, kept to the four steps these screens use:
+         title-lg 22, body-lg 16, body-md 14, label-md 12. The widget's own closed scale
+         (Typo.kt) is a publisher-facing contract and is deliberately not shared. -->
+    <style name="TextTitle" parent="">
+        <item name="android:textSize">22sp</item>
+        <item name="android:textColor">@color/app_on_surface</item>
+        <item name="android:fontFamily">sans-serif</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <style name="TextBody" parent="">
+        <item name="android:textSize">16sp</item>
+        <item name="android:textColor">@color/app_on_surface</item>
+        <item name="android:lineSpacingMultiplier">1.25</item>
+    </style>
+
+    <style name="TextBodySmall" parent="TextBody">
+        <item name="android:textSize">14sp</item>
+        <item name="android:textColor">@color/app_on_surface_variant</item>
+    </style>
+
+    <style name="TextLabel" parent="">
+        <item name="android:textSize">12sp</item>
+        <item name="android:textColor">@color/app_on_surface_variant</item>
+        <item name="android:textStyle">bold</item>
+    </style>
+
+    <!-- Monospace only where a value is compared across refreshes (a device id, a
+         revision): Roboto Flex's monospaced instances are not available offline, and
+         sans-serif-monospace is the platform equivalent. -->
+    <style name="TextMono" parent="TextBodySmall">
+        <item name="android:fontFamily">monospace</item>
+        <item name="android:textColor">@color/app_on_surface</item>
+    </style>
+
+    <!-- Buttons: pill shapes at the 48dp touch-target floor. Filled is reserved for the
+         one primary action on a screen; tonal for secondary; outlined for low priority. -->
+    <style name="ButtonFilled" parent="">
+        <item name="android:background">@drawable/bg_button_filled</item>
+        <item name="android:textColor">@color/app_on_primary</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:textStyle">bold</item>
+        <item name="android:minHeight">@dimen/touch_target</item>
+        <item name="android:minWidth">88dp</item>
+        <item name="android:paddingStart">@dimen/space_lg</item>
+        <item name="android:paddingEnd">@dimen/space_lg</item>
+        <item name="android:paddingTop">0dp</item>
+        <item name="android:paddingBottom">0dp</item>
+        <item name="android:textAllCaps">false</item>
+        <item name="android:gravity">center</item>
+    </style>
+
+    <style name="ButtonTonal" parent="ButtonFilled">
+        <item name="android:background">@drawable/bg_button_tonal</item>
+        <item name="android:textColor">@color/app_on_primary_container</item>
+    </style>
+
+    <style name="ButtonOutlined" parent="ButtonFilled">
+        <item name="android:background">@drawable/bg_button_outlined</item>
+        <item name="android:textColor">@color/app_primary</item>
+        <item name="android:textStyle">normal</item>
+    </style>
+
+    <style name="TextField" parent="">
+        <item name="android:background">@drawable/bg_field</item>
+        <item name="android:textColor">@color/app_on_surface</item>
+        <item name="android:textColorHint">@color/app_on_surface_variant</item>
+        <item name="android:textSize">16sp</item>
+        <item name="android:minHeight">@dimen/touch_target</item>
+        <item name="android:paddingStart">@dimen/space_md</item>
+        <item name="android:paddingEnd">@dimen/space_md</item>
+    </style>
+
+    <style name="SurfaceCard" parent="">
+        <item name="android:background">@drawable/surface_card</item>
+        <item name="android:padding">@dimen/gutter</item>
     </style>
 </resources>

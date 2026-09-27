@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Text field: container-high fill, 12dp radius, outline-variant boundary. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android"
+    android:shape="rectangle">
+    <solid android:color="@color/app_surface_container_high" />
+    <corners android:radius="@dimen/shape_field" />
+    <stroke
+        android:width="@dimen/hairline"
+        android:color="@color/app_outline_variant" />
+</shape>
