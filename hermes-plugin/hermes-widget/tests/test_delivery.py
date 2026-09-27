@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import http.client
+import http.server
 import io
 import logging
 import importlib
@@ -31,6 +32,22 @@ PLUGIN_DIR = Path(__file__).resolve().parents[1]
 # budget per widget id for the whole process, so publishing on the default id here starves
 # whichever suite runs after this one. This has bitten the suite twice, hence the note.
 ROUTES_WIDGET = "hermes-routes"
+
+
+def decode_body(raw: str) -> dict:
+    """Decode a response body, tolerating one that is not JSON.
+
+    A captive portal, a proxy error page or a gateway's HTML 502 is a normal thing for a
+    phone to receive. This lives as a named function rather than as an inline `except` in
+    each request helper for a reason: a wrong exception name there sat latent through 151
+    passing tests, because every response in those cases was valid JSON and the clause
+    never ran. A guard that never executes protects nothing.
+    """
+    text = raw or "{}"
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return {"raw": text}
 
 
 @contextlib.contextmanager
@@ -121,10 +138,7 @@ class DeliveryTruthfulness(unittest.TestCase):
             connection.request(method, path, body=data, headers=headers)
             response = connection.getresponse()
             raw = response.read().decode("utf-8") or "{}"
-            try:
-                return response.status, json.loads(raw)
-            except json.JSONDecodeError:
-                return response.status, {"raw": raw}
+            return response.status, decode_body(raw)
         finally:
             connection.close()
 
@@ -359,10 +373,7 @@ class ClientBuildReporting(unittest.TestCase):
             connection.request(method, path, body=data, headers=headers)
             response = connection.getresponse()
             raw = response.read().decode("utf-8") or "{}"
-            try:
-                return response.status, json.loads(raw)
-            except json.JSONDecodeError:
-                return response.status, {"raw": raw}
+            return response.status, decode_body(raw)
         finally:
             connection.close()
 
@@ -603,10 +614,7 @@ class TapObservability(unittest.TestCase):
             connection.request(method, path, body=data, headers=request_headers)
             response = connection.getresponse()
             raw = response.read().decode("utf-8") or "{}"
-            try:
-                return response.status, json.loads(raw)
-            except json.JSONDecodeError:
-                return response.status, {"raw": raw}
+            return response.status, decode_body(raw)
         finally:
             connection.close()
 
@@ -821,10 +829,7 @@ class AttentionRouteRoundTrip(unittest.TestCase):
             connection.request(method, path, body=data, headers=headers)
             response = connection.getresponse()
             raw = response.read().decode("utf-8") or "{}"
-            try:
-                return response.status, json.loads(raw)
-            except json.JSONDecodeError:
-                return response.status, {"raw": raw}
+            return response.status, decode_body(raw)
         finally:
             connection.close()
 
@@ -1064,10 +1069,7 @@ class RequestUpdatePathsAreDistinct(unittest.TestCase):
             connection.request(method, path, body=data, headers=headers)
             response = connection.getresponse()
             raw = response.read().decode("utf-8") or "{}"
-            try:
-                return response.status, json.loads(raw)
-            except json.JSONDecodeError:
-                return response.status, {"raw": raw}
+            return response.status, decode_body(raw)
         finally:
             connection.close()
 
@@ -1108,6 +1110,45 @@ class RequestUpdatePathsAreDistinct(unittest.TestCase):
         return self.request(
             "POST", f"/v1/widgets/{ROUTES_WIDGET}/events", {"event": "review"}, self.token
         )
+
+    def test_the_helper_survives_a_non_json_response(self):
+        # This suite is worth one test of its own plumbing. A wrong exception name in the
+        # request helper sat latent through 151 passing tests, because every response in
+        # these cases is valid JSON and the except clause never ran: a guard that never
+        # executes cannot protect anything. A proxy that answers with HTML stands in for a
+        # captive portal or an error page.
+        class HtmlProxy(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):  # noqa: N802 - stdlib API
+                body = b"<html>not json</html>"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):  # silence the test server
+                return
+
+        server = http.server.HTTPServer(("127.0.0.1", 0), HtmlProxy)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        self.addCleanup(server.shutdown)
+        conn = http.client.HTTPConnection("127.0.0.1", server.server_address[1], timeout=5)
+        try:
+            conn.request("GET", "/v1/widgets/hermes-brief/publication")
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            status, payload = self._parse_body(response)
+            self.assertEqual(status, 200)
+            self.assertEqual(payload, {"raw": "<html>not json</html>"})
+        finally:
+            conn.close()
+            server.server_close()
+
+    @staticmethod
+    def _parse_body(response) -> tuple[int, dict]:
+        """The decoding every helper in this file uses, reached through this one."""
+        return response.status, decode_body(response.read().decode("utf-8"))
 
     def test_a_widget_press_produces_request_update_and_no_review(self):
         # This is the path that was never proven. The discriminator is not the event name -
