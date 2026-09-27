@@ -254,6 +254,22 @@ object Config {
      * that was tapped, the HTTP status, the server's own error code and a sentence — kept
      * locally and shown in Diagnostics. It never stores a token, a payload or content.
      */
+    /**
+     * Which control produced an outcome.
+     *
+     * There are two producers and they are structurally different: the widget pill runs
+     * inside `ActionCallbacks.EventAction.onAction`, and the button inside
+     * `PublicationActivity` runs in an ordinary Activity. The activity button cannot
+     * increment the `reached` counter, because it never passes through a Glance action
+     * dispatch. Recording the origin is what lets the Diagnostics verdict tell "the press
+     * never reached the widget" from "these outcomes did not come from the widget".
+     */
+    const val SOURCE_WIDGET_ACTION = "widget_action"
+    const val SOURCE_IN_APP_BUTTON = "in_app_button"
+
+    /** A record written before this field existed. Its origin cannot be known. */
+    const val SOURCE_UNKNOWN = "unknown"
+
     fun recordActionOutcome(
         context: Context,
         event: String,
@@ -261,6 +277,7 @@ object Config {
         httpStatus: Int,
         code: String,
         message: String?,
+        source: String = SOURCE_UNKNOWN,
         at: Long = System.currentTimeMillis(),
     ) {
         val entry = JSONObject()
@@ -269,6 +286,7 @@ object Config {
             .put("status", httpStatus)
             .put("code", code.take(64))
             .put("message", (message ?: "").take(240))
+            .put("source", source.take(32))
             .put("at", at)
         val current = runCatching {
             JSONArray(prefs(context).getString(KEY_ACTION_OUTCOMES, "[]") ?: "[]")

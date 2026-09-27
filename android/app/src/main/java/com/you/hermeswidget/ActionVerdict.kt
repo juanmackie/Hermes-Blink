@@ -1,26 +1,37 @@
 package com.you.hermeswidget
 
+import com.you.hermeswidget.net.Config
+import org.json.JSONObject
+
 /**
  * What the recorded trail says about a press.
  *
- * Round 13: the "did the press fire?" counter was maintained in a receiver that never
- * sees a Glance action broadcast, so it read zero and that zero was read as evidence. A
- * number that cannot move is worse than no number, so the counter now lives where the
- * dispatch arrives and is named for what it measures: *reached*.
+ * There are two producers of outcomes, and they are structurally different:
  *
- * The verdict is a pure function so the sentence a human reads is a thing that can be
- * tested, and so the two possible failures cannot be quietly conflated again:
+ *  - the **widget pill**, inside `ActionCallbacks.EventAction.onAction`. Every path
+ *    through it also increments the `reached` counter, because that counter is taken on
+ *    the first statement of the callback. A `reached` of zero therefore means no press ever
+ *    reached the widget.
+ *  - the **button in the publication detail view**, an ordinary `Button` in an Activity. It
+ *    posts the same event and records the same outcome shape, and it can *never* increment
+ *    `reached`, because no Glance action dispatch is involved.
  *
- *  - reached advanced, an outcome exists: the callback ran; anything wrong is in our handler.
- *  - reached did not advance, no outcome: the press never got past the touch. That is a
- *    layout or launcher question, not a request-path question.
- *  - a callback exception: the handler threw, and says so.
- *  - an outcome with reached at zero is impossible and is reported as inconsistent rather
- *    than being smoothed over.
+ * So `outcomes > 0 && reached == 0` is the expected steady state of an app with two
+ * producers, not a contradiction. The first version of this class asserted the opposite -
+ * it treated any outcome at `reached == 0` as impossible - and so Diagnostics spent
+ * several rounds reporting the app as broken while it was behaving correctly. Outcomes
+ * carry their origin (`Config.SOURCE_*`) so the distinction is data rather than a guess.
+ *
+ * The genuinely impossible case is narrow and worth keeping: an outcome that the *widget
+ * callback* claims to have produced, while the callback's own counter reads zero. That
+ * means the record and the counter disagree, and it is still called inconsistent.
  */
 data class ActionVerdict(
     val reached: Int,
+    /** Outcomes recorded in total, from any producer. */
     val outcomes: Int,
+    /** How many of those the Glance callback attributed to itself. */
+    val widgetOutcomes: Int,
     val exceptions: Int,
     val lastEvent: String?,
     val lastException: String?,
@@ -28,27 +39,40 @@ data class ActionVerdict(
     val line: String
         get() = when {
             exceptions > 0 ->
-                "callback threw ${exceptions} time(s): ${lastException ?: "?"} — the handler, not the press"
+                "the widget callback threw $exceptions time(s): " +
+                    "${lastException ?: "?"} - our handler, not the press"
+            widgetOutcomes > 0 && reached == 0 ->
+                "inconsistent: the widget callback recorded $widgetOutcomes outcome(s) but " +
+                    "its own counter reads zero"
             reached == 0 && outcomes > 0 ->
-                "inconsistent: $outcomes outcome(s) but the callback was never reached"
+                "no press has reached the widget; the $outcomes outcome(s) on record came " +
+                    "from the app, which is a different control"
             reached == 0 ->
-                "no press reached the callback: either none was made, or the touch did not " +
-                    "get past the surface"
+                "no press has reached the widget, and nothing was recorded anywhere"
             outcomes == 0 ->
-                "callback reached ${reached}x but recorded no outcome — the handler stopped early"
+                "the widget callback was reached ${reached}x but recorded no outcome - " +
+                    "our handler stopped early"
             else ->
-                "callback reached ${reached}x, last '${lastEvent ?: "?"}', $outcomes outcome(s) recorded"
+                "the widget callback was reached ${reached}x, last " +
+                    "'${lastEvent ?: "?"}', $outcomes outcome(s) recorded"
         }
 
-    /** True when the press is known to have got as far as our code. */
+    /** True when a press is known to have got as far as the Glance callback. */
     val pressReachedApp: Boolean get() = reached > 0
 
+    /** True when a press is known *not* to have reached the widget. */
+    val pressNeverReachedWidget: Boolean get() = reached == 0
+
     companion object {
-        fun of(reached: org.json.JSONObject?, outcomes: Int): ActionVerdict {
-            val record = reached ?: org.json.JSONObject()
+        fun of(reached: JSONObject?, outcomes: List<JSONObject>): ActionVerdict {
+            val record = reached ?: JSONObject()
+            val widget = outcomes.count { row ->
+                row.optString("source") == Config.SOURCE_WIDGET_ACTION
+            }
             return ActionVerdict(
                 reached = record.optInt("count", 0),
-                outcomes = outcomes,
+                outcomes = outcomes.size,
+                widgetOutcomes = widget,
                 exceptions = record.optInt("exceptions", 0),
                 lastEvent = record.optString("lastEvent").ifBlank { null },
                 lastException = record.optString("lastException").ifBlank { null },

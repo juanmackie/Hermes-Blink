@@ -68,6 +68,7 @@ object ActionCallbacks {
                     Config.recordActionOutcome(
                         context, "<no event>", instanceId, 0, "missing_event_parameter",
                         "the widget action was dispatched without an event name",
+                        source = Config.SOURCE_WIDGET_ACTION,
                     )
                 }
             } ?: return
@@ -110,7 +111,10 @@ object ActionCallbacks {
                 if (publication != null) {
                     HermesApi.reportAttention(url, token, widgetId, publication.revision, taps = 1)
                 }
-                Config.recordActionOutcome(context, event, instanceId, 200, "ok", null)
+                Config.recordActionOutcome(
+                    context, event, instanceId, 200, "ok", null,
+                    source = Config.SOURCE_WIDGET_ACTION,
+                )
                 RefreshWorker.schedulePostTapPoll(context)
             } else {
                 val outcome = Outcome.from(result, "Update requested", "Request update")
@@ -134,6 +138,7 @@ object ActionCallbacks {
         ) {
             Config.recordActionOutcome(
                 context, event, instanceId, outcome.httpStatus ?: -1, outcome.code, outcome.message,
+                source = Config.SOURCE_WIDGET_ACTION,
             )
         }
 

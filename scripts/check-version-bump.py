@@ -91,6 +91,13 @@ def shipped_files(base: str) -> list[str]:
     return sorted({name for name in names if name.startswith(SHIPPED_PREFIXES)})
 
 
+def uncommitted_shipped_paths() -> list[str]:
+    """Shipped files changed but not yet committed."""
+    names = git("diff", "--name-only", "HEAD").splitlines()
+    names += git("diff", "--name-only", "--cached").splitlines()
+    return sorted({name for name in names if name.startswith(SHIPPED_PREFIXES)})
+
+
 def bump_commit(version: int) -> str:
     """The commit that set this versionCode, or "" when it is not in this history."""
     return git(
@@ -161,6 +168,10 @@ def main() -> int:
     bump = bump_commit(head_code) or ""
     if bump:
         after = shipped_paths(f"{bump}..HEAD")
+        # The working tree counts too, so a developer sees this before committing rather
+        # than only in CI. Committed history is what CI has; both are what the bump must
+        # cover.
+        after = sorted(set(after) | set(uncommitted_shipped_paths()))
         if after:
             bump_short = bump[:12]
             print(

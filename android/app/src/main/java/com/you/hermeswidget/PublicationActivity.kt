@@ -165,6 +165,7 @@ class PublicationActivity : Activity() {
             Log.w("HermesTap", "request_update not sent: ${blocker.code} — ${blocker.message}")
             Config.recordActionOutcome(
                 this, "request_update", instanceId(), -1, blocker.code, blocker.message,
+                source = Config.SOURCE_IN_APP_BUTTON,
             )
             Toast.makeText(this, blocker.message, Toast.LENGTH_LONG).show()
             return
@@ -193,6 +194,7 @@ class PublicationActivity : Activity() {
             Config.recordActionOutcome(
                 this, "request_update", instanceId(),
                 resolved.httpStatus ?: result.code, resolved.code, resolved.message,
+                source = Config.SOURCE_IN_APP_BUTTON,
             )
             runOnUiThread {
                 Toast.makeText(this, resolved.message, Toast.LENGTH_LONG).show()

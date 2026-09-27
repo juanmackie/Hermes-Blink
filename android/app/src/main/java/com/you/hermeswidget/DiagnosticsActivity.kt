@@ -58,13 +58,15 @@ class DiagnosticsActivity : Activity() {
         if (Config.compositionHistory(this).isEmpty()) lines += "composed: (none recorded)"
         val reached = Config.getActionReached(this)
         val outcomes = Config.actionOutcomes(this)
-        val verdict = ActionVerdict.of(reached, outcomes.size)
+        val verdict = ActionVerdict.of(reached, Config.actionOutcomes(this))
         lines += "reached count=${reached?.optInt("count", 0) ?: 0} " +
             "exceptions=${reached?.optInt("exceptions", 0) ?: 0} " +
             "last=${at(reached?.optLong("at", 0L) ?: 0L)} " +
             "lastEvent=${reached?.optString("lastEvent")?.ifBlank { "-" } ?: "-"} " +
             "lastException=${reached?.optString("lastException")?.ifBlank { "-" } ?: "-"}"
         lines += "verdict: ${verdict.line}"
+        lines += "  (outcomes: ${verdict.widgetOutcomes} from the widget pill, " +
+            "${verdict.outcomes - verdict.widgetOutcomes} from the app button)"
         if (outcomes.isEmpty()) lines += "outcome: (none recorded)"
         outcomes.forEach { row ->
             lines += "outcome ${at(row.optLong("at", 0L))} " +
@@ -184,7 +186,7 @@ class DiagnosticsActivity : Activity() {
         val scroll = last?.optInt("scrollHeightDp", 0) ?: 0
         val count = reached?.optInt("count", 0) ?: 0
         val exceptions = reached?.optInt("exceptions", 0) ?: 0
-        val verdict = ActionVerdict.of(reached, Config.actionOutcomes(this).size)
+        val verdict = ActionVerdict.of(reached, Config.actionOutcomes(this))
         val history = Config.compositionHistory(this)
         composition.text = buildString {
             if (history.size > 1) {
@@ -236,8 +238,10 @@ class DiagnosticsActivity : Activity() {
                     val status = row.optInt("status", -1)
                     val instance = row.optString("instanceId").ifBlank { "?" }
                     val at = row.optLong("at", 0L).takeIf { it > 0 }?.let { format.format(Date(it)) } ?: "?"
+                    // The origin is what tells the two controls apart after the fact.
+                    val source = row.optString("source").ifBlank { "unknown origin" }
                     append("\n$at · ${row.optString("event")} · instance $instance · " +
-                        "HTTP $status · ${row.optString("code")}")
+                        "HTTP $status · ${row.optString("code")} · $source")
                 }
             }
         }

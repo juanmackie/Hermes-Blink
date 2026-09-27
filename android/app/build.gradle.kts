@@ -107,8 +107,10 @@ android {
         // bump had been applied but not committed, so that binary is not the committed
         // main. Android installs over it silently and app_build_code cannot tell them
         // apart. See docs/APK_RELEASE.md and scripts/check-build-provenance.py.
-        versionCode = 11
-        versionName = "0.4.7"
+        // 12, not 11: 11 is recorded in the release ledger and the review device has been
+        // sent one, so reusing it would be the divergence check-build-provenance refuses.
+        versionCode = 12
+        versionName = "0.4.8"
     }
     buildFeatures {
         compose = true
