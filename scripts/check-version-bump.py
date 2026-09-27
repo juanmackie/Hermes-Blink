@@ -46,6 +46,10 @@ def git(*args: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def commit_of_head() -> str:
+    return git("rev-parse", "HEAD")
+
+
 def version_code(text: str) -> int | None:
     match = VERSION_CODE.search(text)
     return int(match.group(1)) if match else None
@@ -69,14 +73,44 @@ def main() -> int:
 
     base = args.base
     if base is None:
-        base = git("merge-base", "origin/main", "HEAD") or "HEAD~1"
-        if base == "HEAD~1":
-            base = git("rev-parse", "--verify", "HEAD~1") or ""
-    if not base:
-        print("check-version-bump: could not determine a base commit; skipping")
-        return 0
+        # `merge-base origin/main HEAD` in a depth-1 clone resolves to HEAD itself, which
+        # makes `git diff base..HEAD` empty and this gate vacuously green — it could never
+        # fail, while reporting success. Field round 8: that is worse than a red run, so
+        # refuse to evaluate rather than pretend.
+        if not git("rev-parse", "--verify", "--quiet", "HEAD~1"):
+            print(
+                "check-version-bump FAILED (harness, not evidence): shallow clone.\n"
+                "  This checkout has one commit and no parent, so there is no base to\n"
+                "  diff against and this gate cannot run at all.\n"
+                "  Fix the checkout, not the build:\n"
+                "    - uses: actions/checkout@v4\n"
+                "      with:\n"
+                "        fetch-depth: 0\n"
+                "  A gate that cannot evaluate must be red, not green."
+            )
+            return 1
+        # Two shapes, one rule. On a push to main, origin/main *is* HEAD, so merging gives
+        # an empty diff and the gate reports success without checking anything — the same
+        # vacuous pass as the shallow clone, in a full history. On a push the meaningful
+        # base is the commit that was on main before this one; on a pull request it is the
+        # merge base with main.
+        if git("rev-parse", "origin/main") == commit_of_head():
+            base = "HEAD~1"
+        else:
+            base = git("merge-base", "origin/main", "HEAD") or "HEAD~1"
+    if not base or base == commit_of_head():
+        print(
+            "check-version-bump FAILED: no usable base commit to compare against.\n"
+            "  A shallow clone has no parent, and on a push to main `merge-base "
+            "origin/main HEAD`\n  is HEAD, so the diff would be empty and this gate would "
+            "pass without\n  checking anything. Use fetch-depth: 0, or pass --base <ref>."
+        )
+        return 1
 
     head_text = (REPO / BUILD_FILE).read_text(encoding="utf-8")
+    if base == commit_of_head():
+        print("check-version-bump FAILED: the base commit is HEAD, so the comparison is empty.")
+        return 1
     base_text = git("show", f"{base}:{BUILD_FILE}")
     head_code = version_code(head_text)
     if head_code is None:
@@ -93,7 +127,9 @@ def main() -> int:
 
     touched = shipped_files(base)
     if not touched:
-        print(f"check-version-bump OK: no shipped-app change since {base[:12]}")
+        print(
+            f"check-version-bump OK: no shipped-app change since {base[:12]}"
+        )
         return 0
     if head_code != base_code:
         print(

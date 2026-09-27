@@ -179,6 +179,45 @@ rather than the other way round.
   parent) and the versionCode — and *reports* size and digest as provenance. A gate that
   fails on every honest build teaches everyone to ignore red.
 
+## Round 9 — the first CI run, and what it caught
+
+CI ran for the first time since `e1a9cf8` and immediately proved its own value, though not
+on the thing it was built for. The only red step was "Release evidence matches the build",
+and it was red for a structural reason: `actions/checkout@v4` defaults to a **depth-1
+clone**, so there is no parent commit, so the "HEAD or its parent" rule could not be
+evaluated and the check blamed the document.
+
+The deeper lesson is the general one, and it is worth writing down: *a gate that fails for
+a reason unrelated to what it checks is the same disease as a gate that never fails.*
+Neither teaches anybody anything except that red is noise.
+
+Three changes came out of it:
+
+1. **Both history-reading gates now refuse to run rather than guess.**
+   `check-version-bump.py` was the quieter failure and nobody had noticed: on a push to
+   main, `origin/main` *is* HEAD, so its diff was empty and it reported success without
+   checking anything — vacuously green, in a full history, on every run. It now selects
+   `HEAD~1` for the push shape and the merge base for a pull request, and both gates fail
+   loudly with "shallow clone" and the fix when the history they need is missing.
+
+2. **The evidence rule was replaced, not patched.** "HEAD or its parent" was narrower
+   than the truth and was only stable for exactly one push. The invariant it was reaching
+   for is: the recorded commit must be in this history, and its versionCode must match the
+   build file. Distance behind HEAD is now *reported* rather than failed on, because
+   recording the numbers is itself a commit and further behind is already caught by the
+   version-bump gate.
+
+3. **`fetch-depth: 0` on every checkout**, so what the gates see in CI is what they see
+   locally.
+
+`test_release_gates.py` now exercises both scripts in temporary repositories, in both
+clone shapes: that each one refuses to run when starved, that each one fires on the drift
+it exists to catch, and that size and digest stay provenance. Writing it caught a bug in
+the tests themselves — the first draft invoked the *original* scripts, which quietly
+inspected this repository instead of the fixture, and a fixture commit that was failing
+silently because a clone has no git identity. Both are the same mistake in different
+clothes: not checking that the thing you meant to run actually ran.
+
 ## Gates
 
 `AppSurfaceTest` (JVM, runs in CI):
