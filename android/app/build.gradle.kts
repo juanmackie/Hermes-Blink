@@ -43,15 +43,16 @@ android {
         applicationId = "com.you.hermeswidget"
         minSdk = 26
         targetSdk = 35
-        // Bumped per release: 7 = the 2026-09-27 round-8 fixes — the composition is
+        // Bumped per release: 8 = the 2026-09-27 round-11 action trail (composition
+        // history, rename-tolerant fire detection, one-paste diagnostics). Round 10: 7 = — the composition is
         // laid out for the launcher's reported cell geometry rather than the responsive
         // sample, which is what put the action outside a 270dp 4x2. Round 8 also fixed the
         // attention route, the unparseable workflow and the dead access log.
         // explicit scroll-region height so the pinned action cannot be clipped off the
         // bottom, plus the three-link action trail. CI fails the build when a source
         // change lands with the same versionCode (scripts/check-version-bump.py).
-        versionCode = 7
-        versionName = "0.4.3"
+        versionCode = 8
+        versionName = "0.4.4"
     }
     buildFeatures {
         compose = true

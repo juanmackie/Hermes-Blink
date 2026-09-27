@@ -259,6 +259,56 @@ Three gates in `check-contract-parity.py` have now matched a *comment* explainin
 defect they forbid, so source greps go through one `source_of()` helper that strips
 comments first.
 
+## Round 11 — a second tap that did not land, and what it did not tell us
+
+14:07 the pill worked end to end. 15:23 it did not, with the device demonstrably alive:
+fetched, downloaded and render-submitted revision 24 at 15:23:03, attention aggregates
+written — and no `request_update` event, no `widget_update_requests` row, and a production
+access log with zero lines. A fix that works once is not a fix, so this round does not
+claim the second tap is explained. It removes three reasons for it to be *unexplainable*,
+and asks for the one number that discriminates.
+
+**What I could not establish.** The trail lives on the phone, and nobody has read it back.
+The server log is empty, so the server has no view of the press either. I have three
+hypotheses and no evidence to choose between them:
+
+1. the composition on screen at 15:23 was laid out differently from the one at 14:07 —
+   a different band, a different instance, or a different scroll height, which would put the
+   action outside the cell again;
+2. the press produced a broadcast that Glance's dispatcher dropped;
+3. the press never became a broadcast at all, i.e. it landed on the surface.
+
+The composed/fired/outcome line separates all three in one reading, and it is the line the
+review asked for. This round makes obtaining it one tap instead of a photograph.
+
+**What changed.**
+
+- **`Copy widget trail`** in Diagnostics puts the whole trail on the clipboard: app
+  identity, every recorded composition with its instance, band, both heights, scroll height
+  and geometry source, the fire count, every outcome, and the current inventory. One paste
+  ends the transcription step that has now cost two rounds. The on-screen trail also shows
+  the last four compositions instead of only the most recent one, so "was it laid out the
+  same way?" is answerable without a paste.
+- **Every composition is recorded, not just the last.** `Config.recordComposition` keeps a
+  bounded history of eight. With one value stored, two presses cannot be compared at all —
+  which is precisely the comparison this round needed.
+- **The fire detector no longer depends on one internal extra name.** Glance exposes no
+  constant for `ActionCallbackBroadcastReceiver:callbackClass`, and the previous code
+  matched that exact string. The extras are matched by suffix, and a broadcast carrying
+  the parameters extra but an unrecognisable name is still counted — with its extra keys —
+  rather than ignored. A Glance upgrade would otherwise silence the trail again, which is
+  how it went quiet twice already.
+- **The access line for `/v1/device/attention` names its widget** instead of a dash, so a
+  rejection and a success are attributable without a second query.
+
+Three structural gates cover the new behaviour and were each verified by reverting it. Two
+tautological JVM tests were written for the same properties and then **deleted**: they
+restated the logic instead of exercising it, and a test that cannot fail is the disease
+this round is about. Four separate "prove the gate bites" mutations in this session were
+no-ops because they changed one of several occurrences — the same mistake, four times, in
+the verification harness rather than the product. The gates are right; the way I kept
+proving it was not.
+
 ## Gates
 
 `AppSurfaceTest` (JVM, runs in CI):

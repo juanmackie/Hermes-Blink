@@ -7,6 +7,9 @@ import org.json.JSONObject
 import java.io.File
 
 object Config {
+    /** How many compositions to keep: enough to compare two presses, small enough to forget. */
+    private const val COMPOSITION_HISTORY_LIMIT = 8
+
     private const val PREFS_NAME = "hermes_config"
     private const val KEY_BACKEND_URL = "backend_url"
     private const val KEY_WIDGET_ID = "widget_id"
@@ -29,6 +32,7 @@ object Config {
     private const val KEY_ACTION_OUTCOMES = "action_outcomes"
     private const val KEY_LAST_COMPOSITION = "last_composition"
     private const val KEY_ACTION_FIRES = "action_fires"
+    private const val KEY_COMPOSITIONS = "composition_history"
 
     private fun prefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -314,6 +318,50 @@ object Config {
     fun getLastComposition(context: Context): JSONObject? = runCatching {
         JSONObject(prefs(context).getString(KEY_LAST_COMPOSITION, "{}") ?: "{}")
     }.getOrNull()?.takeIf { it.length() > 2 }
+
+    /**
+     * Every composition, newest first, bounded.
+     *
+     * Field round 11: one tap worked and the next did not, with nothing to compare. A
+     * single "last composition" cannot answer "was the widget laid out the same way at
+     * 15:23 as at 14:07?", which is the only question that separates a content change from
+     * a geometry change from a lost tap. This keeps the trail of both, so the next report
+     * can be pasted instead of photographed.
+     */
+    fun compositionHistory(context: Context): List<JSONObject> = runCatching {
+        val array = JSONArray(prefs(context).getString(KEY_COMPOSITIONS, "[]") ?: "[]")
+        (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+    }.getOrDefault(emptyList())
+
+    fun recordComposition(
+        context: Context,
+        band: String,
+        actionAvailable: Boolean,
+        scrollHeightDp: Int,
+        composedHeightDp: Float,
+        cellHeightDp: Float?,
+        source: String,
+        instanceId: String?,
+        at: Long = System.currentTimeMillis(),
+    ) {
+        val entry = JSONObject()
+            .put("band", band)
+            .put("action", actionAvailable)
+            .put("scrollDp", scrollHeightDp)
+            .put("composedDp", composedHeightDp.toDouble())
+            .put("cellDp", (cellHeightDp ?: -1.0).toDouble())
+            .put("source", source)
+            .put("instance", instanceId ?: JSONObject.NULL)
+            .put("at", at)
+        val current = compositionHistory(context)
+        val next = JSONArray()
+        next.put(entry)
+        for (index in 0 until current.size) {
+            if (next.length() >= COMPOSITION_HISTORY_LIMIT) break
+            current[index].let { next.put(it) }
+        }
+        prefs(context).edit().putString(KEY_COMPOSITIONS, next.toString()).apply()
+    }
 
     /**
      * A widget action broadcast that actually reached this process.

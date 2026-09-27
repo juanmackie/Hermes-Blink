@@ -1,6 +1,8 @@
 package com.you.hermeswidget
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Bundle
 import android.os.PowerManager
@@ -26,6 +28,55 @@ class DiagnosticsActivity : Activity() {
     private lateinit var actions: TextView
     private lateinit var composition: TextView
 
+    /**
+     * The whole widget-action trail as one block of text, for the clipboard.
+     *
+     * Field round 11: two presses, one worked, and the diagnosis needed a screenshot of a
+     * phone. Every number that matters is on this device already, so asking for it should
+     * not involve holding a phone up to a camera — "Copy widget trail" pastes the same
+     * evidence in one action, with the instance, the geometry source, both heights, the
+     * fire count and every recorded outcome.
+     */
+    fun widgetTrailReport(): String {
+        val format = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+        fun at(value: Long) = value.takeIf { it > 0 }?.let { format.format(Date(it)) } ?: "never"
+        val identity = AppIdentity.of(this)
+        val lines = mutableListOf(
+            "Hermes widget trail",
+            "app ${AppIdentity.describe(identity)} api ${identity.osSdk} " +
+                "commit ${identity.appBuildSha ?: "unknown"}",
+        )
+        Config.compositionHistory(this).forEach { row ->
+            lines += "composed ${at(row.optLong("at", 0L))} " +
+                "instance=${row.optString("instance").ifBlank { "?" }} " +
+                "band=${row.optString("band")} " +
+                "action=${if (row.optBoolean("action", false)) "yes" else "NO"} " +
+                "composed=${row.optDouble("composedDp", 0.0).toInt()}dp " +
+                "cell=${row.optDouble("cellDp", -1.0).toInt()}dp " +
+                "scroll=${row.optInt("scrollDp", 0)}dp source=${row.optString("source")}"
+        }
+        if (Config.compositionHistory(this).isEmpty()) lines += "composed: (none recorded)"
+        val fires = Config.getActionFires(this)
+        lines += "fired count=${fires?.optInt("count", 0) ?: 0} " +
+            "last=${at(fires?.optLong("at", 0L) ?: 0L)} " +
+            "callback=${fires?.optString("callback") ?: "-"}"
+        val outcomes = Config.actionOutcomes(this)
+        if (outcomes.isEmpty()) lines += "outcome: (none recorded)"
+        outcomes.forEach { row ->
+            lines += "outcome ${at(row.optLong("at", 0L))} " +
+                "event=${row.optString("event")} " +
+                "instance=${row.optString("instanceId").ifBlank { "?" }} " +
+                "http=${row.optInt("status", -1)} code=${row.optString("code")} " +
+                "note=${row.optString("message").take(80)}"
+        }
+        WidgetDimensions.allInstances(this).forEach { instance ->
+            val spec = Breakpoints.spec(instance.widthDp.toFloat(), instance.heightDp.toFloat())
+            lines += "inventory #${instance.instanceId} ${instance.widthDp}x${instance.heightDp}dp " +
+                "class=${instance.sizeClass} band=${spec.band} action=${spec.showsRequestAction}"
+        }
+        return lines.joinToString("\n")
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppIdentity.attach(this)
@@ -43,6 +94,12 @@ class DiagnosticsActivity : Activity() {
         // once an automatic offer had been made, which is what made it look broken.
         findViewById<Button>(R.id.pin_widget).setOnClickListener {
             WidgetPinning.offerNow(this, this)
+        }
+        findViewById<Button>(R.id.copy_widget_trail).setOnClickListener {
+            val report = widgetTrailReport()
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("hermes-widget-trail", report))
+            Toast.makeText(this, R.string.diagnostics_copied, Toast.LENGTH_SHORT).show()
         }
         findViewById<Button>(R.id.close_diagnostics).setOnClickListener {
             // No transition: this is a plain screen closing, and the system animation on a
@@ -119,8 +176,22 @@ class DiagnosticsActivity : Activity() {
         val available = last?.optBoolean("actionAvailable", false) ?: false
         val scroll = last?.optInt("scrollHeightDp", 0) ?: 0
         val count = fires?.optInt("count", 0) ?: 0
+        val history = Config.compositionHistory(this)
         composition.text = buildString {
-            append("1. composed: band $band · " +
+            if (history.size > 1) {
+                append("1. composed: ${history.size} recorded, newest first\n")
+                for (row in history.take(4)) {
+                    val at = row.optLong("at", 0L)
+                    append("   ${at.takeIf { it > 0 }?.let { format.format(Date(it)) } ?: "?"} " +
+                        "#${row.optString("instance").ifBlank { "?" }} " +
+                        "${row.optString("band")} " +
+                        "${if (row.optBoolean("action", false)) "action" else "NO ACTION"} " +
+                        "${row.optDouble("composedDp", 0.0).toInt()}dp cell " +
+                        "${row.optDouble("cellDp", -1.0).toInt()}dp " +
+                        "scroll ${row.optInt("scrollDp", 0)}dp\n")
+                }
+            }
+            append("last: band $band · " +
                 if (available) "action available" else "NO ACTION DRAWN")
             if (scroll > 0) append(" · scroll region ${scroll}dp")
             append(" (${at(last?.optLong("at", 0L) ?: 0L)})\n")

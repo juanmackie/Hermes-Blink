@@ -126,6 +126,14 @@
         </LinearLayout>
 
         <Button
+            android:id="@+id/copy_widget_trail"
+            style="@style/ButtonFilled"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="@dimen/space_md"
+            android:text="@string/copy_widget_trail" />
+
+        <Button
             android:id="@+id/close_diagnostics"
             style="@style/ButtonOutlined"
             android:layout_width="wrap_content"

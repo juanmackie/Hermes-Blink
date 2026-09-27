@@ -117,6 +117,18 @@ class HermesWidget : GlanceAppWidget() {
             cellHeightDp = WidgetSize.fromInventory(context, appWidgetId)?.second,
             source = geometry.source.name,
         )
+        // The same fact, kept as a trail: one tap worked and the next did not, and a
+        // single "last" value cannot say whether the layout changed in between.
+        Config.recordComposition(
+            context,
+            band = spec.band.name,
+            actionAvailable = spec.showsRequestAction,
+            scrollHeightDp = spec.scrollHeightDp,
+            composedHeightDp = geometry.heightDp,
+            cellHeightDp = WidgetSize.fromInventory(context, appWidgetId)?.second,
+            source = geometry.source.name,
+            instanceId = instanceId,
+        )
             Column(
                 modifier = GlanceModifier
                     .fillMaxSize()

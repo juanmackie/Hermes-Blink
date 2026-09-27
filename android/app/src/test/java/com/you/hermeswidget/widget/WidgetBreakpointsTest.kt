@@ -314,3 +314,4 @@ class WidgetBreakpointsTest {
         assertEquals(setOf("2x2", "4x2", "2x4", "4x4", "custom"), classes)
     }
 }
+

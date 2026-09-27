@@ -20,6 +20,8 @@
     <string name="pin_widget">Add widget</string>
     <string name="review_battery">Review battery</string>
     <string name="close">Close</string>
+    <string name="copy_widget_trail">Copy widget trail</string>
+    <string name="diagnostics_copied">Widget trail copied to the clipboard</string>
     <string name="section_delivery">Delivery</string>
     <string name="section_instances">Widget instances</string>
     <string name="section_actions">Widget actions</string>

@@ -548,6 +548,45 @@ def main() -> int:
                      f"ci.yml:{number}: unquoted ': ' in {line.strip()!r} makes the value a "
                      "mapping; the whole workflow stops parsing and GitHub schedules nothing")
 
+    # --- the client-side action trail must survive a Glance rename (round 11) ----
+    receiver_src = source_of(
+        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
+        / "widget" / "HermesWidgetReceiver.kt"
+    )
+    if "actionCallbackClass()" not in receiver_src or "endsWith(\":callbackClass\")" not in receiver_src:
+        fail("widget-action",
+             "the action-fire detector must match Glance's internal callback extra by "
+             "suffix; matching one exact name means a Glance upgrade silences the trail "
+             "with no signal, which is how it hid twice (round 11)")
+    if "recordActionFired(context, \"unnamed(" not in receiver_src:
+        fail("widget-action",
+             "an action broadcast whose callback extra cannot be named must still be "
+             "counted, or the trail goes quiet when the library changes")
+    if "EXTRA_PARAMETERS" not in receiver_src:
+        fail("widget-action",
+             "the fallback detector needs the parameters extra to recognise an action "
+             "broadcast at all")
+    config_kt = source_of(
+        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
+        / "net" / "Config.kt"
+    )
+    for needed in ("fun recordComposition", "fun compositionHistory",
+                   "COMPOSITION_HISTORY_LIMIT"):
+        if needed not in config_kt:
+            fail("widget-action",
+                 f"Config.{needed} is missing: the client trail must record every "
+                 "composition, not only the last, or two presses cannot be compared")
+    diagnostics_kt = source_of(
+        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
+        / "DiagnosticsActivity.kt"
+    )
+    if "widgetTrailReport" not in diagnostics_kt or "copy_widget_trail" not in source_of(
+        REPO / "android" / "app" / "src" / "main" / "res" / "layout" / "activity_diagnostics.xml"
+    ):
+        fail("widget-action",
+             "Diagnostics must offer the whole trail in one paste; asking for a screenshot "
+             "of a phone is how two rounds were lost to transcription (round 11)")
+
     # --- the access log must actually emit (round 8, P2) -----------------------
     if "def configure_access_log" not in _SERVER_SRC:
         fail("access-log",
