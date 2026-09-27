@@ -65,6 +65,18 @@ def git(*args: str) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def git_ok(*args: str) -> bool:
+    """True when the git command succeeded, regardless of what it printed.
+
+    `merge-base --is-ancestor` prints nothing in both cases and signals the answer through
+    its exit status, so its result cannot be read from stdout.
+    """
+    result = subprocess.run(
+        ["git", *args], cwd=REPO, capture_output=True, text=True, check=False
+    )
+    return result.returncode == 0
+
+
 def build_identity() -> dict[str, object]:
     text = (REPO / BUILD_FILE).read_text(encoding="utf-8")
     code = VERSION_CODE.search(text)
@@ -111,11 +123,16 @@ def resolve_row(rows: list[dict], commit: str, short: str) -> tuple[dict | None,
     # problem rather than a statement about the document.
     if not git("rev-parse", "--verify", "--quiet", "HEAD~1"):
         return None, 0, "shallow"
+    # Ancestry, not resolvability. `git rev-parse <sha>` succeeds for any object the
+    # repository still has, including one left behind by a rebase, and `rev-list --count
+    # A..B` then reports a plausible distance for a commit that is in no branch's history.
+    # That is how a rewritten history can keep looking current: this check passed on a
+    # recorded commit that had been dropped from main.
     in_history = [
         (row, distance)
         for row in rows
         for full in [git("rev-parse", "--verify", "--quiet", row["commit"] + "^{commit}")]
-        if full
+        if full and git_ok("merge-base", "--is-ancestor", full, commit)
         for distance in [int(git("rev-list", "--count", f"{full}..{commit}") or "0")]
     ]
     if not in_history:

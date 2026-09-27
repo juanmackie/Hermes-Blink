@@ -219,6 +219,19 @@ class ReleaseGateHarness(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertNotIn("behind HEAD", out)
 
+    def test_a_resolved_commit_that_left_the_branch_fails(self):
+        # A rebase rewrites history but leaves the old commits resolvable, and
+        # `git rev-list --count A..B` happily reports a distance for a commit that is in
+        # no branch. Verifying resolvability instead of ancestry is how a document keeps
+        # looking current after the history it describes was rewritten.
+        abandoned = self._rewrite_mainline()
+        # The document still names the commit the rewrite abandoned. It resolves, and
+        # `rev-list --count` will happily put a number on it, but it is in no branch.
+        (self.full / DOC).write_text(doc_text(abandoned[:12]))
+        code, out = run(self.full, "evidence", "--check", "--doc", DOC)
+        self.assertEqual(code, 1, out)
+        self.assertIn("not in this history", out)
+
     def test_a_commit_outside_the_history_fails(self):
         (self.full / DOC).write_text(doc_text("deadbeefcafe"))
         code, out = run(self.full, "evidence", "--check", "--doc", DOC)
@@ -241,3 +254,36 @@ class ReleaseGateHarness(unittest.TestCase):
         self.assertEqual(code, 0, out)
         self.assertIn("provenance", out.lower())
         self.assertIn("1,111,111", out)
+
+    def _rewrite_mainline(self) -> str:
+        """Rebuild the tip so the previous commit is resolvable but not an ancestor.
+
+        A rebase is the realistic case: `git rev-parse <sha>` still resolves the old
+        commit and `rev-list --count A..B` still reports a distance, so a gate that asks
+        "does this object exist?" where it should ask "is this in our history?" passes a
+        document that describes a history we no longer have.
+        """
+        old_head = git(self.full, "rev-parse", "HEAD")
+        marker = self.full / "mainline-marker.txt"
+        marker.write_text("v2\n")
+        git(self.full, "add", "-A")
+        git(self.full, "commit", "-q", "-m", "mainline v2")
+        new_tip = git(self.full, "rev-parse", "HEAD")
+        git(self.full, "reset", "--hard", "HEAD~1")
+        self.assertFalse(marker.exists(), "the reset should have dropped the marker")
+        # A rewrite needs a *different* tree, or the tip keeps the old sha and the old
+        # commit stays an ancestor and the test proves nothing.
+        (self.full / "mainline-rewrite.txt").write_text("rewritten\n")
+        git(self.full, "add", "-A")
+        git(self.full, "commit", "-q", "-m", "mainline rewritten")
+        self.assertNotEqual(git(self.full, "rev-parse", "HEAD"), old_head)
+        # The pre-rewrite commits still resolve, and are simply not in this history.
+        self.assertNotEqual(git(self.full, "rev-parse", "HEAD~1"), new_tip)
+        self.assertTrue(
+            subprocess.run(
+                ["git", "rev-parse", "--verify", "--quiet", new_tip + "^{commit}"],
+                cwd=self.full, capture_output=True,
+            ).returncode == 0,
+            "the pre-rewrite commit must still be resolvable, or the test is not testing this",
+        )
+        return new_tip
