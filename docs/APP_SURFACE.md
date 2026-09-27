@@ -110,6 +110,75 @@ with no outcome means the dispatch failed. `composed: NO ACTION DRAWN` means the
 no button to press. Each is a different bug with a different fix, and the screen now says
 which.
 
+## Round 8 — the deployment review
+
+### 1 (P0) The composition was built for the wrong height
+
+The field report carried the numbers: on a 407x270dp 4x2 cell, Diagnostics read
+`composed: band L … scroll region 316dp`, and 316 + 96 of chrome = 412dp — the 4x4 height.
+
+Cause, and it is a real misunderstanding on my part: in `SizeMode.Responsive(sizes)`, Glance
+composes for the **closest sample in the set**, so `LocalSize` inside the composition
+reports *that sample*, not the cell the launcher draws into. The nearest sample to
+407x270 was 407x412, so the column was composed 142dp too tall, the pinned footer and its
+action fell outside the cell, taps landed on the launcher, and no action broadcast was
+ever produced — `fired: 0`, which is exactly what the report showed.
+
+The order is now inverted:
+
+1. **The launcher's own report for this instance** (`AppWidgetManager` options, refreshed on
+   every resize) is authoritative. It is the same geometry the host receives and the bands
+   are defined against.
+2. The responsive sample is a hint only, and now only decides *which composition tree*
+   Glance builds — never a dp number we lay out with.
+3. A fixed fallback is the last resort.
+
+`SizeGate.resolve` is pure and records where the geometry came from. Acceptance tests
+assert what the review asked for: at 8 real cell sizes × 4 samples, `chrome + scroll` fits
+the cell, the band equals the band implied by the reported geometry, and the band does not
+move when the sample changes. The 56dp 2x1 floor also forced a correction — a minimum list
+height *guarantees* an overflow on a cell that small, so fitting wins and the list takes what
+is left, with `hasReadableBody` saying whether that is enough.
+
+Diagnostics now shows `composed Xdp · cell Ydp · source`, so a mismatch is visible from the
+device instead of inferred.
+
+### 2 (P1) `PUT /v1/device/attention` failed 100% of the time
+
+The route read `widgetId` for routing and then passed the *whole body* to
+`store.report_attention`, whose allow-list is aggregate counters only — so every report came
+back `400 attention reports must not contain content or unknown fields`. 22 rejections and
+counting. The store tests passed because they never sent a realistic body through the
+route. Routing fields are now filtered before the call, and `AttentionRouteRoundTrip`
+sends exactly what `HermesApi.reportAttention` sends. A test also pins the *other*
+direction: a body carrying `payload`, `title` or `text` is still refused, so the fix did not
+weaken the content guard.
+
+### 3 (P1) CI had scheduled zero jobs since `e1a9cf8`
+
+`.github/workflows/ci.yml:146` had `- name: Assemble the debug APK (clean: published sizes
+are clean-build sizes)`. The unquoted `: ` makes the value a mapping rather than a string,
+PyYAML rejects the file, GitHub reports no jobs, and CI stays green because nothing ran.
+Quoted, and verified by parsing: 5 jobs, 30 steps.
+
+`scripts/check-workflow-yaml.py` now does a real parse when PyYAML is available and a
+dependency-free structural scan when it is not, and fails if any job has no steps. It runs in
+CI *and* inside `check-contract-parity.py`, so a workflow that cannot run fails the repo
+rather than the other way round.
+
+### 4 (P2) Two smaller ones
+
+- **The access log never emitted.** `_log` had no level and no handler, so it inherited the
+  root WARNING threshold and every `_log.info(...)` was discarded — the line the round-5
+  report asked for was dead as configured. `configure_access_log()` now attaches a handler
+  and an INFO level, only when the host has not already configured logging, so it works
+  without hijacking an application's handlers.
+- **Release sizes cannot be a gate.** A clean debug build is not byte-reproducible across
+  toolchains: drift of -4, +8, -12, +16 bytes in both directions. `release-evidence.py`
+  checks the two things that cannot drift silently — the recorded commit (HEAD or its
+  parent) and the versionCode — and *reports* size and digest as provenance. A gate that
+  fails on every honest build teaches everyone to ignore red.
+
 ## Gates
 
 `AppSurfaceTest` (JVM, runs in CI):

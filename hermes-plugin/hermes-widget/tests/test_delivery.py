@@ -760,3 +760,112 @@ class TapObservability(unittest.TestCase):
         # Oldest first is what gets dropped, so the newest failure is always kept.
         self.assertEqual(rows[0]["code"], f"boom{limit + 14}")
         self.assertGreaterEqual(self.store.MAX_REJECTION_ROWS, limit)
+
+
+class AttentionRouteRoundTrip(unittest.TestCase):
+    """Field round 8, P1: PUT /v1/device/attention failed 100% of the time.
+
+    The route read `widgetId` for routing and then handed the *whole body* to
+    `store.report_attention`, whose allow-list is aggregate counters only. Every report
+    therefore raised "attention reports must not contain content or unknown fields" and
+    came back 400 — 22 rejections and counting, while the store tests passed because they
+    called the store directly and never sent a realistic body.
+
+    These tests go through the route with exactly what the app sends.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        _load_plugin()
+        cls.store = importlib.import_module("hermes_plugins.hermes_widget.store")
+        cls.server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
+        cls.server = cls.server_module.make_server("127.0.0.1", 0)
+        cls.port = cls.server.server_address[1]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+        os.environ.pop("HERMES_WIDGET_DIR", None)
+
+    def setUp(self):
+        self._dir = Path(tempfile.mkdtemp(prefix="hermes-attention-route-"))
+        os.environ["HERMES_WIDGET_DIR"] = str(self._dir)
+        self.addCleanup(shutil.rmtree, self._dir, ignore_errors=True)
+        self.store.init_db()
+        self.agent_token = self.store.get_agent_token()
+        self.store.put_publication("hermes-brief", title="T", summary="S", text="body")
+        _, minted = self.request("POST", "/v1/pairing-codes", {}, self.agent_token)
+        _, self.paired = self.request(
+            "POST", "/v1/pair", {"code": minted["code"], "deviceLabel": "Pixel 10 Pro XL"}
+        )
+        self.token = self.paired["token"]
+
+    def request(self, method, path, body=None, token=None):
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        headers = {"Content-Type": "application/json"} if body is not None else {}
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.request(method, path, body=data, headers=headers)
+            response = connection.getresponse()
+            raw = response.read().decode("utf-8") or "{}"
+            try:
+                return response.status, json.loads(raw)
+            except json.JSONDecodeError:
+                return response.status, {"raw": raw}
+        finally:
+            connection.close()
+
+    def _app_body(self, **overrides):
+        """Exactly what HermesApi.reportAttention sends."""
+        body = {
+            "widgetId": "hermes-brief",
+            "revision": 1,
+            "rendered": 1,
+            "taps": 0,
+            "supersededBeforeFetch": 0,
+            "dwell5To60": 1,
+        }
+        body.update(overrides)
+        return body
+
+    def test_the_routes_own_body_the_app_actually_sends(self):
+        status, body = self.request("PUT", "/v1/device/attention", self._app_body(), self.token)
+        self.assertEqual(status, 200, body)
+        attention = body["attention"]
+        self.assertEqual(attention["widgetId"], "hermes-brief")
+        self.assertEqual(attention["rendered"], 1)
+        self.assertEqual(attention["dwell_5_60"], 1)
+
+    def test_the_snake_case_routing_field_is_accepted_too(self):
+        body = self._app_body()
+        body["widget_id"] = body.pop("widgetId")
+        status, _ = self.request("PUT", "/v1/device/attention", body, self.token)
+        self.assertEqual(status, 200)
+
+    def test_content_is_still_refused(self):
+        # The fix filters *routing* fields only. The aggregate-only guard must not weaken.
+        for extra in ({"payload": "a screenshot"}, {"title": "leaked"}, {"text": "content"}):
+            status, _ = self.request(
+                "PUT", "/v1/device/attention", self._app_body(**extra), self.token
+            )
+            self.assertEqual(status, 400, f"{extra} must be refused")
+        self.assertEqual(
+            self.store.list_rejected_events("hermes-brief")[-1]["code"],
+            "store_error",
+        )
+
+    def test_a_missing_widget_id_is_still_a_400(self):
+        body = self._app_body()
+        body.pop("widgetId")
+        status, _ = self.request("PUT", "/v1/device/attention", body, self.token)
+        self.assertEqual(status, 400)
+
+    def test_it_needs_a_device_token(self):
+        status, body = self.request("PUT", "/v1/device/attention", self._app_body(), self.agent_token)
+        self.assertEqual(status, 403, body)

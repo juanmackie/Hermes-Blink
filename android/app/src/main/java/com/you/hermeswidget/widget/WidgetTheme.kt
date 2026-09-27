@@ -125,15 +125,14 @@ object WidgetSize {
     }
 
     /**
-     * Launcher inventory fallback, used only when Glance reports no size. `GlanceId` is a
-     * restricted type, so the widget cannot ask for "this instance" here; the widest
-     * registered instance is the one that can hold the most, which is the safe direction
-     * for a layout decision and the value the host already treats as authoritative.
+     * The launcher's report for one instance, in dp. This is the authoritative geometry:
+     * it is what the cell really is, it is refreshed on every resize, and it is the same
+     * number the host receives and the bands are defined against.
      */
-    fun fromInventory(context: Context): Pair<Float, Float>? {
+    fun fromInventory(context: Context, appWidgetId: Int?): Pair<Float, Float>? {
         val density = context.resources.displayMetrics.density
         if (density <= 0f) return null
-        val (widthPx, heightPx) = WidgetDimensions.fromContext(context, null)
+        val (widthPx, heightPx) = WidgetDimensions.fromContext(context, appWidgetId)
         return (widthPx / density).roundToInt().toFloat() to (heightPx / density).roundToInt().toFloat()
     }
 
@@ -153,15 +152,64 @@ object WidgetSize {
  * falls back to the narrowest useful geometry rather than a roomy default, because the
  * failure mode we care about is a clipped action, not a sparse 2x2.
  */
+/**
+ * Which geometry a composition is laid out for.
+ *
+ * Field round 8, P0: with `SizeMode.Responsive(sizes)` Glance composes for the *closest
+ * sample in the set*, so `LocalSize` inside the composition reports that sample — not
+ * the cell the launcher is actually drawing into. On a 407x270dp 4x2 cell the nearest
+ * sample was 407x412, so the whole column was composed for 412dp: 142dp of it, including
+ * the pinned footer and its action, sat outside the cell, taps fell through to the
+ * launcher, and no action broadcast was ever produced.
+ *
+ * So the order is inverted: the launcher's own report for *this instance* is the truth
+ * (it is the same geometry the host receives and the bands are defined against), the
+ * responsive sample is only a hint, and the fixed fallback is a last resort.
+ */
 object SizeGate {
     const val FALLBACK_WIDTH_DP = 180f
     const val FALLBACK_HEIGHT_DP = 110f
 
-    fun spec(size: DpSize, context: Context): BandSpec {
-        val measured = WidgetSize.fromLocalSize(size) ?: WidgetSize.fromInventory(context)
-        val (width, height) = measured ?: (FALLBACK_WIDTH_DP to FALLBACK_HEIGHT_DP)
-        return Breakpoints.spec(width, height)
+    /** A size in dp, with where it came from — the source is recorded, not assumed. */
+    data class Geometry(
+        val widthDp: Float,
+        val heightDp: Float,
+        val source: Source,
+    ) {
+        enum class Source { INSTANCE_INVENTORY, RESPONSIVE_SAMPLE, FALLBACK }
     }
+
+    /**
+     * Pure so it can be tested against the exact failure: an instance report of 407x270
+     * must win over a responsive sample of 407x412.
+     */
+    fun resolve(instance: Pair<Float, Float>?, sample: Pair<Float, Float>?): Geometry = when {
+        instance != null -> Geometry(instance.first, instance.second, Geometry.Source.INSTANCE_INVENTORY)
+        sample != null -> Geometry(sample.first, sample.second, Geometry.Source.RESPONSIVE_SAMPLE)
+        else -> Geometry(FALLBACK_WIDTH_DP, FALLBACK_HEIGHT_DP, Geometry.Source.FALLBACK)
+    }
+
+    /**
+     * @param instanceDp this widget instance's reported geometry, when it is known.
+     * @param sampleDp what Glance's LocalSize says, i.e. the sample it composed for.
+     */
+    fun spec(
+        instanceDp: Pair<Float, Float>?,
+        sampleDp: Pair<Float, Float>?,
+    ): Pair<BandSpec, Geometry> {
+        val geometry = resolve(instanceDp, sampleDp)
+        return Breakpoints.spec(geometry.widthDp, geometry.heightDp) to geometry
+    }
+
+    /** Resolves the real geometry for one instance, falling back through the chain. */
+    fun specForInstance(
+        context: Context,
+        appWidgetId: Int?,
+        sample: DpSize,
+    ): Pair<BandSpec, Geometry> = spec(
+        WidgetSize.fromInventory(context, appWidgetId),
+        WidgetSize.fromLocalSize(sample),
+    )
 }
 
 /** The themed, platform-rounded surface chain every widget state uses (WS-2). */

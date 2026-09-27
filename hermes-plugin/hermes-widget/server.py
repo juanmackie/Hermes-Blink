@@ -17,6 +17,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 import re
 import ssl
 import uuid
@@ -43,6 +44,32 @@ _UNSET = object()  # sentinel: distinguishes "no body read yet" from "empty body
 
 _log = logging.getLogger("hermes_widget.server")
 
+# Field round 8, P2: the access log existed and never emitted. A logger with no level and
+# no handler inherits the root WARNING threshold, so `_log.info(...)` was discarded and the
+# "one line per device request" the round-5 report asked for was dead as configured. The
+# rejected-requests table did work, which is how the attention-route bug was found.
+#
+# Configured here, at the one place that starts a server, and only when the host has not
+# already configured logging: a library must not hijack an application's handlers.
+def configure_access_log(verbose: bool | None = None) -> logging.Logger:
+    """Give the server logger a handler and an INFO threshold, once."""
+    if verbose is None:
+        verbose = os.environ.get("HERMES_WIDGET_LOG", "info").strip().lower() in {
+            "1", "true", "yes", "info", "debug",
+        }
+    logger = logging.getLogger("hermes_widget")
+    if not logger.handlers and not logging.getLogger().handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(
+            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+        )
+        logger.addHandler(handler)
+    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    if not logger.propagate and verbose:
+        # With a handler of our own, stop double-printing through the root logger.
+        logger.propagate = False
+    return _log
+
 
 class _HttpError(Exception):
     """Internal control-flow error carrying the HTTP status and JSON body."""
@@ -63,6 +90,10 @@ def _is_loopback(client_address: Any) -> bool:
     """
     host = client_address[0] if isinstance(client_address, tuple) else client_address
     return host in _LOOPBACK_HOSTS
+
+
+# Fields the attention route needs for routing, and that the store must never see.
+_ATTENTION_ROUTING_FIELDS = frozenset({"widgetId", "widget_id"})
 
 
 def _bearer(headers: Any) -> str:
@@ -773,7 +804,11 @@ class _Handler(BaseHTTPRequestHandler):
         widget_id = body.get("widgetId", body.get("widget_id"))
         if not isinstance(widget_id, str) or not widget_id:
             raise _HttpError(400, "bad_request", "widgetId is required")
-        self._json(200, {"ok": True, "attention": store.report_attention(device_id, widget_id, body)})
+        # Routing fields are consumed here and must not reach the store: the attention
+        # report is an aggregate-only allow-list that rejects anything it does not know,
+        # so handing it the whole body rejected every report with a 400. Field round 8.
+        report = {key: value for key, value in body.items() if key not in _ATTENTION_ROUTING_FIELDS}
+        self._json(200, {"ok": True, "attention": store.report_attention(device_id, widget_id, report)})
 
     def _settings(self, widget_id: str | None) -> None:
         if widget_id is None:
@@ -1080,6 +1115,7 @@ def make_server(
     TLS is enabled by wrapping the listening socket, so certfile is the switch.
     """
     store.init_db()
+    configure_access_log()
     httpd = _Server((host, port), _Handler)
     if certfile:
         context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)

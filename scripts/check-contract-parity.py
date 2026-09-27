@@ -479,9 +479,67 @@ def main() -> int:
         fail("widget-action",
              "the receiver must count action broadcasts before Glance dispatches them")
 
-    # --- tap observability: the trail exists on both sides and is documented ---
     _SERVER_SRC = (PLUGIN / "server.py").read_text(encoding="utf-8")
     _STORE_SRC = (PLUGIN / "store.py").read_text(encoding="utf-8")
+
+    # --- the geometry a composition is laid out for (round 8, P0) --------------
+    size_gate = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+                 "hermeswidget" / "widget" / "WidgetTheme.kt").read_text(encoding="utf-8")
+    if "INSTANCE_INVENTORY" not in size_gate or "RESPONSIVE_SAMPLE" not in size_gate:
+        fail("widget-geometry",
+             "SizeGate must prefer the instance's reported geometry over the responsive "
+             "sample: LocalSize is the sample Glance composed for, not the cell (round 8)")
+    widget_code_for_geometry = re.sub(r"//.*", "", widget_kt)
+    if "specForInstance(context, appWidgetId" not in widget_code_for_geometry:
+        fail("widget-geometry",
+             "provideGlance must resolve the geometry through SizeGate.specForInstance")
+    if "idOf(id)" not in widget_kt:
+        fail("widget-geometry",
+             "provideGlance must resolve the instance id, or it cannot ask the launcher "
+             "how big this cell is")
+    for token in ("instanceDp", "composedHeightDp", "cellHeightDp"):
+        if token not in size_gate and token not in widget_kt:
+            fail("widget-geometry", f"the geometry trail is missing {token}")
+
+    # --- attention reports must survive the route (round 8, P1) ---------------
+    if "_ATTENTION_ROUTING_FIELDS" not in _SERVER_SRC:
+        fail("attention-route",
+             "the attention route must filter routing fields before calling the store; "
+             "passing the whole body rejected every report with a 400")
+    attention_tests = (PLUGIN / "tests" / "test_delivery.py").read_text(encoding="utf-8")
+    if "AttentionRouteRoundTrip" not in attention_tests:
+        fail("attention-route",
+             "no test sends a realistic attention body through the route; the store-level "
+             "tests cannot catch a route that rejects its own payload")
+
+    # --- CI must be able to run at all (round 8, P1) -------------------------
+    workflow = REPO / ".github" / "workflows" / "ci.yml"
+    if not workflow.is_file():
+        fail("ci-workflow", ".github/workflows/ci.yml is missing")
+    else:
+        if not (REPO / "scripts" / "check-workflow-yaml.py").is_file():
+            fail("ci-workflow", "scripts/check-workflow-yaml.py is missing")
+        for number, line in enumerate(workflow.read_text(encoding="utf-8").splitlines(), 1):
+            match = re.match(r"^\s*-\s+[A-Za-z_][\w-]*:\s*(.+)$", line)
+            if not match:
+                continue
+            value = match.group(1)
+            if value[:1] in "\"'" or value.rstrip().endswith(("|", ">", "-")):
+                continue
+            if ": " in value:
+                fail("ci-workflow",
+                     f"ci.yml:{number}: unquoted ': ' in {line.strip()!r} makes the value a "
+                     "mapping; the whole workflow stops parsing and GitHub schedules nothing")
+
+    # --- the access log must actually emit (round 8, P2) -----------------------
+    if "def configure_access_log" not in _SERVER_SRC:
+        fail("access-log",
+             "the server logger has no handler or level, so the access log is dropped at "
+             "the default WARNING threshold")
+    if "configure_access_log()" not in _SERVER_SRC:
+        fail("access-log", "make_server must configure the access log")
+
+    # --- tap observability: the trail exists on both sides and is documented ---
     for token, blob, name in (
         ("record_rejected_event", _SERVER_SRC, "server.py"),
         ("rejection_summary", _STORE_SRC, "store.py"),

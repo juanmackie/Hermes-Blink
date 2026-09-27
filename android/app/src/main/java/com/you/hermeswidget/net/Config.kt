@@ -289,6 +289,9 @@ object Config {
         band: String,
         actionAvailable: Boolean,
         scrollHeightDp: Int,
+        composedHeightDp: Float,
+        cellHeightDp: Float?,
+        source: String,
         at: Long = System.currentTimeMillis(),
     ) {
         prefs(context).edit().putString(
@@ -297,6 +300,12 @@ object Config {
                 .put("band", band)
                 .put("actionAvailable", actionAvailable)
                 .put("scrollHeightDp", scrollHeightDp)
+                // The two numbers that must agree: what we composed for, and what the cell
+                // is. Round 8's 316dp of scroll region in a 270dp cell is exactly the gap
+                // between these, and it is now visible from the device.
+                .put("composedHeightDp", composedHeightDp.toDouble())
+                .put("cellHeightDp", (cellHeightDp ?: -1.0).toDouble())
+                .put("geometrySource", source)
                 .put("at", at)
                 .toString(),
         ).apply()

@@ -14,11 +14,11 @@ an earlier commit is worse than no document at all — it looks current.
 | Field | Value |
 | --- | --- |
 | Artifact | `android/app/build/outputs/apk/debug/app-debug.apk` |
-| Size | 7,261,487 bytes |
-| SHA-256 | `9537b81babe1be7b0329964d3e110bd289289cb2b97b34204049c59849f62729` |
+| Size | 7,263,575 bytes |
+| SHA-256 | `918d984b6087ed5943f482e13eaaa139fed5c22aa73345a3ad0832fe9974dca6` |
 | Package | `com.you.hermeswidget` |
-| Version | `0.4.2` (`versionCode=6`) |
-| Build commit | `9032f2231088` (also sent by the app as `X-Hermes-App-Sha`) |
+| Version | `0.4.3` (`versionCode=7`) |
+| Build commit | `b152379d524d` (also sent by the app as `X-Hermes-App-Sha`) |
 | SDK range | minSdk 26, targetSdk 35 |
 | Signer | Android debug certificate; local testing only |
 
@@ -26,7 +26,7 @@ an earlier commit is worse than no document at all — it looks current.
 
 | Version | Commit | Size | SHA-256 |
 | --- | --- | --- | --- |
-| `0.4.2` (versionCode 6) | `9032f2231088` | 7,261,487 bytes | `9537b81babe1be7b0329964d3e110bd289289cb2b97b34204049c59849f62729` |
+| `0.4.3` (versionCode 7) | `b152379d524d` | 7,263,575 bytes | `918d984b6087ed5943f482e13eaaa139fed5c22aa73345a3ad0832fe9974dca6` |
 | `0.3.0` (versionCode 3) | `e1a9cf8` | 7,229,478 bytes | `7663fa98a56f006e23e2219811b99fb46ecde948fa53550e878e44be9f455b79` |
 | `0.2.0` (versionCode 2) | `7abc096` | 7,182,371 bytes | `895452e10b6e836982f58a051ecb5ce95c0e424a6a808a2647d2c6b56fccd0d4` |
 
@@ -38,11 +38,15 @@ Three rules this table now enforces, after four different APKs shipped as `versi
 2. **The commit travels with the app.** `BuildConfig.COMMIT_SHA` is stamped at build time and
    reported as `X-Hermes-App-Sha`; Diagnostics shows it, `widget_status` stores it, and
    `delivery[].renderedBy.appBuildSha` names the build that drew a revision.
-3. **Sizes come from a clean build, and CI checks them.** A debug APK is not
-   byte-reproducible across machines — the same clean source produced 7,182,371 bytes here and
-   an incremental build of the same source produced 7,250,825 — so the **size** is what CI
-   verifies and the **SHA-256** is recorded as provenance of the builder's own artifact. Build
-   with `clean` before publishing either number.
+3. **Sizes and digests are provenance, never gates.** A clean debug build is not
+   byte-reproducible across toolchains. Observed drift across 0.3.0-0.4.2 was -4, +8, -12 and
+   +16 bytes, in both directions, on clean builds of the same source. So
+   `scripts/release-evidence.py` checks only what cannot drift silently — **which commit**
+   (HEAD or its parent, since recording the numbers is itself a commit) and **which
+   versionCode** — and *reports* the size and digest of whatever it just built. A
+   comparison there would be a red run every time, and a red run nobody reads is worse than
+   no gate. Build with `clean` before recording either number, so the figure means
+   something.
 
 ```sh
 # Regenerate this section (and the row above) from a clean build:

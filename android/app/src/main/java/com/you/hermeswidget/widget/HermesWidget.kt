@@ -64,7 +64,13 @@ private data class WidgetSnapshot(
     val connectionState: ConnectionState,
 )
 
-/** The sizes Glance composes for. Covers the E2 canonical extremes of every band. */
+/**
+ * The sizes Glance composes for. This is a *hint*, not the layout input: in Responsive mode
+ * Glance builds the composition for the closest entry here and then draws it into the cell
+ * the launcher actually has, so every dp number we lay out with comes from the instance's
+ * reported geometry (SizeGate). A cell that is not listed here still gets a composition
+ * that fits it.
+ */
 private val RESPONSIVE_SIZES = setOf(
     DpSize(110.dp, 56.dp),    // 2x1 floor
     DpSize(110.dp, 115.dp),   // 2x2 floor
@@ -82,15 +88,35 @@ class HermesWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val snapshot = withContext(Dispatchers.IO) { loadSnapshot(context) }
         // Which widget instance this composition belongs to. Attributing a tap or a render
-        // to a device but not an instance is what made round 5 unanswerable.
-        val instanceId = WidgetInstanceIds.of(id)
+        // to a device but not an instance is what made round 5 unanswerable — and the
+        // numeric id is what lets us ask the launcher how big *this* cell is.
+        val appWidgetId = WidgetInstanceIds.idOf(id)
+        val instanceId = appWidgetId?.toString()
         // The size the launcher actually gave this instance, for the render receipt.
         var composed: Pair<Float, Float>? = null
         provideContent {
+            // The cell this instance really occupies, resolved from the launcher's own
+            // report. In Responsive mode LocalSize is the *sample* Glance composed for,
+            // not the cell it will be drawn into: preferring it is what put 412dp of
+            // content into a 270dp cell and pushed the action out of view.
             val localSize = LocalSize.current
-            val spec = SizeGate.spec(localSize, context)
-            if (composed == null) composed = WidgetSize.fromLocalSize(localSize)
+            val resolved = SizeGate.specForInstance(context, appWidgetId, localSize)
+            val spec = resolved.first
+            val geometry = resolved.second
+            if (composed == null) composed = WidgetSize.fromInventory(context, appWidgetId)
             val dark = snapshot.publication?.darkPalette == true || WidgetTheme.isDark(context)
+        // The composition half of the trail: if a tap is ever reported as missing, we can
+        // tell "no button was drawn" from "a button was drawn and the tap went elsewhere",
+        // and "we composed for the wrong height" from "the tap never landed".
+        Config.setLastComposition(
+            context,
+            band = spec.band.name,
+            actionAvailable = spec.showsRequestAction,
+            scrollHeightDp = spec.scrollHeightDp,
+            composedHeightDp = geometry.heightDp,
+            cellHeightDp = WidgetSize.fromInventory(context, appWidgetId)?.second,
+            source = geometry.source.name,
+        )
             Column(
                 modifier = GlanceModifier
                     .fillMaxSize()
@@ -248,14 +274,6 @@ private fun PublicationSurface(
         if (spec.showsFooter) {
             FooterRow(publication, snapshot.connectionState, spec, dark)
         }
-        // The composition half of the trail: if a tap is ever reported as missing, we can
-        // tell "no button was drawn" from "a button was drawn and the tap went elsewhere".
-        Config.setLastComposition(
-            context,
-            band = spec.band.name,
-            actionAvailable = spec.showsRequestAction,
-            scrollHeightDp = spec.scrollHeightDp,
-        )
     }
 }
 

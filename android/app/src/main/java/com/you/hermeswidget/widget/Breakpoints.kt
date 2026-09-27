@@ -7,7 +7,7 @@ import kotlin.math.roundToInt
 internal const val SURFACE_PADDING_DP = 12f
 internal const val HEADER_HEIGHT_DP = 20f   // 16dp mark + 4dp gap
 internal const val FOOTER_HEIGHT_DP = 52f   // 48dp action + 4dp gap
-internal const val MIN_SCROLL_DP = 56f
+internal const val MIN_SCROLL_DP = 56f   // the height at which a body line is still legible
 
 /**
  * The widget's content budget ladder.  Everything about "how much fits" lives here so the
@@ -115,7 +115,14 @@ data class BandSpec(
      * chrome is subtracted, so the footer is inside the cell by construction.
      */
     val scrollHeightDp: Int
-        get() = (heightDp - chromeHeightDp).roundToInt().coerceIn(MIN_SCROLL_DP.toInt(), 4_096)
+        get() = (heightDp - chromeHeightDp).roundToInt().coerceIn(0, 4_096)
+
+    /**
+     * True when there is enough cell for a readable body after the chrome. Cells shorter
+     * than the header plus a couple of lines still compose — the list simply has no room,
+     * which is honest, and is what keeps `chrome + scroll <= cell` true at every size.
+     */
+    val hasReadableBody: Boolean get() = scrollHeightDp >= MIN_SCROLL_DP.toInt()
 
     /** The pinned chrome this band reserves, in dp. */
     val chromeHeightDp: Float

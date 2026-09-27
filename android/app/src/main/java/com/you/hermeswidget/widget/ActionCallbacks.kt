@@ -111,15 +111,21 @@ object ActionCallbacks {
  * The AppWidgetManager id behind a Glance id, when the platform gives us one.
  *
  * `AppWidgetId` is `@RestrictTo(LIBRARY_GROUP)`, so lint objects to naming it; the cast
- * is confined here and degrades to null (reported as "instance not attributed") rather
- * than failing the action. A missing id costs attribution, not the tap.
+ * is confined here and degrades to null rather than failing the action. A missing id costs
+ * attribution, not the tap.
+ *
+ * It is also how the widget asks the launcher how large *this* cell is: in Responsive
+ * mode `LocalSize` reports the sample Glance composed for, not the cell, so the numeric
+ * id is the only way to get the real geometry (see SizeGate).
  */
 @Suppress("RestrictedApi")
 object WidgetInstanceIds {
-    fun of(glanceId: GlanceId): String? = runCatching {
-        val value = glanceId as? androidx.glance.appwidget.AppWidgetId ?: return null
-        value.appWidgetId.takeIf { it >= 0 }?.toString()
+    /** The AppWidgetManager id behind a Glance id, or null when it is not an app widget. */
+    fun idOf(glanceId: GlanceId): Int? = runCatching {
+        (glanceId as? androidx.glance.appwidget.AppWidgetId)?.appWidgetId?.takeIf { it >= 0 }
     }.getOrNull()
+
+    fun of(glanceId: GlanceId): String? = idOf(glanceId)?.toString()
 }
 
 object WidgetParams {

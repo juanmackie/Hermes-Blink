@@ -187,11 +187,89 @@ class WidgetBreakpointsTest {
     }
 
     @Test
-    fun `a cell too short for real chrome still keeps a usable scroll region`() {
-        // 56dp (a 2x1 floor) cannot fit the header and a 48dp action; the ladder floors
-        // the scroll region rather than producing a negative height.
+    fun `a cell too short for real chrome yields a short list rather than an overflow`() {
+        // 56dp (the 2x1 floor) cannot fit a header and a body. Guaranteeing a minimum
+        // list height here is what pushed 412dp of content into a 270dp cell in round 8,
+        // so fitting wins: the list gets what is left, and says it has no room.
         val spec = Breakpoints.spec(300f, 56f)
-        assertEquals(MIN_SCROLL_DP.toInt(), spec.scrollHeightDp)
+        // 56 - (24 padding + 20 header) = 12dp of list, and it fits exactly.
+        assertEquals(12, spec.scrollHeightDp)
+        assertFalse(spec.hasReadableBody)
+        assertEquals(56f, spec.chromeHeightDp + spec.scrollHeightDp, 0.01f)
+
+        // From the 4x2 floor upward the list is genuinely readable.
+        val floor = Breakpoints.spec(300f, 130f)
+        assertTrue(floor.hasReadableBody)
+    }
+
+    // --- the round-8 P0: compose for the cell, not for the responsive sample -----
+
+    @Test
+    fun `the instance report wins over the responsive sample`() {
+        // The exact failure from the field: a 407x270dp cell whose nearest sample in the
+        // responsive set was 407x412, so 412dp of content was composed into 270dp and the
+        // pinned action fell outside the cell. No broadcast, nothing on the server.
+        val (spec, geometry) = SizeGate.spec(
+            instanceDp = 407f to 270f,
+            sampleDp = 407f to 412f,
+        )
+        assertEquals(SizeGate.Geometry.Source.INSTANCE_INVENTORY, geometry.source)
+        assertEquals(270f, geometry.heightDp, 0.01f)
+        assertEquals(WidgetBand.M, spec.band)
+    }
+
+    @Test
+    fun `composed height equals the cell height at every reported size`() {
+        // The acceptance criterion: for any cell, what we compose for is the cell.
+        val cells = listOf(
+            110f to 56f, 306f to 110f, 200f to 200f, 407f to 270f,
+            624f to 130f, 407f to 412f, 624f to 422f, 1220f to 300f,
+        )
+        for ((width, height) in cells) {
+            // Whatever sample Glance happened to compose for, from anywhere in the set.
+            for (sample in listOf(110f to 56f, 407f to 412f, 624f to 422f, 306f to 276f)) {
+                val (spec, geometry) = SizeGate.spec(width to height, sample)
+                val total = spec.chromeHeightDp + spec.scrollHeightDp
+                assertTrue(
+                    "cell ${width}x$height with sample $sample: composed $total exceeds " +
+                        "the cell ($height)",
+                    total <= height + 1f,
+                )
+                assertEquals(
+                    "the band must be the one the reported geometry implies",
+                    Breakpoints.spec(width, height).band,
+                    spec.band,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `the band is derived from the reported geometry, never from the sample`() {
+        val samples = listOf(110f to 56f, 624f to 422f, 407f to 412f)
+        for (width in listOf(110f, 300f, 407f, 624f)) {
+            for (height in listOf(60f, 120f, 270f, 400f)) {
+                val bands = samples.map { sample ->
+                    SizeGate.spec(width to height, sample).first.band
+                }
+                assertEquals(
+                    "band varied with the sample for a ${width}x$height cell",
+                    1,
+                    bands.distinct().size,
+                )
+            }
+        }
+    }
+
+    @Test
+    fun `the sample is only a hint, and the fallback is last`() {
+        val withSample = SizeGate.spec(null, 407f to 412f)
+        assertEquals(SizeGate.Geometry.Source.RESPONSIVE_SAMPLE, withSample.second.source)
+        val withNothing = SizeGate.spec(null, null)
+        assertEquals(SizeGate.Geometry.Source.FALLBACK, withNothing.second.source)
+        assertEquals(SizeGate.FALLBACK_HEIGHT_DP, withNothing.second.heightDp, 0.01f)
+        // And the narrowest real cell still gets a usable, fitting layout.
+        assertTrue(withNothing.first.scrollHeightDp > 0)
     }
 
     // --- LocalSize plumbing (Task 1) --------------------------------------------

@@ -10,8 +10,14 @@ a gate, and the size is what CI verifies.
     python3 scripts/release-evidence.py --apk android/app/build/outputs/apk/debug/app-debug.apk
     python3 scripts/release-evidence.py --check docs/APK_RELEASE.md --commit <sha>
 
-`--check` fails when the document records a different commit, or a size that a fresh
-clean build does not produce. The digest is reported, never compared.
+`--check` fails when the document records a commit that is neither HEAD nor its parent
+(recording the numbers is itself a commit, so the document trails by exactly one), or
+when the recorded versionCode disagrees with the build file.
+
+Size and digest are *provenance*, never compared: a clean debug build is not
+byte-reproducible across toolchains — observed drift was -4, +8, -12 and -16 bytes in both
+directions — so a comparison there is a guaranteed red run that trains everyone to ignore
+red. What is checked is the thing that cannot drift silently: which commit, which version.
 """
 from __future__ import annotations
 
@@ -128,22 +134,22 @@ def main() -> int:
             f"does not match the build file's {identity['versionCode']}."
         )
         return 1
+    # Size and digest are provenance, not gates. Field round 8: a clean debug build is
+    # not byte-reproducible across toolchains, and the observed drift across 0.3.0-0.4.2
+    # was -4, +8, -12 and -16 bytes in both directions. Gating on them only ever produces
+    # a red run that a human has to wave through, which teaches everyone to ignore red.
     if args.apk and (REPO / args.apk).is_file():
         evidence = measure(REPO / args.apk)
-        if evidence["bytes"] != int(match["size"].replace(",", "")):
-            print(
-                f"release-evidence FAILED: the document says {match['size']} bytes, "
-                f"this build is {evidence['bytes']} bytes.\n"
-                "  Build clean before publishing a size: an incremental build differs."
-            )
-            return 1
         print(
             f"release-evidence OK: {short} · {identity['versionName']} "
-            f"(versionCode {identity['versionCode']}) · {evidence['bytes']} bytes\n"
-            f"  this build's sha256 {evidence['sha256']} (recorded as provenance, not compared)"
+            f"(versionCode {identity['versionCode']})\n"
+            f"  documented: {match['size']} bytes, {match['sha'][:16]}…\n"
+            f"  this build: {evidence['bytes']:,} bytes, {evidence['sha256'][:16]}…\n"
+            "  recorded as provenance: a debug APK is not byte-reproducible across "
+            "toolchains, so neither number is compared."
         )
         return 0
-    print(f"release-evidence OK: {short} is documented (no APK present to size-check)")
+    print(f"release-evidence OK: {short} is documented (no APK present to measure)")
     return 0
 
 
