@@ -44,30 +44,54 @@ _UNSET = object()  # sentinel: distinguishes "no body read yet" from "empty body
 
 _log = logging.getLogger("hermes_widget.server")
 
-# Field round 8, P2: the access log existed and never emitted. A logger with no level and
-# no handler inherits the root WARNING threshold, so `_log.info(...)` was discarded and the
-# "one line per device request" the round-5 report asked for was dead as configured. The
-# rejected-requests table did work, which is how the attention-route bug was found.
+# Field round 8/9: the access log existed and never emitted — twice, for two different
+# reasons, and it was green in tests both times. A logger with no level and no handler
+# inherits the root WARNING threshold, so `_log.info(...)` was discarded. Then the fix
+# guarded on `not logging.getLogger().handlers`, which is true in a bare test harness and
+# false in the deployment, where the Hermes gateway puts its own handler on the root: so
+# in production `hermes_widget` had no handler of its own, the record propagated to the
+# host's WARNING-level handler, and it was dropped. Zero lines in server.log after hours
+# of real traffic, while the test harness printed happily.
 #
-# Configured here, at the one place that starts a server, and only when the host has not
-# already configured logging: a library must not hijack an application's handlers.
+# Two lessons, both about testing the context rather than the code:
+#   * a gate that is green in the harness and dead in the deployment is the same disease
+#     as the release-evidence check that failed in CI for an unrelated reason;
+#   * "do not hijack the host's handlers" is right, and was misread as "do not attach
+#     our own". Attaching to *our* logger is not hijacking.
+#
+# stderr is the destination, and it is the right one: the startup hook spawns this process
+# with `stdout=log, stderr=STDOUT` into <Hermes home>/widget/server.log
+# (gateway_hook.py::_spawn_server), which is the file an operator greps. Adding a file
+# handler as well would double every line.
 def configure_access_log(verbose: bool | None = None) -> logging.Logger:
-    """Give the server logger a handler and an INFO threshold, once."""
+    """Give the access log a handler and a level, in whatever context we are started.
+
+    * a handler is attached whenever *this* logger has none, whatever the root has;
+    * `propagate` is disabled then, so a verbose host does not print every line twice;
+    * a host that has already configured `hermes_widget` itself is left alone;
+    * `HERMES_WIDGET_LOG=off` (or quiet) silences it deliberately.
+    Never raises: a logging problem must not take the server down.
+    """
+    setting = os.environ.get("HERMES_WIDGET_LOG", "info").strip().lower()
     if verbose is None:
-        verbose = os.environ.get("HERMES_WIDGET_LOG", "info").strip().lower() in {
-            "1", "true", "yes", "info", "debug",
-        }
+        verbose = setting in {"1", "true", "yes", "info", "debug", "verbose"}
+    silent = setting in {"0", "false", "no", "off", "quiet", "none", "silent"}
     logger = logging.getLogger("hermes_widget")
-    if not logger.handlers and not logging.getLogger().handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(
-            logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
-        )
-        logger.addHandler(handler)
-    logger.setLevel(logging.DEBUG if verbose else logging.INFO)
-    if not logger.propagate and verbose:
-        # With a handler of our own, stop double-printing through the root logger.
-        logger.propagate = False
+    try:
+        if silent:
+            logger.setLevel(logging.WARNING)
+            return _log
+        if not logger.handlers:
+            handler = logging.StreamHandler()
+            handler.setFormatter(
+                logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+            )
+            logger.addHandler(handler)
+            # Our handler is the destination; do not also print through the host's root.
+            logger.propagate = False
+        logger.setLevel(logging.DEBUG if verbose else logging.INFO)
+    except Exception:  # pragma: no cover - logging must never break startup
+        pass
     return _log
 
 
@@ -804,6 +828,7 @@ class _Handler(BaseHTTPRequestHandler):
         widget_id = body.get("widgetId", body.get("widget_id"))
         if not isinstance(widget_id, str) or not widget_id:
             raise _HttpError(400, "bad_request", "widgetId is required")
+        self._widget_id = widget_id
         # Routing fields are consumed here and must not reach the store: the attention
         # report is an aggregate-only allow-list that rejects anything it does not know,
         # so handing it the whole body rejected every report with a 400. Field round 8.

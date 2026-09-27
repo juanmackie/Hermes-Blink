@@ -218,6 +218,47 @@ inspected this repository instead of the fixture, and a fixture commit that was 
 silently because a clone has no git identity. Both are the same mistake in different
 clothes: not checking that the thing you meant to run actually ran.
 
+## Round 10 — the access log, green in the harness and dead in production
+
+The reviewer's measurement was exact: `grep -c "access " server.log` = 0 after hours of
+real traffic, while the test printed happily. The cause was the guard I added the round
+before:
+
+```python
+if not logger.handlers and not logging.getLogger().handlers:   # the defect
+    logger.addHandler(handler)
+```
+
+That is true in a bare test process and false wherever the host has configured logging —
+which is the only place the log matters. In production `hermes_widget` had no handler of
+its own, the record propagated to the gateway's WARNING-level root handler, and it was
+dropped. The instinct behind the guard was right ("a library must not hijack the host's
+handlers") and it was misread: attaching to *our own* logger is not hijacking.
+
+Now: a handler is attached whenever **this** logger has none, whatever the root has;
+`propagate` is disabled then so a verbose host does not print every line twice; a host that
+has already configured `hermes_widget` is left alone; and `HERMES_WIDGET_LOG=off` silences
+it deliberately for an operator who does not want request lines.
+
+**The destination was already right.** The startup hook spawns the server with
+`stdout=log, stderr=STDOUT` into `<Hermes home>/widget/server.log`
+(`gateway_hook.py::_spawn_server`), which is the file an operator greps — so a plain
+`StreamHandler` lands exactly where it should, and adding a file handler would have
+double-written every line. Verified the way the reviewer did it: a real spawned process
+with a WARNING root handler, output redirected to a log file, `grep -c "access "` → 2.
+
+`AccessLogContexts` now tests the *deployment* context rather than the bare one: a root
+logger that already has a WARNING handler must still emit, a verbose root must not
+double-print, a pre-configured `hermes_widget` must be respected, and `off` must silence.
+The first draft of that test attached a handler to `hermes_widget` before calling
+`configure_access_log`, which made the guard unreachable — it passed against the broken
+code, and passing against the broken code is the same disease as the bug. The suite now
+fails when the old guard is restored, which is the only property that matters.
+
+Three gates in `check-contract-parity.py` have now matched a *comment* explaining the
+defect they forbid, so source greps go through one `source_of()` helper that strips
+comments first.
+
 ## Gates
 
 `AppSurfaceTest` (JVM, runs in CI):

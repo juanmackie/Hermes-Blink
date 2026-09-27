@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import contextlib
 import http.client
+import io
+import logging
 import importlib
 import importlib.util
 import json
@@ -869,3 +871,133 @@ class AttentionRouteRoundTrip(unittest.TestCase):
     def test_it_needs_a_device_token(self):
         status, body = self.request("PUT", "/v1/device/attention", self._app_body(), self.agent_token)
         self.assertEqual(status, 403, body)
+
+
+class AccessLogContexts(unittest.TestCase):
+    """The access log, tested in the contexts it is actually started in.
+
+    Field round 9: the log was green in the harness and dead in the deployment. The guard
+    that caused it (`not logging.getLogger().handlers`) is true in a bare test process and
+    false where the Hermes gateway has put its own handler on the root logger, which is the
+    only context that matters.
+
+    Each test below asserts on *emission* — whether a line reached stderr, which the
+    startup hook redirects into <Hermes home>/widget/server.log — rather than on handler
+    counts. The first draft of this file attached a handler to `hermes_widget` before
+    calling `configure_access_log`, which made the guard unreachable and the test passed
+    against the broken code: a test that cannot fail is the same disease as the bug.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        _load_plugin()
+        cls.server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
+
+    def setUp(self):
+        self.root = logging.getLogger()
+        self.mine = logging.getLogger("hermes_widget")
+        self.saved = {
+            "root_handlers": list(self.root.handlers),
+            "root_level": self.root.level,
+            "handlers": list(self.mine.handlers),
+            "level": self.mine.level,
+            "propagate": self.mine.propagate,
+        }
+        self.addCleanup(self._restore)
+        for logger in (self.root, self.mine):
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+        self.mine.setLevel(logging.NOTSET)
+        self.mine.propagate = True
+        os.environ.pop("HERMES_WIDGET_LOG", None)
+
+    def _restore(self):
+        for logger in (self.root, self.mine):
+            for handler in list(logger.handlers):
+                logger.removeHandler(handler)
+        for handler in self.saved["root_handlers"]:
+            self.root.addHandler(handler)
+        for handler in self.saved["handlers"]:
+            self.mine.addHandler(handler)
+        self.root.setLevel(self.saved["root_level"])
+        self.mine.setLevel(self.saved["level"])
+        self.mine.propagate = self.saved["propagate"]
+        os.environ.pop("HERMES_WIDGET_LOG", None)
+
+    def _emit(self, *, root_handler: bool = True, root_level: int = logging.WARNING) -> str:
+        """Configure as make_server does, log one access line, return what reached stderr.
+
+        `sys.stderr` is swapped first because a StreamHandler binds the stream it is
+        created with: this is the only way to observe what the startup hook would redirect
+        into server.log.
+        """
+        root_stream = io.StringIO()
+        if root_handler:
+            self.root.handlers = [logging.StreamHandler(root_stream)]
+        self.root.setLevel(root_level)
+        captured = io.StringIO()
+        saved = sys.stderr
+        sys.stderr = captured
+        try:
+            self.server_module.configure_access_log()
+            self.server_module._log.info(
+                "access POST /v1/widgets/hermes-brief/events -> 200 req=abc device=d1 "
+                "event=request_update code=- widget=hermes-brief"
+            )
+        finally:
+            sys.stderr = saved
+        return captured.getvalue() + "\n--host saw--\n" + root_stream.getvalue()
+
+    def test_scenario_a_bare_process_emits(self):
+        # Nothing configured anywhere: the harness that hid the bug for two rounds.
+        output = self._emit(root_handler=False)
+        self.assertIn("access POST", output.split("--host saw--")[0])
+
+    def test_scenario_b_the_deployment_emits(self):
+        # The gateway has a WARNING handler on the root. This is production, and it is
+        # where the line used to die: no handler of our own, so the record propagated to a
+        # WARNING root and was dropped.
+        output = self._emit(root_handler=True, root_level=logging.WARNING)
+        ours, _, host = output.partition("--host saw--")
+        self.assertIn("access POST", ours, "the access line must reach stderr in production")
+        self.assertNotIn("access POST", host, "and not be printed twice through the host")
+
+    def test_a_verbose_root_does_not_double_print(self):
+        output = self._emit(root_handler=True, root_level=logging.DEBUG)
+        ours, _, host = output.partition("--host saw--")
+        self.assertIn("access POST", ours)
+        self.assertNotIn("access POST", host)
+
+    def test_a_host_that_configured_our_logger_is_respected(self):
+        mine = logging.getLogger("hermes_widget")
+        existing = logging.StreamHandler(io.StringIO())
+        mine.addHandler(existing)
+        self.server_module.configure_access_log()
+        self.assertEqual([existing], mine.handlers, "must not add a second handler")
+
+    def test_off_silences_the_line_deliberately(self):
+        os.environ["HERMES_WIDGET_LOG"] = "off"
+        self.server_module.configure_access_log()
+        mine = logging.getLogger("hermes_widget")
+        self.assertEqual(logging.WARNING, mine.level)
+        self.assertFalse(mine.handlers)
+
+    def test_verbose_raises_the_level_to_debug(self):
+        os.environ["HERMES_WIDGET_LOG"] = "debug"
+        self.server_module.configure_access_log()
+        self.assertEqual(logging.DEBUG, logging.getLogger("hermes_widget").level)
+
+    def test_a_broken_logging_environment_does_not_raise(self):
+        # Logging must never be the reason the widget server fails to start.
+        class Exploding(logging.Logger):
+            def addHandler(self, handler):  # noqa: N802
+                raise RuntimeError("no logging here")
+
+        original = logging.getLogger
+        logging.getLogger = (
+            lambda name=None: Exploding(name) if name == "hermes_widget" else original(name)
+        )
+        try:
+            self.server_module.configure_access_log()
+        finally:
+            logging.getLogger = original

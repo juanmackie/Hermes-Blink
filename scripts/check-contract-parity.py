@@ -55,6 +55,21 @@ def fail(check: str, detail: str) -> None:
     failures.append(f"[{check}] {detail}")
 
 
+def source_of(path: pathlib.Path | str) -> str:
+    """File contents with comments stripped.
+
+    A gate that greps for a forbidden token must not match the comment explaining *why*
+    the token is forbidden. That mistake shipped three times in this file, each time
+    turning a good comment into a false positive, so the stripping is centralised here.
+    """
+    text = pathlib.Path(path).read_text(encoding="utf-8")
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)   # C-style block
+    text = "\n".join(                                     # Python and shell line comments
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+    return re.sub(r"//.*", "", text)
+
+
 def mentions(text: str, name: str) -> bool:
     """A field documented as a `code` token or as a "quoted" JSON key."""
     return f"`{name}`" in text or f'"{name}"' in text
@@ -405,9 +420,8 @@ def main() -> int:
                          "app_on_surface", "app_on_surface_variant", "app_primary", "app_on_primary"):
             if required not in tokens:
                 fail("app-surface", f"{mode}/app_colors.xml has no {required}")
-    activity = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-                "hermeswidget" / "PublicationActivity.kt").read_text(encoding="utf-8")
-    body = re.sub(r"//.*", "", re.sub(r"/\*.*?\*/", "", activity, flags=re.S))
+    body = source_of(REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+                     "hermeswidget" / "PublicationActivity.kt")
     for literal in sorted(set(re.findall(r"Color\.(?:WHITE|BLACK)|Color\.rgb\(", body))):
         fail("app-surface",
              f"PublicationActivity.kt paints {literal}; the zoom view follows the device "
@@ -436,7 +450,8 @@ def main() -> int:
     if "offerNow" not in diagnostics or "offerNow" not in pinning:
         fail("app-action-feedback",
              "the Add widget button must call the manual offer path, which always reports")
-    diagnostics_code = re.sub(r"//.*", "", re.sub(r"/\*.*?\*/", "", diagnostics, flags=re.S))
+    diagnostics_code = source_of(REPO / "android" / "app" / "src" / "main" / "java" / "com" /
+                              "you" / "hermeswidget" / "DiagnosticsActivity.kt")
     if "ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" in diagnostics_code:
         fail("app-action-feedback",
              "ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS opens nothing on modern Android; "
@@ -454,7 +469,8 @@ def main() -> int:
                    "hermeswidget" / "widget" / "Breakpoints.kt").read_text(encoding="utf-8")
     # Only the LazyColumn matters: a width weight inside the footer Row is fine, so the
     # check is scoped to the scroll region's own modifier block, comments excluded.
-    widget_code = re.sub(r"//.*", "", re.sub(r"/\*.*?\*/", "", widget_kt, flags=re.S))
+    widget_code = source_of(REPO / "android" / "app" / "src" / "main" / "java" / "com" /
+                           "you" / "hermeswidget" / "widget" / "HermesWidget.kt")
     lazy = re.search(r"LazyColumn\((.*?)\n        \)", widget_code, re.S)
     if lazy and "defaultWeight()" in lazy.group(1):
         fail("widget-action",
@@ -489,7 +505,8 @@ def main() -> int:
         fail("widget-geometry",
              "SizeGate must prefer the instance's reported geometry over the responsive "
              "sample: LocalSize is the sample Glance composed for, not the cell (round 8)")
-    widget_code_for_geometry = re.sub(r"//.*", "", widget_kt)
+    widget_code_for_geometry = source_of(REPO / "android" / "app" / "src" / "main" / "java" /
+                                        "com" / "you" / "hermeswidget" / "widget" / "HermesWidget.kt")
     if "specForInstance(context, appWidgetId" not in widget_code_for_geometry:
         fail("widget-geometry",
              "provideGlance must resolve the geometry through SizeGate.specForInstance")
@@ -538,6 +555,19 @@ def main() -> int:
              "the default WARNING threshold")
     if "configure_access_log()" not in _SERVER_SRC:
         fail("access-log", "make_server must configure the access log")
+    # The round-9 defect: guarding on the *root* logger's handlers. That is true in a bare
+    # test process and false wherever the host has configured logging, which is the only
+    # place the log matters — so the line was green in tests and dead in production.
+    if "not logging.getLogger().handlers" in source_of(PLUGIN / "server.py"):
+        fail("access-log",
+             "the access log must not depend on whether the *root* logger has handlers: "
+             "the host configures logging, so that guard disabled the line in production "
+             "while every test passed (round 9)")
+    if "propagate = False" not in _SERVER_SRC:
+        fail("access-log",
+             "our own handler must stop propagation, or a verbose host prints every line twice")
+    if "HERMES_WIDGET_LOG" not in _SERVER_SRC:
+        fail("access-log", "an access log on a busy server needs a documented opt-out")
 
     # --- tap observability: the trail exists on both sides and is documented ---
     for token, blob, name in (
@@ -556,8 +586,9 @@ def main() -> int:
     if "Outcome" not in api_kt or "recordActionOutcome" not in api_kt:
         fail("tap-observability",
              "the in-app tap must report a real outcome instead of one generic toast")
-    callbacks = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-                 "hermeswidget" / "widget" / "ActionCallbacks.kt").read_text(encoding="utf-8")
+    callbacks_path = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+                      "hermeswidget" / "widget" / "ActionCallbacks.kt")
+    callbacks = callbacks_path.read_text(encoding="utf-8")
     if "instanceId" not in callbacks or "recordActionOutcome" not in callbacks:
         fail("tap-observability",
              "the widget's own action must send instanceId and record the outcome")
