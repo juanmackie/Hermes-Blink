@@ -227,13 +227,16 @@ private fun PublicationSurface(
         // Carried so the in-app "Request update" button can name the instance it belongs
         // to, the same way the widget's own button now does.
         .putExtra(PublicationActivity.EXTRA_INSTANCE_ID, instanceId ?: "")
-    // The outer target is "open the app"; the pinned footer keeps its own action and
-    // Glance resolves the inner target first.
+    // No clickable on the root, on purpose. Round 11: a press aimed at the action reached
+    // this surface instead and opened the app - the host saw a lone `review` and no
+    // `request_update` - because a Glance lazy collection can measure past the height it is
+    // given and push whatever sits below it out of the cell, and because a clickable nested
+    // inside another clickable has no guaranteed winner. Now: the action is the header, the
+    // drill-down is the hero, and a press can mean exactly one thing.
     Column(
         modifier = GlanceModifier
             .fillMaxSize()
-            .padding(12.dp)
-            .clickable(actionStartActivity(intent)),
+            .padding(12.dp),
     ) {
         HeaderRow(publication, snapshot.connectionState, spec, dark)
         // An explicit height, not defaultWeight(): a weight-constrained lazy list is
@@ -250,6 +253,7 @@ private fun PublicationSurface(
                     spec = spec,
                     ink = ink,
                     secondary = secondary,
+                    openApp = actionStartActivity(intent),
                 )
             }
             if (spec.showsBody) {
@@ -297,11 +301,15 @@ private fun HeroBlock(
     spec: BandSpec,
     ink: ColorProvider,
     secondary: ColorProvider,
+    openApp: androidx.glance.action.Action,
 ) {
     Column(modifier = GlanceModifier.fillMaxWidth()) {
+        // The drill-down, and the only other click target on the surface. A plain TextView,
+        // not the lazy container: a clickable on a collection view is not something
+        // RemoteViews can be relied on to deliver.
         Text(
             text = title,
-            modifier = GlanceModifier.fillMaxWidth(),
+            modifier = GlanceModifier.fillMaxWidth().clickable(openApp),
             style = Typo.textStyle("title", ink),
             maxLines = spec.heroMaxLines,
         )
@@ -359,34 +367,11 @@ private fun HeaderRow(
                 .size(6.dp)
                 .background(WidgetTheme.status(context, statusLevel(publication, connectionState))),
         ) {}
-    }
-}
-
-/**
- * WT-4: the status line and the request action are pinned outside the scroll region, so a
- * long publication can never push the only control below the fold. The action is a 48dp
- * touch target at band M and up, where the height budget allows it.
- */
-@Composable
-private fun FooterRow(
-    publication: Publication,
-    state: ConnectionState,
-    spec: BandSpec,
-    dark: Boolean,
-) {
-    val context = LocalContext.current
-    Row(
-        modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp),
-        verticalAlignment = Alignment.Vertical.CenterVertically,
-    ) {
-        Text(
-            text = deliveryLabel(publication, state),
-            modifier = GlanceModifier.defaultWeight(),
-            style = Typo.textStyle("caption", WidgetTheme.secondary(context, dark)),
-            maxLines = 1,
-        )
         if (spec.showsRequestAction) {
-            Spacer(GlanceModifier.width(8.dp))
+            // Pinned at the top, not at the bottom. The header is the first child, so
+            // nothing the scroll region does can move the action out of the cell - and the
+            // action is the one thing that has to stay reachable.
+            Spacer(GlanceModifier.defaultWeight())
             Text(
                 text = context.getString(R.string.widget_request_update),
                 modifier = GlanceModifier
@@ -400,6 +385,25 @@ private fun FooterRow(
             )
         }
     }
+}
+
+/** The delivery state, pinned below the scroll region. The action is in the header. */
+@Composable
+private fun FooterRow(
+    publication: Publication,
+    state: ConnectionState,
+    spec: BandSpec,
+    dark: Boolean,
+) {
+    val context = LocalContext.current
+    // The delivery state only. The action moved to the header in round 11: losing this
+    // line is harmless where losing the action is not.
+    Text(
+        text = deliveryLabel(publication, state),
+        modifier = GlanceModifier.fillMaxWidth().padding(top = 4.dp),
+        style = Typo.textStyle("caption", WidgetTheme.secondary(context, dark)),
+        maxLines = 1,
+    )
 }
 
 /** D15: the body text stays uncapped and scrollable; only the image box is band-sized. */

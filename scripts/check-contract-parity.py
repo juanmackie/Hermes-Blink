@@ -548,6 +548,58 @@ def main() -> int:
                      f"ci.yml:{number}: unquoted ': ' in {line.strip()!r} makes the value a "
                      "mapping; the whole workflow stops parsing and GitHub schedules nothing")
 
+    # --- one press may mean exactly one thing (round 11) ------------------------
+    if "HEADER_WITH_ACTION_DP" not in source_of(
+        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
+        / "widget" / "Breakpoints.kt"
+    ):
+        fail("widget-action",
+             "the chrome arithmetic must know the header carries the action (round 11)")
+    # Two click targets, never nested. The widget root must not be a click target, and the
+    # action must be composed in the header, which a scroll region cannot push out of the
+    # cell. A press on the action reaching the surface instead is what the host saw as a
+    # lone `review` event with no `request_update` (round 11).
+    #
+    # Both checks fail when they cannot find the region they are about, rather than
+    # skipping: a gate that quietly stops looking is the disease this file keeps meeting.
+    surface_start = widget_code.find("private fun PublicationSurface(")
+    header_start = widget_code.find("private fun HeaderRow(")
+    footer_start = widget_code.find("private fun FooterRow(")
+    if surface_start < 0 or header_start < 0 or footer_start < 0:
+        fail("widget-action",
+             f"could not find PublicationSurface/HeaderRow/FooterRow in HermesWidget.kt "
+             f"(offsets {surface_start}/{header_start}/{footer_start}); this check is "
+             f"stale and must be updated rather than skipped")
+    else:
+        # Only the root Column's own modifier chain, not the whole function span: the
+        # hero legitimately carries the drill-down and is defined inside that span.
+        root_at = widget_code.find("Column(", surface_start, header_start)
+        root_end = widget_code.find(") {", root_at) if root_at >= 0 else -1
+        if root_at < 0 or root_end < 0:
+            fail("widget-action",
+                 "could not find the root Column of PublicationSurface; this check is stale "
+                 "and must be updated rather than skipped")
+        surface_head = widget_code[root_at:root_end] if root_at >= 0 and root_end > root_at else ""
+        if "clickable(" in surface_head:
+            fail("widget-action",
+                 "the widget root must not be a click target while the action lives inside "
+                 "it: a press on the action then reaches the surface and silently opens the "
+                 "app (round 11)")
+        header_block = widget_code[header_start:footer_start]
+        # Both the guard and the action: a dead `if (false)` around the action would still
+        # contain the call, and the button would be gone while the gate stayed green.
+        if "requestUpdateAction()" not in header_block or "showsRequestAction" not in header_block:
+            fail("widget-action",
+                 "the request action must be composed in the header row: a Glance lazy "
+                 "collection can measure past its height and push anything below it out of "
+                 "the cell, which is how the button became unreachable (round 11)")
+        # Below the header and before the body helper: the footer, and nothing else. The
+        # action's own definition lives further down and must not count.
+        body_start = widget_code.find("private fun PublicationBody(", footer_start)
+        if "requestUpdateAction()" in widget_code[footer_start:body_start if body_start > 0 else len(widget_code)]:
+            fail("widget-action",
+                 "the action must not also be composed below the scroll region")
+
     # --- the client-side action trail must survive a Glance rename (round 11) ----
     receiver_src = source_of(
         REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"

@@ -309,6 +309,54 @@ no-ops because they changed one of several occurrences — the same mistake, fou
 the verification harness rather than the product. The gates are right; the way I kept
 proving it was not.
 
+## Round 12 — the press that reached the surface instead of the button
+
+Two presses, both answered by the same evidence: a `review` event and no
+`request_update`. `review` is recorded when the publication detail view opens, so
+**the press was handled by the outer target** — the widget surface, whose action is
+"open the app". It was not swallowed; it was answered by the wrong control, and the
+wrong control does something, so nothing looked broken.
+
+Two causes, both ours:
+
+1. **Nested click targets.** The root `Column` had a blanket `clickable` and the
+   action lived inside it. A clickable nested inside another clickable has no
+   guaranteed winner in RemoteViews, so which one handled the press depended on
+   layout and timing — which is why 14:07 worked and 15:23 did not.
+2. **The action was the last child, below the scroll region.** A Glance lazy
+   collection is a RemoteViews collection view; the height we give it is a request,
+   not a guarantee. When it measures past that height it grows over whatever sits
+   below it, and the footer — the only control — leaves the cell. The user aims at
+   where the button *should* be and presses the body, which opens the app.
+
+The fix removes both, and changes one behaviour deliberately:
+
+- **The action is pinned in the header**, the first child, so nothing the scroll
+  region does can move it out of the cell.
+- **The root is no longer a click target.** The drill-down is the hero line, the
+  action is the header button, and neither is inside the other. A press can now
+  mean exactly one thing, so "the action press opened the app instead" is
+  structurally impossible rather than merely unlikely.
+- **The footer keeps the delivery state** and nothing else. Losing that line is
+  harmless where losing the action is not.
+- The chrome arithmetic follows: the header is now 52dp when the band has an
+  action, so a 270dp cell reserves 94dp of chrome and gets a 176dp list. Three
+  tests pin that, and the fit invariant still holds at 4 widths x 9 heights.
+
+**This is a behaviour change worth naming:** tapping the body no longer opens the
+app — only the hero does. That is the cost of removing the ambiguity, and it is
+the right trade: a control that sometimes opens a different app is worse than one
+that does nothing. The next press is also unambiguous — if `review` appears again
+when the button is pressed, the button is not receiving the press, and that is now
+a fact rather than an inference.
+
+Four gates cover it and each was verified by reverting it, including one that only
+appeared after strengthening: the header check originally looked for
+`requestUpdateAction()` in the header, and a `if (false)` around the action still
+contained the call, so the gate stayed green on a widget with no button. A check
+that cannot distinguish live code from dead code is a check that has not been
+written yet.
+
 ## Gates
 
 `AppSurfaceTest` (JVM, runs in CI):

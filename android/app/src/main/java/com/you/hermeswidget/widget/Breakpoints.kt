@@ -5,8 +5,9 @@ import kotlin.math.roundToInt
 
 /** The pinned chrome the scroll region must leave behind, in dp. */
 internal const val SURFACE_PADDING_DP = 12f
-internal const val HEADER_HEIGHT_DP = 20f   // 16dp mark + 4dp gap
-internal const val FOOTER_HEIGHT_DP = 52f   // 48dp action + 4dp gap
+internal const val HEADER_HEIGHT_DP = 20f            // 16dp mark + 4dp gap
+internal const val HEADER_WITH_ACTION_DP = 52f       // 48dp action + 4dp gap
+internal const val FOOTER_HEIGHT_DP = 18f            // status line + 4dp gap
 internal const val MIN_SCROLL_DP = 56f   // the height at which a body line is still legible
 
 /**
@@ -49,12 +50,6 @@ enum class WidgetBand(
     val showsRequestAction: Boolean get() = this >= M
 
     companion object {
-        /** The pinned chrome, in dp, that the scroll region must leave behind. */
-        const val SURFACE_PADDING_DP = 12f
-        const val HEADER_HEIGHT_DP = 20f   // 16dp mark + 4dp gap
-        const val FOOTER_HEIGHT_DP = 52f   // 48dp action + 4dp gap
-        const val MIN_SCROLL_DP = 56f
-
         /** Canonical band edges in dp. Height drives the band; width is a guard, not a band. */
         const val XS_MAX_HEIGHT_DP = 130f
         const val S_MAX_HEIGHT_DP = 185f
@@ -124,9 +119,16 @@ data class BandSpec(
      */
     val hasReadableBody: Boolean get() = scrollHeightDp >= MIN_SCROLL_DP.toInt()
 
-    /** The pinned chrome this band reserves, in dp. */
+    /**
+     * The pinned chrome this band reserves, in dp.
+     *
+     * The header grows to the action's height once the band has one (round 11): the action
+     * is pinned there, above the scroll region, because a Glance lazy collection can
+     * measure past the height we give it and push anything below it out of the cell.
+     */
     val chromeHeightDp: Float
-        get() = SURFACE_PADDING_DP * 2 + HEADER_HEIGHT_DP +
+        get() = SURFACE_PADDING_DP * 2 +
+            (if (showsRequestAction) HEADER_WITH_ACTION_DP else HEADER_HEIGHT_DP) +
             (if (showsFooter) FOOTER_HEIGHT_DP else 0f)
 
     /**

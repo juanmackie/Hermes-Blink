@@ -172,9 +172,39 @@ class WidgetBreakpointsTest {
     @Test
     fun `a tall instance gets the height the chrome left over`() {
         val spec = Breakpoints.spec(407f, 412f)
-        // 412 - (24 padding + 20 header + 52 footer) = 316
-        assertEquals(316, spec.scrollHeightDp)
-        assertEquals(12f + 12f + 20f + 52f, spec.chromeHeightDp, 0.01f)
+        // 412 - (24 padding + 52 header-with-action + 18 status line) = 318
+        assertEquals(318, spec.scrollHeightDp)
+        assertEquals(12f + 12f + 52f + 18f, spec.chromeHeightDp, 0.01f)
+    }
+
+    @Test
+    fun `the action is pinned in the header, so it reserves its own height there`() {
+        // Round 11: the action moved from below the scroll region to above it. The chrome
+        // arithmetic has to follow, or the list is measured against a header that is now
+        // 48dp taller and the column overflows the cell again.
+        val withAction = Breakpoints.spec(407f, 270f)
+        assertTrue(withAction.showsRequestAction)
+        assertEquals(12f + 12f + 52f + 18f, withAction.chromeHeightDp, 0.01f)
+        // 270 - 94 = 176
+        assertEquals(176, withAction.scrollHeightDp)
+        assertTrue(withAction.chromeHeightDp + withAction.scrollHeightDp <= 270f)
+
+        // A band with no action keeps the short header.
+        val noAction = Breakpoints.spec(300f, 120f)
+        assertFalse(noAction.showsRequestAction)
+        assertEquals(12f * 2 + 20f, noAction.chromeHeightDp, 0.01f)
+    }
+
+    @Test
+    fun `a 2x2 cell still fits the header action and a readable list`() {
+        for (height in listOf(185f, 200f, 250f, 276f)) {
+            val spec = Breakpoints.spec(300f, height)
+            assertTrue("band=${spec.band}", spec.showsRequestAction)
+            assertTrue(
+                "height=$height: ${spec.chromeHeightDp}+${spec.scrollHeightDp} overflows",
+                spec.chromeHeightDp + spec.scrollHeightDp <= height,
+            )
+        }
     }
 
     @Test
