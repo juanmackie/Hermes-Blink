@@ -184,6 +184,11 @@ jobs:
       # described a commit three behind. Both are now gates rather than habits.
       - name: Version code was bumped for the shipped app
         run: python scripts/check-version-bump.py
+      # Field round 5 findings 1-3: an artifact that cannot be attributed to a commit
+      # cannot be published. This runs after assembleDebug so the generated BuildConfig is
+      # present, and it is pure Python so the review environment can run it too.
+      - name: Build provenance (no reissued versionCode, no dirty stamp)
+        run: python scripts/check-build-provenance.py
       - name: Release evidence matches the build
         run: python scripts/release-evidence.py --check --doc docs/APK_RELEASE.md
       - name: Print release evidence for this build

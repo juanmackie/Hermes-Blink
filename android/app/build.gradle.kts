@@ -24,9 +24,58 @@ check(!hasAnySigningValue || hasCompleteSigningValues) {
         "hermes.signing.store.password, hermes.signing.key.alias, and hermes.signing.key.password " +
         "(or the matching HERMES_ANDROID_* environment variables)."
 }
+// The commit this APK was built from, resolved once at configuration time. A dirty tree
+// is reported as such rather than pretending to be the commit.
+val gitDescribe: String = run {
+    fun git(vararg args: String): String = try {
+        val process = ProcessBuilder(*arrayOf("git") + args)
+            .directory(rootProject.projectDir.parentFile)
+            .redirectErrorStream(true)
+            .start()
+        process.inputStream.bufferedReader().use { it.readText() }.trim()
+    } catch (e: Exception) {
+        ""
+    }
+    val head = git("rev-parse", "--short=12", "HEAD")
+    val dirty = git("status", "--porcelain", "--untracked-files=no")
+    when {
+        head.isEmpty() -> "unknown"
+        dirty.isNotEmpty() -> "$head-dirty"
+        else -> head
+    }
+}
+val treeIsDirty: Boolean = run {
+    val process = ProcessBuilder("git", "status", "--porcelain", "--untracked-files=no")
+        .directory(rootProject.projectDir.parentFile)
+        .redirectOutput(ProcessBuilder.Redirect.PIPE)
+        .start()
+    process.inputStream.bufferedReader().use { it.readText() }.isNotBlank()
+}
+val requireCleanTree: Boolean =
+    providers.gradleProperty("hermes.requireCleanTree").orNull?.toBoolean() == true
 gradle.taskGraph.whenReady {
     val releaseRequested = allTasks.any { task ->
         task.name == "assembleRelease" || task.name == "bundleRelease"
+    }
+    // A build that will be installed must correspond to a commit. A dirty stamp is
+    // honest, which is why it exists, and useless for "which build is this phone on?" —
+    // every build on the review device carried one. So: release builds refuse, and any
+    // build can refuse with -Phermes.requireCleanTree=true. scripts/check-build-provenance.py
+    // is the pure-Python half, so the check is verifiable without a JDK.
+    if ((releaseRequested || requireCleanTree) && treeIsDirty) {
+        val detail = ProcessBuilder("git", "status", "--porcelain", "--untracked-files=no")
+            .directory(rootProject.projectDir.parentFile)
+            .redirectOutput(ProcessBuilder.Redirect.PIPE)
+            .start()
+            .let { it.inputStream.bufferedReader().use { r -> r.readText() } }
+        throw GradleException(
+            "Refusing to build an artifact that cannot be attributed to a commit: the " +
+                "working tree has uncommitted changes, so COMMIT_SHA would be stamped " +
+                "'$gitDescribe' and the build could never be identified again.\n" +
+                "  Commit the change (or stash it) and build again, or pass " +
+                "-Phermes.requireCleanTree=false for a local development build.\n" +
+                detail.lines().take(10).joinToString("\n") { "    $it" }
+        )
     }
     if (releaseRequested && !hasCompleteSigningValues) {
         throw GradleException(
@@ -53,8 +102,13 @@ android {
         // explicit scroll-region height so the pinned action cannot be clipped off the
         // bottom, plus the three-link action trail. CI fails the build when a source
         // change lands with the same versionCode (scripts/check-version-bump.py).
-        versionCode = 10
-        versionName = "0.4.6"
+        // 11, not 10: code 10 is spent. The review device holds an APK stamped
+        // 0.4.6 / code 10 with COMMIT_SHA 635b0e824c7e-dirty, built from a tree where this
+        // bump had been applied but not committed, so that binary is not the committed
+        // main. Android installs over it silently and app_build_code cannot tell them
+        // apart. See docs/APK_RELEASE.md and scripts/check-build-provenance.py.
+        versionCode = 11
+        versionName = "0.4.7"
     }
     buildFeatures {
         compose = true
@@ -101,26 +155,6 @@ android {
     }
 }
 
-// The commit this APK was built from, resolved once at configuration time. A dirty tree
-// is reported as such rather than pretending to be the commit.
-val gitDescribe: String = run {
-    fun git(vararg args: String): String = try {
-        val process = ProcessBuilder(*arrayOf("git") + args)
-            .directory(rootProject.projectDir.parentFile)
-            .redirectErrorStream(true)
-            .start()
-        process.inputStream.bufferedReader().use { it.readText() }.trim()
-    } catch (e: Exception) {
-        ""
-    }
-    val head = git("rev-parse", "--short=12", "HEAD")
-    val dirty = git("status", "--porcelain", "--untracked-files=no")
-    when {
-        head.isEmpty() -> "unknown"
-        dirty.isNotEmpty() -> "$head-dirty"
-        else -> head
-    }
-}
 android.defaultConfig.buildConfigField("String", "COMMIT_SHA", "\"$gitDescribe\"")
 
 dependencies {

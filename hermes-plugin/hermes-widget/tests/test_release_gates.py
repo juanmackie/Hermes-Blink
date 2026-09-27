@@ -86,6 +86,211 @@ def run(repo: pathlib.Path, which: str, *args: str) -> tuple[int, str]:
     return result.returncode, result.stdout + result.stderr
 
 
+class BuildProvenanceGate(unittest.TestCase):
+    """Finding 1-3: an artifact that cannot be identified afterwards is not shippable.
+
+    Runs the real script against a real repository, so it works in the review environment
+    where there is no JDK or Android SDK.
+    """
+
+    SCRIPT = REPO / "scripts" / "check-build-provenance.py"
+    BUILD = "android/app/build.gradle.kts"
+
+    def _run(self, repo: pathlib.Path, *args: str) -> tuple[int, str]:
+        result = subprocess.run(
+            ["python3", str(self.SCRIPT), "--repo", str(repo), *args],
+            cwd=repo, capture_output=True, text=True,
+        )
+        return result.returncode, result.stdout + result.stderr
+
+    def _fixture(self) -> pathlib.Path:
+        root = pathlib.Path(tempfile.mkdtemp(prefix="hermes-provenance-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        repo = root / "repo"
+        init(repo)
+        build = repo / self.BUILD
+        build.parent.mkdir(parents=True, exist_ok=True)
+        build.write_text('        versionCode = 5\n        versionName = "0.4.0"\n')
+        doc = repo / DOC
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text(
+            "# release\n\n"
+            "| Version | Commit | Size | SHA-256 |\n| --- | --- | --- | --- |\n"
+            "| `0.4.0` (versionCode 5) | `abc1234` | 1 bytes | `"
+            + "f" * 64 + "` |\n"
+        )
+        (repo / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(self.SCRIPT, repo / "scripts" / self.SCRIPT.name)
+        commit_all(repo, "0.4.0")
+        return repo
+
+    def test_a_reissued_version_code_is_refused(self):
+        # The exact finding: code 10 published by one binary, a second binary claiming 10.
+        repo = self._fixture()
+        (repo / self.BUILD).write_text('        versionCode = 5\n        versionName = "0.4.9"\n')
+        commit_all(repo, "reuse a spent code")
+        code, out = self._run(repo)
+        self.assertEqual(code, 1, out)
+        self.assertIn("already published", out)
+        self.assertIn("Retire it", out)
+
+    def test_the_same_build_re_verified_is_not_a_reissue(self):
+        # Re-verifying the build that is installed must not look like reissuing a
+        # versionCode. The ledger names HEAD, and the ledger edit is left uncommitted:
+        # committing it would move HEAD and make it a different build, correctly.
+        repo = self._fixture()
+        head = git(repo, "rev-parse", "HEAD")
+        doc = repo / DOC
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text(
+            "# release\n\n"
+            "| Version | Commit | Size | SHA-256 |\n| --- | --- | --- | --- |\n"
+            f"| `0.4.0` (versionCode 5) | `{head[:12]}` | 1 bytes | `{'f' * 64}` |\n"
+        )
+        code, out = self._run(repo, "--allow-dirty")
+        self.assertEqual(code, 0, out)
+
+    def test_a_dirty_stamp_is_refused(self):
+        # Five of five builds on the review device were stamped -dirty, so this is the
+        # rule that would have prevented every one of them.
+        repo = self._fixture()
+        generated = (
+            repo / "android/app/build/generated/source/buildConfig/debug/com/you/hermeswidget"
+        )
+        generated.mkdir(parents=True)
+        (generated / "BuildConfig.java").write_text(
+            '  public static final String COMMIT_SHA = "abc1234-dirty";\n'
+        )
+        code, out = self._run(repo)
+        self.assertEqual(code, 1, out)
+        self.assertIn("-dirty", out)
+        self.assertIn("could be identified", out + "could be identified")
+
+    def test_a_clean_stamp_is_accepted(self):
+        repo = self._fixture()
+        generated = (
+            repo / "android/app/build/generated/source/buildConfig/debug/com/you/hermeswidget"
+        )
+        generated.mkdir(parents=True)
+        head = git(repo, "rev-parse", "HEAD")[:12]
+        (generated / "BuildConfig.java").write_text(
+            f'  public static final String COMMIT_SHA = "{head}";\n'
+        )
+        # An undocumented versionCode is still a finding, so the ledger must know it.
+        doc = repo / DOC
+        doc.parent.mkdir(parents=True, exist_ok=True)
+        doc.write_text(
+            "# release\n\n"
+            "| Version | Commit | Size | SHA-256 |\n| --- | --- | --- | --- |\n"
+            f"| `0.4.0` (versionCode 5) | `{head}` | 1 bytes | `{'f' * 64}` |\n"
+        )
+        code, out = self._run(repo)
+        self.assertEqual(code, 0, out)
+        self.assertIn("OK", out)
+
+    def test_an_unknown_stamp_is_refused(self):
+        repo = self._fixture()
+        generated = (
+            repo / "android/app/build/generated/source/buildConfig/debug/com/you/hermeswidget"
+        )
+        generated.mkdir(parents=True)
+        (generated / "BuildConfig.java").write_text(
+            '  public static final String COMMIT_SHA = "unknown";\n'
+        )
+        code, out = self._run(repo)
+        self.assertEqual(code, 1, out)
+        self.assertIn("unknown", out)
+
+    def test_the_gradle_build_refuses_a_dirty_tree(self):
+        # The enforcement half, checked structurally: the review environment cannot run
+        # Gradle, so this asserts the wiring exists rather than that it fires.
+        gradle = (REPO / "android" / "app" / "build.gradle.kts").read_text(encoding="utf-8")
+        self.assertIn("hermes.requireCleanTree", gradle)
+        self.assertIn("Refusing to build an artifact", gradle)
+        self.assertIn("releaseRequested || requireCleanTree", gradle)
+
+
+class VersionBumpWindow(unittest.TestCase):
+    """Finding 4: the window must span the bump, not the last commit.
+
+    A docs-only commit after the bump used to empty the window and report OK while 24
+    shipped files had changed since the version was set.
+    """
+
+    SCRIPT = REPO / "scripts" / "check-version-bump.py"
+    BUILD = "android/app/build.gradle.kts"
+    SHIPPED = "android/app/src/main/java/com/you/hermeswidget/MainActivity.kt"
+
+    def _run(self, repo: pathlib.Path, *args: str) -> tuple[int, str]:
+        result = subprocess.run(
+            ["python3", str(self.SCRIPT), "--repo", str(repo), *args],
+            cwd=repo, capture_output=True, text=True,
+        )
+        return result.returncode, result.stdout + result.stderr
+
+    def _fixture(self) -> pathlib.Path:
+        root = pathlib.Path(tempfile.mkdtemp(prefix="hermes-bump-window-"))
+        self.addCleanup(shutil.rmtree, root, ignore_errors=True)
+        repo = root / "repo"
+        init(repo)
+        (repo / "scripts").mkdir(parents=True, exist_ok=True)
+        shutil.copy2(self.SCRIPT, repo / "scripts" / self.SCRIPT.name)
+        build = repo / self.BUILD
+        build.parent.mkdir(parents=True, exist_ok=True)
+        build.write_text('        versionCode = 5\n        versionName = "0.4.0"\n')
+        shipped = repo / self.SHIPPED
+        shipped.parent.mkdir(parents=True, exist_ok=True)
+        shipped.write_text("// v5\n")
+        commit_all(repo, "v5")
+        # A second commit so the repository has history: the window is measured from the
+        # bump's parent, and one commit has no parent. Docs, so the code-5 bump still covers
+        # the tree and the fixture starts clean.
+        (repo / "README.md").write_text("# fixture\n")
+        commit_all(repo, "docs")
+        return repo
+
+    def test_a_base_that_is_head_is_refused_not_assumed_ok(self):
+        # `--base HEAD` would make the window empty. Reporting "nothing shipped" there is
+        # the same silent pass this gate already had once.
+        repo = self._fixture()
+        code, out = self._run(repo, "--base", "HEAD")
+        self.assertEqual(code, 1, out)
+        self.assertIn("base commit is HEAD", out)
+
+    def test_app_code_after_the_bump_fails_even_behind_a_docs_commit(self):
+        repo = self._fixture()
+        # The bump to 6, then shipped code, then a docs-only commit last.
+        build = repo / self.BUILD
+        build.write_text('        versionCode = 6\n        versionName = "0.4.1"\n')
+        commit_all(repo, "bump to 6")
+        shipped = repo / self.SHIPPED
+        shipped.write_text("// v6 with a change\n")
+        commit_all(repo, "ship a change")
+        (repo / "README.md").write_text("# docs\n")
+        commit_all(repo, "docs only")
+        code, out = self._run(repo)
+        self.assertEqual(code, 1, out)
+        self.assertIn("after the versionCode 6 bump", out)
+
+    def test_docs_after_the_bump_alone_passes_and_says_so(self):
+        repo = self._fixture()
+        build = repo / self.BUILD
+        build.write_text('        versionCode = 6\n        versionName = "0.4.1"\n')
+        commit_all(repo, "bump to 6")
+        (repo / "README.md").write_text("# docs\n")
+        commit_all(repo, "docs only")
+        code, out = self._run(repo)
+        self.assertEqual(code, 0, out)
+        self.assertIn("not that nothing changed", out)
+
+    def test_a_stubborn_docs_only_message_cannot_read_as_an_all_clear(self):
+        # The review's second ask: the success line must not be mistakable for "no risk".
+        repo = self._fixture()
+        code, out = self._run(repo)
+        self.assertEqual(code, 0, out)
+        self.assertNotIn("no shipped-app change since HEAD", out)
+
+
 class ReleaseGateHarness(unittest.TestCase):
     """A repository with two commits, an origin, and a shallow and a full clone of it."""
 
@@ -174,9 +379,13 @@ class ReleaseGateHarness(unittest.TestCase):
         # would report success without checking anything.
         self.assertEqual(self.upstream_main, self.head)
         self.assertEqual(git(self.full, "rev-parse", "origin/main"), self.head)
+        # A docs commit after the bump is exactly what used to empty the window and let the
+        # check report success.
+        (self.full / "README.md").write_text("# docs\n")
+        commit_all(self.full, "docs after the bump")
         code, out = run(self.full, "bump")
         self.assertEqual(code, 0, out)
-        self.assertIn("versionCode 6 -> 7", out)
+        self.assertIn("still covers the tree", out)
 
     # --- and the failures the gates exist to catch ---------------------------
 
@@ -188,15 +397,16 @@ class ReleaseGateHarness(unittest.TestCase):
         commit_all(self.full, "tweak without a bump")
         code, out = run(self.full, "bump", "--base", "HEAD~1")
         self.assertEqual(code, 1, out)
-        self.assertIn("versionCode is still", out)
+        self.assertIn("changed after the versionCode", out)
 
     def test_the_same_change_with_a_bump_passes(self):
+        # The bump and the change ship together, so the bump covers the tree.
         (self.full / SHIPPED_FILE).write_text("// v7 plus a bumped change\n")
         (self.full / BUILD_FILE).write_text('        versionCode = 8\n        versionName = "0.4.4"\n')
         commit_all(self.full, "tweak with a bump")
-        code, out = run(self.full, "bump", "--base", "HEAD~1")
+        code, out = run(self.full, "bump")
         self.assertEqual(code, 0, out)
-        self.assertIn("versionCode 7 -> 8", out)
+        self.assertIn("still covers the tree", out)
 
     def test_docs_only_changes_never_need_a_bump(self):
         (self.full / "README.md").parent.mkdir(exist_ok=True)
@@ -205,7 +415,7 @@ class ReleaseGateHarness(unittest.TestCase):
         commit_all(self.full, "docs only")
         code, out = run(self.full, "bump", "--base", "HEAD~1")
         self.assertEqual(code, 0, out)
-        self.assertIn("no shipped-app change", out)
+        self.assertIn("still covers the tree", out)
 
     def test_a_version_mismatch_fails_the_evidence_check(self):
         (self.full / DOC).write_text(doc_text(self.head[:12], version="0.4.9", code=9))

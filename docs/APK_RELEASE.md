@@ -32,7 +32,9 @@ an earlier commit is worse than no document at all — it looks current.
 | `0.3.0` (versionCode 3) | `e1a9cf8` | 7,229,478 bytes | `7663fa98a56f006e23e2219811b99fb46ecde948fa53550e878e44be9f455b79` |
 | `0.2.0` (versionCode 2) | `7abc096` | 7,182,371 bytes | `895452e10b6e836982f58a051ecb5ce95c0e424a6a808a2647d2c6b56fccd0d4` |
 
-Three rules this table now enforces, after four different APKs shipped as `versionCode=2`:
+These rules this table now enforces, after four different APKs shipped as `versionCode=2`
+and one device ended up holding a binary whose `versionCode` matched a release that was
+never built:
 
 1. **Every shipped-app change bumps `versionCode`.** `scripts/check-version-bump.py` fails
    the build when `android/app/src/main/**` changes without one. `app_build_code = 2`

@@ -50,9 +50,37 @@ def commit_of_head() -> str:
     return git("rev-parse", "HEAD")
 
 
+def bump_base() -> str | None:
+    """The parent of the last commit that set the current versionCode.
+
+    Everything shipped after that bump is code the bump does not describe, which is the
+    whole point of the check. Falls back to HEAD~1 when the bump is not in this history.
+    """
+    build = "android/app/build.gradle.kts"
+    if not git("rev-parse", "--verify", "--quiet", "HEAD~1"):
+        return None
+    line = (REPO / build).read_text(encoding="utf-8")
+    match = re.search(r"^\s*versionCode\s*=\s*(\d+)", line, re.M)
+    if not match:
+        return None
+    bump = git("log", "-1", "--format=%H", "-S", f"versionCode = {match.group(1)}", "--", build)
+    if not bump:
+        return git("rev-parse", "HEAD~1") or None
+    parent = git("rev-parse", "--verify", "--quiet", f"{bump}~1") or git("rev-parse", "HEAD~1")
+    return parent or None
+
+
 def version_code(text: str) -> int | None:
     match = VERSION_CODE.search(text)
     return int(match.group(1)) if match else None
+
+
+def shipped_paths(span: str) -> list[str]:
+    """Shipped files changed in a commit span (a..b)."""
+    return sorted(
+        name for name in git("diff", "--name-only", span).splitlines()
+        if name.startswith(SHIPPED_PREFIXES)
+    )
 
 
 def shipped_files(base: str) -> list[str]:
@@ -63,54 +91,54 @@ def shipped_files(base: str) -> list[str]:
     return sorted({name for name in names if name.startswith(SHIPPED_PREFIXES)})
 
 
+def bump_commit(version: int) -> str:
+    """The commit that set this versionCode, or "" when it is not in this history."""
+    return git(
+        "log", "-1", "--format=%H", "-S", f"versionCode = {version}", "--", BUILD_FILE
+    )
+
+
 def main() -> int:
+    # A copied script still anchors on its own __file__, so a fixture test would silently
+    # inspect the real tree and pass without checking anything. --repo makes the target
+    # explicit.
+    global REPO
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--repo", default=None, help="repository to inspect (tests)")
     parser.add_argument(
         "--base", default=None,
         help="git ref to compare against (default: the commit before HEAD's merge-base with origin/main)",
     )
     args = parser.parse_args()
+    if args.repo:
+        REPO = pathlib.Path(args.repo).resolve()
 
-    base = args.base
+    if args.base is not None:
+        base = args.base
+    else:
+        base = bump_base()
     if base is None:
-        # `merge-base origin/main HEAD` in a depth-1 clone resolves to HEAD itself, which
-        # makes `git diff base..HEAD` empty and this gate vacuously green — it could never
-        # fail, while reporting success. Field round 8: that is worse than a red run, so
-        # refuse to evaluate rather than pretend.
-        if not git("rev-parse", "--verify", "--quiet", "HEAD~1"):
-            print(
-                "check-version-bump FAILED (harness, not evidence): shallow clone.\n"
-                "  This checkout has one commit and no parent, so there is no base to\n"
-                "  diff against and this gate cannot run at all.\n"
-                "  Fix the checkout, not the build:\n"
-                "    - uses: actions/checkout@v4\n"
-                "      with:\n"
-                "        fetch-depth: 0\n"
-                "  A gate that cannot evaluate must be red, not green."
-            )
-            return 1
-        # Two shapes, one rule. On a push to main, origin/main *is* HEAD, so merging gives
-        # an empty diff and the gate reports success without checking anything — the same
-        # vacuous pass as the shallow clone, in a full history. On a push the meaningful
-        # base is the commit that was on main before this one; on a pull request it is the
-        # merge base with main.
-        if git("rev-parse", "origin/main") == commit_of_head():
-            base = "HEAD~1"
-        else:
-            base = git("merge-base", "origin/main", "HEAD") or "HEAD~1"
-    if not base or base == commit_of_head():
+        # A base we could not determine is not a pass. The previous version printed
+        # "could not determine a base commit; skipping" and returned 0, which is a gate
+        # reporting success without having checked anything.
         print(
-            "check-version-bump FAILED: no usable base commit to compare against.\n"
-            "  A shallow clone has no parent, and on a push to main `merge-base "
-            "origin/main HEAD`\n  is HEAD, so the diff would be empty and this gate would "
-            "pass without\n  checking anything. Use fetch-depth: 0, or pass --base <ref>."
+            "check-version-bump FAILED: no base commit to compare against.\n"
+            "  A shallow or partial clone hides the commit that set the current "
+            "versionCode.\n"
+            "  Use fetch-depth: 0, or pass --base <ref>."
         )
         return 1
+    resolved_base = git("rev-parse", "--verify", "--quiet", base) or base
+    if resolved_base.startswith(commit_of_head()):
+        print(
+            "check-version-bump FAILED: the base commit is HEAD, so the window would be empty "
+            "and this check would report success without checking anything.\n"
+            "  Use fetch-depth: 0, or pass --base <ref>."
+        )
+        return 1
+    base = resolved_base
 
     head_text = (REPO / BUILD_FILE).read_text(encoding="utf-8")
-    if base == commit_of_head():
-        print("check-version-bump FAILED: the base commit is HEAD, so the comparison is empty.")
-        return 1
     base_text = git("show", f"{base}:{BUILD_FILE}")
     head_code = version_code(head_text)
     if head_code is None:
@@ -125,27 +153,50 @@ def main() -> int:
         print(f"check-version-bump FAILED: {base} has no versionCode to compare against")
         return 1
 
-    touched = shipped_files(base)
-    if not touched:
+    # The question is not "did the number move" but "does the bump cover the tree": app
+    # code that landed *after* the bump is code the bump does not describe, whether or not
+    # a later bump exists. An earlier version compared the two version numbers, which let
+    # shipped code sit after its bump unnoticed, and then a docs-only commit reset the
+    # window entirely. Finding 4, both halves.
+    bump = bump_commit(head_code) or ""
+    if bump:
+        after = shipped_paths(f"{bump}..HEAD")
+        if after:
+            bump_short = bump[:12]
+            print(
+                f"check-version-bump FAILED: {len(after)} shipped file(s) changed after the "
+                f"versionCode {head_code} bump in {bump_short}.\n"
+                f"  window: {bump_short}..HEAD\n"
+                f"  changed: {', '.join(after[:5])}\n"
+                f"  A version number that moves later does not cover code that shipped "
+                f"before it. Bump versionCode again, or pass --base <ref>."
+            )
+            return 1
+        span = git("rev-list", "--count", f"{bump}..HEAD") or "0"
+        moved = "" if head_code == base_code else f" (moved {base_code} -> {head_code})"
         print(
-            f"check-version-bump OK: no shipped-app change since {base[:12]}"
-        )
-        return 0
-    if head_code != base_code:
-        print(
-            f"check-version-bump OK: versionCode {base_code} -> {head_code} "
-            f"({len(touched)} shipped file(s) changed)"
+            f"check-version-bump OK: the versionCode {head_code} bump in {bump[:12]}{moved} "
+            f"still covers the tree: {span} commit(s) since it, none of them shipping app "
+            f"code. This means the bump is current, not that nothing changed."
         )
         return 0
 
+    # The bump is not in this history, so fall back to the requested window and be explicit.
+    touched = shipped_files(base)
+    if not touched:
+        print(
+            f"check-version-bump OK (fallback window {base[:12]}..HEAD): no shipped-app change "
+            f"there. The versionCode {head_code} bump is not in this history, so this is a "
+            f"weaker result than the normal one."
+        )
+        return 0
     sample = ", ".join(sorted(touched)[:5])
     print(
-        f"check-version-bump FAILED: {len(touched)} shipped file(s) changed since "
-        f"{base[:12]} but versionCode is still {head_code}.\n"
+        f"check-version-bump FAILED: {len(touched)} shipped file(s) changed in "
+        f"{base[:12]}..HEAD and the versionCode {head_code} bump is not in this history to "
+        f"cover them.\n"
         f"  changed: {sample}\n"
-        f"  Four different APKs sharing one version code is how a support question "
-        f"('which build is this?') became unanswerable. Bump versionCode in "
-        f"{BUILD_FILE}, or pass --base <ref> when this bump is expected."
+        f"  Use fetch-depth: 0 so the bump can be located, or pass --base <ref>."
     )
     return 1
 
