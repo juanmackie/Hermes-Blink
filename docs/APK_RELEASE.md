@@ -7,32 +7,49 @@ owner's existing signing identity and verified. Never commit a keystore, signing
 
 ## Current local artifact
 
-The debug APK was rebuilt and tested on 2026-09-25 with JDK 17 (the project also supports JDK 21):
+Regenerated from the tree, not carried forward: the numbers below are produced by
+`scripts/release-evidence.py` and verified in CI, because a release document that describes
+an earlier commit is worse than no document at all — it looks current.
 
 | Field | Value |
 | --- | --- |
 | Artifact | `android/app/build/outputs/apk/debug/app-debug.apk` |
-| Size | 7,182,371 bytes |
-| SHA-256 | `895452e10b6e836982f58a051ecb5ce95c0e424a6a808a2647d2c6b56fccd0d4` |
+| Size | 7,229,414 bytes |
+| SHA-256 | `b273d6525a653b4d16b73559b3903c0a284337faa7618a924b2dd6f6bae7a9de` |
 | Package | `com.you.hermeswidget` |
-| Version | `0.2.0` (`versionCode=2`) |
+| Version | `0.3.0` (`versionCode=3`) |
+| Build commit | `719cb8139b07` (also sent by the app as `X-Hermes-App-Sha`) |
 | SDK range | minSdk 26, targetSdk 35 |
 | Signer | Android debug certificate; local testing only |
 
-Rebuild and re-record the checksum after any Android source or Gradle change:
+### Release evidence
+
+| Version | Commit | Size | SHA-256 |
+| --- | --- | --- | --- |
+| `0.3.0` (versionCode 3) | `719cb8139b07` | 7,229,414 bytes | `b273d6525a653b4d16b73559b3903c0a284337faa7618a924b2dd6f6bae7a9de` |
+| `0.2.0` (versionCode 2) | `7abc096` | 7,182,371 bytes | `895452e10b6e836982f58a051ecb5ce95c0e424a6a808a2647d2c6b56fccd0d4` |
+
+Three rules this table now enforces, after four different APKs shipped as `versionCode=2`:
+
+1. **Every shipped-app change bumps `versionCode`.** `scripts/check-version-bump.py` fails
+   the build when `android/app/src/main/**` changes without one. `app_build_code = 2`
+   cannot answer "which build is on this phone?".
+2. **The commit travels with the app.** `BuildConfig.COMMIT_SHA` is stamped at build time and
+   reported as `X-Hermes-App-Sha`; Diagnostics shows it, `widget_status` stores it, and
+   `delivery[].renderedBy.appBuildSha` names the build that drew a revision.
+3. **Sizes come from a clean build, and CI checks them.** A debug APK is not
+   byte-reproducible across machines — the same clean source produced 7,182,371 bytes here and
+   an incremental build of the same source produced 7,250,825 — so the **size** is what CI
+   verifies and the **SHA-256** is recorded as provenance of the builder's own artifact. Build
+   with `clean` before publishing either number.
 
 ```sh
-# Set JAVA_HOME to your JDK 21 installation before running Gradle.
-cd android
-./gradlew clean testDebugUnitTest lintDebug assembleDebug
-cd ..
-python - <<'PY'
-from pathlib import Path
-import hashlib
-p = Path("android/app/build/outputs/apk/debug/app-debug.apk")
-print(p.stat().st_size)
-print(hashlib.sha256(p.read_bytes()).hexdigest())
-PY
+# Regenerate this section (and the row above) from a clean build:
+cd android && ./gradlew clean assembleDebug && cd ..
+python3 scripts/release-evidence.py --apk android/app/build/outputs/apk/debug/app-debug.apk
+# What CI runs:
+python3 scripts/check-version-bump.py
+python3 scripts/release-evidence.py --check docs/APK_RELEASE.md
 ```
 
 The release task intentionally fails when signing values are incomplete rather than leaving an

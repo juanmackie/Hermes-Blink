@@ -24,6 +24,8 @@ object AppIdentity {
         val appVersion: String?,
         val appBuildCode: Long?,
         val osSdk: Int,
+        /** The commit this APK was built from; the exact answer to "which build is this?". */
+        val appBuildSha: String? = null,
     ) {
         /** True when we have something worth telling the server. */
         val isReportable: Boolean get() = !appVersion.isNullOrBlank() || appBuildCode != null
@@ -32,6 +34,7 @@ object AppIdentity {
             .put("appVersion", appVersion ?: JSONObject.NULL)
             .put("appBuildCode", appBuildCode ?: JSONObject.NULL)
             .put("osSdk", osSdk)
+            .put("appBuildSha", appBuildSha ?: JSONObject.NULL)
     }
 
     /** Cached: PackageManager reads are cheap but the poll runs often. */
@@ -67,6 +70,8 @@ object AppIdentity {
                 appVersion = info.versionName?.takeIf { it.isNotBlank() },
                 appBuildCode = longVersionCode(info),
                 osSdk = Build.VERSION.SDK_INT,
+                appBuildSha = com.you.hermeswidget.BuildConfig.COMMIT_SHA
+                    ?.takeIf { it.isNotBlank() && it != "unknown" },
             )
         } catch (_: PackageManager.NameNotFoundException) {
             fallback()
@@ -80,6 +85,7 @@ object AppIdentity {
         appVersion = null,
         appBuildCode = null,
         osSdk = Build.VERSION.SDK_INT,
+        appBuildSha = null,
     )
 
     private fun longVersionCode(info: android.content.pm.PackageInfo): Long? = try {
@@ -110,8 +116,13 @@ object AppIdentity {
     fun buildHeader(appBuildCode: Long?): String? =
         appBuildCode?.takeIf { it in 0..MAX_BUILD_CODE }?.toString()
 
+    /** The `X-Hermes-App-Sha` value: short hex from git, or a `-dirty` marker. */
+    fun shaHeader(appBuildSha: String?): String? =
+        appBuildSha?.trim()?.takeIf { it.isNotEmpty() && it.length <= MAX_SHA_LENGTH }
+
     const val MAX_VERSION_LENGTH = 32
     const val MAX_BUILD_CODE = 2_147_483_647L
+    const val MAX_SHA_LENGTH = 20
 
     /** Testable pure form: the `client` body block. */
     fun clientBlock(appVersion: String?, appBuildCode: Long?, osSdk: Int): JSONObject =

@@ -26,6 +26,7 @@ object Config {
     private const val KEY_PUSH_STATE = "push_state"
     private const val KEY_ATTENTION_RENDERED_REVISION = "attention_rendered_revision"
     private const val KEY_LAST_PUSH_WAKE = "last_push_wake"
+    private const val KEY_ACTION_OUTCOMES = "action_outcomes"
 
     private fun prefs(context: Context): SharedPreferences {
         return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -231,6 +232,48 @@ object Config {
     }
 
     fun getLastPushWake(context: Context): Long? = prefs(context).getLong(KEY_LAST_PUSH_WAKE, 0L).takeIf { it > 0L }
+
+    /**
+     * A bounded local record of the last few widget-button outcomes.
+     *
+     * Round 5: a press that failed wrote nothing anywhere, so "the tap did nothing" had
+     * no explanation on either side. This is the client half of that trail — the instance
+     * that was tapped, the HTTP status, the server's own error code and a sentence — kept
+     * locally and shown in Diagnostics. It never stores a token, a payload or content.
+     */
+    fun recordActionOutcome(
+        context: Context,
+        event: String,
+        instanceId: String?,
+        httpStatus: Int,
+        code: String,
+        message: String?,
+        at: Long = System.currentTimeMillis(),
+    ) {
+        val entry = JSONObject()
+            .put("event", event.take(64))
+            .put("instanceId", instanceId ?: JSONObject.NULL)
+            .put("status", httpStatus)
+            .put("code", code.take(64))
+            .put("message", (message ?: "").take(240))
+            .put("at", at)
+        val current = runCatching {
+            JSONArray(prefs(context).getString(KEY_ACTION_OUTCOMES, "[]") ?: "[]")
+        }.getOrElse { JSONArray() }
+        val next = JSONArray()
+        next.put(entry)
+        // Newest first, bounded: ten is enough to see a pattern and small enough to forget.
+        for (index in 0 until current.length()) {
+            if (next.length() >= 10) break
+            current.optJSONObject(index)?.let { next.put(it) }
+        }
+        prefs(context).edit().putString(KEY_ACTION_OUTCOMES, next.toString()).apply()
+    }
+
+    fun actionOutcomes(context: Context): List<JSONObject> = runCatching {
+        val array = JSONArray(prefs(context).getString(KEY_ACTION_OUTCOMES, "[]") ?: "[]")
+        (0 until array.length()).mapNotNull { array.optJSONObject(it) }
+    }.getOrDefault(emptyList())
 
     fun markAttentionRendered(context: Context, revision: Int): Boolean {
         val key = prefs(context)

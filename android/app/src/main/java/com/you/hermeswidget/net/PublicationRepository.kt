@@ -168,6 +168,7 @@ object PublicationRepository {
         context: Context,
         width: Int,
         height: Int,
+        instanceId: String? = null,
     ): Boolean = withContext(Dispatchers.IO) {
         val appContext = context.applicationContext
         val baseUrl = SecureStore.baseUrl(appContext) ?: Config.getBackendUrl(appContext)
@@ -186,6 +187,7 @@ object PublicationRepository {
             width,
             height,
             appContext,
+            instanceId,
         ).code in 200..299
         if (acknowledged && Config.markAttentionRendered(appContext, publication.revision)) {
             HermesApi.reportAttention(

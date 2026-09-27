@@ -15,6 +15,7 @@ import com.you.hermeswidget.net.PublicationRepository
 import com.you.hermeswidget.net.PublicationFreshness
 import com.you.hermeswidget.net.SecureStore
 import com.you.hermeswidget.net.freshness
+import com.you.hermeswidget.widget.WidgetRerender
 import com.you.hermeswidget.work.RefreshWorker
 import org.unifiedpush.android.connector.UnifiedPush
 
@@ -22,6 +23,8 @@ class MainActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppIdentity.attach(this)
+        // Redraw the widget if this launch follows an app upgrade (stale RemoteViews).
+        runCatching { WidgetRerender.runIfVersionChanged(this) }
         setContentView(R.layout.activity_main)
         findViewById<Button>(R.id.connect_btn).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))

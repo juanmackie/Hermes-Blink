@@ -46,6 +46,14 @@
             android:textIsSelectable="true"
             android:textSize="15sp" />
 
+        <TextView
+            android:id="@+id/action_outcomes_status"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:textIsSelectable="true"
+            android:textSize="15sp" />
+
         <Button
             android:id="@+id/pin_widget"
             android:layout_width="wrap_content"

@@ -8,6 +8,7 @@ import android.graphics.Matrix
 import android.os.Bundle
 import android.os.SystemClock
 import android.text.method.ScrollingMovementMethod
+import android.util.Log
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
@@ -19,6 +20,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AlertDialog
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.HermesApi
+import com.you.hermeswidget.net.Outcome
 import com.you.hermeswidget.net.PublicationAction
 import com.you.hermeswidget.net.PublicationContent
 import com.you.hermeswidget.net.PublicationRepository
@@ -138,22 +140,59 @@ class PublicationActivity : Activity() {
     }
 
     private fun requestUpdate() {
-        val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this) ?: return
-        val token = SecureStore.token(this) ?: return
+        // The three silent exits of round 5, made loud: a tap that cannot even be sent
+        // now says which precondition is missing instead of returning quietly.
+        val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this)
+        val token = SecureStore.token(this)
+        val blocker = when {
+            baseUrl == null -> Outcome.noServer()
+            token == null -> Outcome.noToken()
+            else -> null
+        }
+        if (blocker != null) {
+            Log.w("HermesTap", "request_update not sent: ${blocker.code} — ${blocker.message}")
+            Config.recordActionOutcome(
+                this, "request_update", instanceId(), -1, blocker.code, blocker.message,
+            )
+            Toast.makeText(this, blocker.message, Toast.LENGTH_LONG).show()
+            return
+        }
+        val url = baseUrl!!
+        val deviceToken = token!!
         Thread {
             val result = HermesApi.postEventWithFields(
-                baseUrl, Config.getWidgetId(this), "request_update",
-                org.json.JSONObject().put("clientEventId", UUID.randomUUID().toString()),
-                token,
+                url, Config.getWidgetId(this), "request_update",
+                JSONObject()
+                    .put("clientEventId", UUID.randomUUID().toString())
+                    .apply { instanceId()?.let { put("instanceId", it) } },
+                deviceToken,
+            )
+            val resolved = Outcome.from(result, "Update requested", "Request update")
+            val requestId = runCatching {
+                result.body?.takeIf { it.isNotBlank() }?.let { JSONObject(it).optString("requestId") }
+            }.getOrNull()
+            // Logged as well as shown: a user who dismisses the toast still leaves a trail
+            // Diagnostics can display, with the server's own request id to quote.
+            Log.i(
+                "HermesTap",
+                "request_update -> ${resolved.code} status=${result.code}" +
+                    (requestId?.let { " requestId=$it" } ?: ""),
+            )
+            Config.recordActionOutcome(
+                this, "request_update", instanceId(),
+                resolved.httpStatus ?: result.code, resolved.code, resolved.message,
             )
             runOnUiThread {
-                Toast.makeText(
-                    this,
-                    if (result.code in 200..299) "Update requested" else "Update request unavailable",
-                    Toast.LENGTH_LONG,
-                ).show()
+                Toast.makeText(this, resolved.message, Toast.LENGTH_LONG).show()
             }
         }.start()
+    }
+
+    private fun instanceId(): String? = intent?.getStringExtra(EXTRA_INSTANCE_ID)
+
+    companion object {
+        /** Lets a caller attribute a tap to a specific widget instance. */
+        const val EXTRA_INSTANCE_ID = "com.you.hermeswidget.extra.INSTANCE_ID"
     }
 
     private fun showHistory() {

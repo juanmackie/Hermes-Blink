@@ -6,6 +6,7 @@ import androidx.glance.appwidget.action.ActionCallback
 import androidx.glance.action.ActionParameters
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.HermesApi
+import com.you.hermeswidget.net.Outcome
 import com.you.hermeswidget.net.SecureStore
 import com.you.hermeswidget.work.RefreshWorker
 import org.json.JSONObject
@@ -24,8 +25,18 @@ object ActionCallbacks {
             val itemId = parameters[WidgetParams.itemIdKey].orEmpty()
             val actionClass = parameters[WidgetParams.actionClassKey] ?: "reversible"
             val confirmOnDevice = parameters[WidgetParams.confirmOnDeviceKey] ?: false
-            val url = SecureStore.baseUrl(context) ?: Config.getBackendUrl(context) ?: return
-            val token = SecureStore.token(context) ?: return
+            // Which instance was tapped. Without this, a server-side event cannot be
+            // tied back to a specific widget on the home screen.
+            val instanceId = WidgetInstanceIds.of(glanceId)
+            val url = SecureStore.baseUrl(context) ?: Config.getBackendUrl(context)
+            val token = SecureStore.token(context)
+            if (url == null || token == null) {
+                // The silent exits of round 5. Log the reason and record it locally so
+                // Diagnostics can show why a tap did nothing, instead of returning quietly.
+                val outcome = if (url == null) Outcome.noServer() else Outcome.noToken()
+                recordActionFailure(context, event, instanceId, outcome)
+                return
+            }
             val clientEventId = UUID.randomUUID().toString()
             val result = if (kind in setOf("approve", "snooze", "open")) {
                 val publication = com.you.hermeswidget.net.PublicationRepository.loadCached(context)
@@ -38,6 +49,7 @@ object ActionCallbacks {
                 if (!payload.isNullOrBlank()) body.put("payload", JSONObject(payload))
                 body.put("clientEventId", clientEventId)
                 if (itemId.isNotBlank()) body.put("itemId", itemId)
+                if (instanceId != null) body.put("instanceId", instanceId)
                 HermesApi.postEventWithFields(url, widgetId, event, body, token)
             }
             if (result.code in 200..299) {
@@ -45,20 +57,48 @@ object ActionCallbacks {
                 if (publication != null) {
                     HermesApi.reportAttention(url, token, widgetId, publication.revision, taps = 1)
                 }
+                Config.recordActionOutcome(context, event, instanceId, 200, "ok", null)
                 RefreshWorker.schedulePostTapPoll(context)
-            } else if (kind in setOf("approve", "snooze", "open") && itemId.isNotBlank()) {
-                val publication = com.you.hermeswidget.net.PublicationRepository.loadCached(context)
-                Config.enqueuePendingAction(context, JSONObject()
-                    .put("event", kind)
-                    .put("itemId", itemId)
-                    .put("actionClass", actionClass)
-                    .put("revision", publication?.revision ?: 0)
-                    .put("clientEventId", clientEventId)
-                    .put("confirmOnDevice", confirmOnDevice)
-                    .put("payload", payload ?: "{}"))
+            } else {
+                val outcome = Outcome.from(result, "Update requested", "Request update")
+                recordActionFailure(context, event, instanceId, outcome)
+                if (kind in setOf("approve", "snooze", "open") && itemId.isNotBlank()) {
+                    val publication = com.you.hermeswidget.net.PublicationRepository.loadCached(context)
+                    Config.enqueuePendingAction(context, JSONObject()
+                        .put("event", kind)
+                        .put("itemId", itemId)
+                        .put("actionClass", actionClass)
+                        .put("revision", publication?.revision ?: 0)
+                        .put("clientEventId", clientEventId)
+                        .put("confirmOnDevice", confirmOnDevice)
+                        .put("payload", payload ?: "{}"))
+                }
             }
         }
+
+        private fun recordActionFailure(
+            context: Context, event: String, instanceId: String?, outcome: Outcome
+        ) {
+            Config.recordActionOutcome(
+                context, event, instanceId, outcome.httpStatus ?: -1, outcome.code, outcome.message,
+            )
+        }
     }
+}
+
+/**
+ * The AppWidgetManager id behind a Glance id, when the platform gives us one.
+ *
+ * `AppWidgetId` is `@RestrictTo(LIBRARY_GROUP)`, so lint objects to naming it; the cast
+ * is confined here and degrades to null (reported as "instance not attributed") rather
+ * than failing the action. A missing id costs attribution, not the tap.
+ */
+@Suppress("RestrictedApi")
+object WidgetInstanceIds {
+    fun of(glanceId: GlanceId): String? = runCatching {
+        val value = glanceId as? androidx.glance.appwidget.AppWidgetId ?: return null
+        value.appWidgetId.takeIf { it >= 0 }?.toString()
+    }.getOrNull()
 }
 
 object WidgetParams {

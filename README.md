@@ -45,6 +45,26 @@ bash scripts/bootstrap-linux.sh --host 0.0.0.0 --port 8788 --json  # container b
 bash scripts/install-service.sh                    # compatibility entry point
 ```
 
+### Restarting the server
+
+**The supported restart is the plugin's own startup hook**, not a bare kill:
+
+```sh
+bash scripts/bootstrap-linux.sh --restart-gateway --json   # recommended
+# or, equivalently, ask the gateway to run its hook:
+handle("gateway:startup")
+```
+
+`--restart-gateway` reloads the agent, which re-runs the idempotent
+`gateway:startup` hook and brings the server back with no manual step and no
+duplicated services. Verified 2026-09-27: after the hook, health returned
+immediately and the process was listening again.
+
+A bare `kill` of the server process is *not* equivalent: on the same day it left
+the server down for roughly six minutes (health `000`) because nothing re-ran the
+startup hook. If the server must be stopped by hand, restart the gateway
+afterwards so the hook gets its chance.
+
 `--host` and `--port` are independent: an omitted flag keeps the value already
 saved in `widget/server.json`, and a first install defaults to
 `127.0.0.1:8788`. A malformed `server.json` is reported instead of overwritten.

@@ -23,6 +23,7 @@ class DiagnosticsActivity : Activity() {
     private lateinit var exemption: TextView
     private lateinit var pushState: TextView
     private lateinit var instances: TextView
+    private lateinit var actions: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,6 +33,7 @@ class DiagnosticsActivity : Activity() {
         exemption = findViewById(R.id.battery_exemption_status)
         pushState = findViewById(R.id.push_state_status)
         instances = findViewById(R.id.widget_instances_status)
+        actions = findViewById(R.id.action_outcomes_status)
         findViewById<Button>(R.id.request_battery_exemption).setOnClickListener {
             requestExemption()
         }
@@ -52,6 +54,7 @@ class DiagnosticsActivity : Activity() {
         val identity = AppIdentity.of(this)
         status.text = buildString {
             append("App: ${AppIdentity.describe(identity)} \u00b7 Android API ${identity.osSdk}\n")
+            identity.appBuildSha?.let { append("Build commit: $it\n") }
             append("Last poll: ${label(times["lastPollAt"])}\n")
             append("Last fetch: ${label(times["lastFetchAt"])}\n")
             append("Last render: ${label(times["lastRenderAt"])}\n")
@@ -83,6 +86,31 @@ class DiagnosticsActivity : Activity() {
             append(lastWake?.let { format.format(Date(it)) } ?: "never")
         }
         renderInstances()
+        renderActionOutcomes()
+    }
+
+    /**
+     * The last few widget-button outcomes, newest first. This is the client-side answer
+     * to "I pressed Request update and nothing happened": it says whether the tap was
+     * sent, which instance sent it, what the server replied, and when.
+     */
+    private fun renderActionOutcomes() {
+        val format = DateFormat.getDateTimeInstance(DateFormat.SHORT, DateFormat.SHORT)
+        val rows = Config.actionOutcomes(this)
+        actions.text = if (rows.isEmpty()) {
+            "Widget actions: none recorded yet"
+        } else {
+            buildString {
+                append("Widget actions (newest first):")
+                for (row in rows) {
+                    val status = row.optInt("status", -1)
+                    val instance = row.optString("instanceId").ifBlank { "?" }
+                    val at = row.optLong("at", 0L).takeIf { it > 0 }?.let { format.format(Date(it)) } ?: "?"
+                    append("\n$at · ${row.optString("event")} · instance $instance · " +
+                        "HTTP $status · ${row.optString("code")}")
+                }
+            }
+        }
     }
 
     /**

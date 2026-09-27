@@ -14,6 +14,7 @@ import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.you.hermeswidget.net.AppIdentity
+import com.you.hermeswidget.widget.WidgetRerender
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.ConnectionState
 import com.you.hermeswidget.net.HermesApi
@@ -31,6 +32,9 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
     override suspend fun doWork(): Result {
         // So every request this worker makes can name the build it came from.
         AppIdentity.attach(applicationContext)
+        // An install-over-upgrade leaves stale RemoteViews on the home screen; the poll is
+        // the one code path that runs on every launch, so it owns the redraw.
+        runCatching { WidgetRerender.runIfVersionChanged(applicationContext) }
         Config.setDiagnosticTime(applicationContext, "poll")
         retryPendingActions()
         reportInventory()

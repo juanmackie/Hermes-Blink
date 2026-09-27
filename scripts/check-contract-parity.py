@@ -377,12 +377,54 @@ def main() -> int:
     if "@layout/widget_preview" not in info:
         fail("loading-state", "previewLayout must stay @layout/widget_preview (WD-1)")
 
+    # --- tap observability: the trail exists on both sides and is documented ---
+    _SERVER_SRC = (PLUGIN / "server.py").read_text(encoding="utf-8")
+    _STORE_SRC = (PLUGIN / "store.py").read_text(encoding="utf-8")
+    for token, blob, name in (
+        ("record_rejected_event", _SERVER_SRC, "server.py"),
+        ("rejection_summary", _STORE_SRC, "store.py"),
+        ('"rejections"', _STORE_SRC, "store.py"),
+        ("instanceId", _SERVER_SRC, "server.py"),
+    ):
+        if token not in blob:
+            fail("tap-observability", f"{name} has no {token}")
+    for doc_name, doc_text in (("docs/SCHEMA.md", schema_doc),):
+        if "event_rejections" not in doc_text:
+            fail("tap-observability", f"{doc_name} does not document event_rejections")
+    api_kt = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+              "hermeswidget" / "PublicationActivity.kt").read_text(encoding="utf-8")
+    if "Outcome" not in api_kt or "recordActionOutcome" not in api_kt:
+        fail("tap-observability",
+             "the in-app tap must report a real outcome instead of one generic toast")
+    callbacks = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
+                 "hermeswidget" / "widget" / "ActionCallbacks.kt").read_text(encoding="utf-8")
+    if "instanceId" not in callbacks or "recordActionOutcome" not in callbacks:
+        fail("tap-observability",
+             "the widget's own action must send instanceId and record the outcome")
+    # The credential exits are the ones that matter: a missing URL or token used to
+    # `?: return` silently, which is exactly the round-5 failure mode.
+    credential_exits = re.findall(
+        r"SecureStore\.(?:baseUrl|token)\(context\) \?: Config\.getBackendUrl\(context\) \?: return",
+        callbacks,
+    )
+    if credential_exits:
+        fail("tap-observability", "the tap path still returns silently on a missing credential")
+    for script, token in (("check-version-bump.py", "versionCode"),
+                          ("release-evidence.py", "release-evidence")):
+        if not (REPO / "scripts" / script).is_file():
+            fail("release-gate", f"scripts/{script} is missing")
+    if not (REPO / "docs" / "APK_RELEASE.md").is_file() or "Release evidence" not in (
+        REPO / "docs" / "APK_RELEASE.md"
+    ).read_text(encoding="utf-8"):
+        fail("release-gate", "docs/APK_RELEASE.md has no generated release-evidence table")
+
     # --- client build reporting: docs, headers and the store agree ---------
     api = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
            "hermeswidget" / "net" / "HermesApi.kt").read_text(encoding="utf-8")
     store_src = (PLUGIN / "store.py").read_text(encoding="utf-8")
     server_src = (PLUGIN / "server.py").read_text(encoding="utf-8")
-    for header in ("X-Hermes-App-Version", "X-Hermes-App-Build", "X-Hermes-Os-Sdk"):
+    for header in ("X-Hermes-App-Version", "X-Hermes-App-Build", "X-Hermes-Os-Sdk",
+                   "X-Hermes-App-Sha"):
         for name, blob in (("HermesApi.kt", api), ("server.py", server_src),
                            ("docs/SCHEMA.md", schema_doc)):
             if header not in blob:

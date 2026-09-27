@@ -184,6 +184,7 @@ object HermesApi {
         width: Int,
         height: Int,
         context: Context? = null,
+        instanceId: String? = null,
     ): HttpResult {
         val conn = open(
             baseUrl,
@@ -204,6 +205,9 @@ object HermesApi {
             // place where "which build drew this revision" is worth recording.
             identity.appVersion?.let { body.put("clientVersion", it) }
             identity.appBuildCode?.let { body.put("clientBuildCode", it) }
+            identity.appBuildSha?.let { body.put("clientBuildSha", it) }
+            // Which instance drew it: the render receipt and the tap now name the same id.
+            if (!instanceId.isNullOrBlank()) body.put("instanceId", instanceId)
             conn.outputStream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
             val code = conn.responseCode
             HttpResult(
@@ -485,6 +489,11 @@ object HermesApi {
         }
         AppIdentity.buildHeader(identity.appBuildCode)?.let {
             conn.setRequestProperty("X-Hermes-App-Build", it)
+        }
+        // The commit the APK was built from. A version code says "which release";
+        // this says "which code", which is what a rendering bug needs.
+        AppIdentity.shaHeader(identity.appBuildSha)?.let {
+            conn.setRequestProperty("X-Hermes-App-Sha", it)
         }
         conn.setRequestProperty("X-Hermes-Os-Sdk", identity.osSdk.toString())
         if (!etag.isNullOrEmpty()) conn.setRequestProperty("If-None-Match", etag)

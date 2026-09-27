@@ -19,6 +19,7 @@ import json
 import logging
 import re
 import ssl
+import uuid
 from datetime import datetime, timezone
 from email.utils import format_datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -128,6 +129,7 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _json(self, status: int, payload: Any, extra: dict[str, str] | None = None) -> None:
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        self._status = status
         self.send_response(status)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
@@ -140,6 +142,8 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _error(self, status: int, code: str, detail: str = "") -> None:
         retry = {"Retry-After": "5"} if status in {429, 503} else None
+        self._status = status
+        self._error_code = code
         self._json(status, {"error": code, "detail": detail or code}, retry)
 
     def _not_modified(self, etag: str) -> None:
@@ -231,12 +235,18 @@ class _Handler(BaseHTTPRequestHandler):
         # even on loopback, so an invalid credential is never silently upgraded
         # to the trusted loopback principal.
         if token and store.verify_agent_token(token):
+            self._principal = "agent"
             return "agent", None
         if allow_device and token:
             device = store.device_for_token(token)
             if device:
                 self._note_client(device["deviceId"])
+                self._device_id = device["deviceId"]
+                self._principal = "device"
                 return "device", device["deviceId"]
+        # An unauthenticated caller is still worth a row: a 401 with no trace is exactly
+        # the round-5 failure mode.
+        self._principal = "anonymous"
         # Loopback callers must present a valid bearer token; no automatic
         # agent-level trust. Required before Tailscale HTTPS exposes the
         # server beyond localhost. See review finding 2.
@@ -247,6 +257,7 @@ class _Handler(BaseHTTPRequestHandler):
     _CLIENT_VERSION_HEADERS = ("X-Hermes-App-Version", "X-Hermes-Appversion")
     _CLIENT_BUILD_HEADERS = ("X-Hermes-App-Build", "X-Hermes-Appbuild")
     _CLIENT_SDK_HEADERS = ("X-Hermes-Os-Sdk", "X-Hermes-Android-Sdk")
+    _CLIENT_SHA_HEADERS = ("X-Hermes-App-Sha", "X-Hermes-App-Commit")
 
     def _header(self, names: tuple[str, ...]) -> str | None:
         for name in names:
@@ -270,6 +281,7 @@ class _Handler(BaseHTTPRequestHandler):
             "appVersion": version,
             "appBuildCode": build if build is not None else build_from_version,
             "osSdk": self._header(self._CLIENT_SDK_HEADERS),
+            "appBuildSha": self._header(self._CLIENT_SHA_HEADERS),
         }
 
     def _client_from_body(self, body: Any) -> dict[str, object]:
@@ -282,6 +294,7 @@ class _Handler(BaseHTTPRequestHandler):
             "appVersion": source.get("appVersion", source.get("app_version", source.get("version"))),
             "appBuildCode": source.get("appBuildCode", source.get("app_build_code", source.get("buildCode"))),
             "osSdk": source.get("osSdk", source.get("os_sdk", source.get("androidSdk"))),
+            "appBuildSha": source.get("appBuildSha", source.get("app_build_sha", source.get("commit"))),
         }
 
     def _note_client(self, device_id: str, body: Any = None) -> dict | None:
@@ -295,10 +308,62 @@ class _Handler(BaseHTTPRequestHandler):
                 identity.get("appVersion"),
                 identity.get("appBuildCode"),
                 identity.get("osSdk"),
+                identity.get("appBuildSha"),
             )
         except store.StoreError:
             # Metadata must never break the request it rode along with.
             return None
+
+    # -- access log --------------------------------------------------------
+    #
+    # Field round 5: a press of "Request update" that reached no table left nothing
+    # to look at, because the answer could have been 401, 403, 400, 429, 500, a
+    # network abort or a silent client-side return. One line per device request
+    # makes each of those distinguishable. Tokens never appear: the device id is
+    # the identity, and it is not a credential.
+
+    def _access_log(self) -> None:
+        status = getattr(self, "_status", 0)
+        if not status:
+            return
+        # Only the routes where a missing row is a real question.
+        if self._kind not in {"widget-events", "device", "device-instances", "device-attention"}:
+            return
+        code = getattr(self, "_error_code", None) if status >= 400 else None
+        _log.info(
+            "access %s %s -> %s req=%s device=%s event=%s code=%s widget=%s",
+            self.command,
+            self.path.split("?", 1)[0],
+            status,
+            self._request_id,
+            self._device_id or self._principal or "-",
+            self._event_name or "-",
+            code or "-",
+            self._widget_id or "-",
+        )
+        if status >= 400:
+            # Persist as well as log, so the trail survives a log rotation. The device id
+            # is the identity when we have one; otherwise the principal that was refused
+            # ("agent", "anonymous") is recorded, because "we do not know who" is itself
+            # the answer to "who was this?".
+            try:
+                store.record_rejected_event(
+                    self._widget_id or "",
+                    self._device_id or self._principal or "anonymous",
+                    self._event_name,
+                    method=self.command,
+                    path=urlsplit(self.path).path,
+                    status=status,
+                    code=code or "unknown",
+                    detail="",
+                    request_id=self._request_id,
+                )
+            except store.StoreError:
+                pass
+
+    def _note_event(self, event: Any) -> None:
+        """Remember the event name for the access line (never the payload)."""
+        self._event_name = event[:64] if isinstance(event, str) and event else None
 
     # -- routing ------------------------------------------------------------
 
@@ -370,6 +435,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _handle(self, method: str) -> None:
         self._body: Any = _UNSET
+        self._device_id: str | None = None
+        self._principal = ""
+        self._event_name: str | None = None
+        self._widget_id: str | None = None
+        self._kind = ""
+        self._error_code: str | None = None
+        self._status = 0
+        self._request_id = uuid.uuid4().hex[:12]
         try:
             # Drain the body before any routing/auth decision so an error
             # response (401/404/405) still leaves the connection framed.
@@ -393,6 +466,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(404, "not_found", "no such route")
             return
         kind, widget_id = target
+        self._kind = kind
+        self._widget_id = widget_id
         allowed = self._ALLOWED[kind]
         if method not in allowed:
             self._error(405, "method_not_allowed", f"{method} is not allowed here")
@@ -407,6 +482,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(mapped.status, mapped.code, mapped.detail)
         except (BrokenPipeError, ConnectionResetError):
             raise
+        finally:
+            # A request that leaves no row must at least leave a line. Tokens are never
+            # logged: the identity here is the device id, which is not a credential.
+            self._access_log()
 
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler API
         self._handle("GET")
@@ -559,6 +638,8 @@ class _Handler(BaseHTTPRequestHandler):
             revision,
             body.get("clientVersion", body.get("appVersion")),
             body.get("clientBuildCode", body.get("appBuildCode")),
+            instance_id=body.get("instanceId"),
+            app_build_sha=body.get("clientBuildSha", body.get("appBuildSha")),
         )
         rendered_by = store.get_render_builds(widget_id).get((device_id, revision))
         if rendered_by:
@@ -890,6 +971,7 @@ class _Handler(BaseHTTPRequestHandler):
         if not isinstance(body, dict):
             raise _HttpError(400, "bad_request", "body must be a JSON object")
         event = body.get("event")
+        self._note_event(event)
         payload = body.get("payload")
         if not isinstance(event, str) or not event:
             raise _HttpError(400, "bad_request", "'event' is required")
@@ -901,7 +983,8 @@ class _Handler(BaseHTTPRequestHandler):
             payload = dict(payload)
         else:
             payload = {}
-        for field in ("clientEventId", "itemId", "actionClass", "confirmOnDevice", "revision"):
+        for field in ("clientEventId", "itemId", "actionClass", "confirmOnDevice", "revision",
+                      "instanceId"):
             if field in body:
                 payload.setdefault(field, body[field])
         if payload:
@@ -914,8 +997,13 @@ class _Handler(BaseHTTPRequestHandler):
             if not device_id:
                 raise _HttpError(403, "device_required", "update requests require a paired device token")
             client_event_id = body.get("clientEventId", payload.get("clientEventId") if isinstance(payload, dict) else None)
-            event_id = store.post_event(widget_id, device_id, "request_update", payload)
-            request = store.request_update(widget_id, device_id, client_event_id)
+            instance_id = body.get("instanceId", payload.get("instanceId") if isinstance(payload, dict) else None)
+            event_id = store.post_event(
+                widget_id, device_id, "request_update", payload, instance_id=instance_id
+            )
+            request = store.request_update(
+                widget_id, device_id, client_event_id, instance_id=instance_id
+            )
             trigger = (
                 proactive.trigger_refresh()
                 if request.get("status") != "triggered"
@@ -926,7 +1014,15 @@ class _Handler(BaseHTTPRequestHandler):
                 request = store.list_update_requests(widget_id, limit=1)[0]
             elif request.get("status") != "triggered":
                 request = store.mark_update_request_triggered(request["requestId"]) or request
-            self._json(200, {"ok": True, "eventId": event_id, "request": request, "trigger": trigger})
+            self._json(200, {
+                "ok": True,
+                "eventId": event_id,
+                "request": request,
+                "trigger": trigger,
+                # Which instance was tapped, echoed back so the app can log it.
+                "instanceId": request.get("instanceId"),
+                "requestId": self._request_id,
+            })
             return
         if event == "answer":
             if not device_id:

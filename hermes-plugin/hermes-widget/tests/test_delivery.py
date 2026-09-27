@@ -7,6 +7,7 @@ and the layout endpoint must point at the publication store.
 """
 from __future__ import annotations
 
+import contextlib
 import http.client
 import importlib
 import importlib.util
@@ -19,9 +20,26 @@ import tempfile
 import threading
 import types
 import unittest
+import unittest.mock
 from pathlib import Path
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
+
+
+@contextlib.contextmanager
+def open_db(path):
+    """A connection that actually closes.
+
+    `with sqlite3.connect(...)` is a *transaction* context manager: it commits or rolls
+    back, and leaves the connection open for the garbage collector. Every run of this
+    suite then ends in ResourceWarning noise, which is exactly how a real one hides.
+    """
+    conn = sqlite3.connect(str(path))
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 def _load_plugin():
@@ -147,7 +165,7 @@ class DeliveryTruthfulness(unittest.TestCase):
     def test_status_surfaces_a_revision_history_gap(self):
         self.store.put_publication("hermes-brief", title="One", summary="first", text="a")
         self.store.put_publication("hermes-brief", title="Two", summary="second", text="b")
-        with sqlite3.connect(str(self.store.db_path())) as conn:
+        with open_db(self.store.db_path()) as conn:
             conn.execute("DELETE FROM publication_revisions WHERE widget_id = ?", ("hermes-brief",))
             conn.commit()
         status = self.store.publication_status("hermes-brief")
@@ -175,7 +193,7 @@ class DeliveryTruthfulness(unittest.TestCase):
             "hermes-brief", title="Chart", summary="market", text="do not render late",
             max_age_seconds=60,
         )
-        with sqlite3.connect(str(self.store.db_path())) as conn:
+        with open_db(self.store.db_path()) as conn:
             row = conn.execute(
                 "SELECT payload_json FROM publications WHERE widget_id = ?", ("hermes-brief",)
             ).fetchone()
@@ -529,3 +547,216 @@ class ClientBuildReporting(unittest.TestCase):
         # A real upgrade still lands.
         self.store.record_device_client(device_id, "0.3.0", 300, 35)
         self.assertEqual(self._client_row(device_id)["appBuildCode"], 300)
+
+
+class TapObservability(unittest.TestCase):
+    """Field round 5, P0: a press of "Request update" left no trace anywhere.
+
+    The request path was proven correct and the transport was proven working, and yet a
+    tap produced zero rows — because a 401, a 403, a 400, a 429, a 500, a network abort
+    and a silent client-side return all looked identical: no row. These tests pin the
+    three things that make them distinguishable: an access line, a persisted rejection,
+    and the instance the tap came from.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        _load_plugin()
+        cls.store = importlib.import_module("hermes_plugins.hermes_widget.store")
+        cls.server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
+        cls.server = cls.server_module.make_server("127.0.0.1", 0)
+        cls.port = cls.server.server_address[1]
+        cls.thread = threading.Thread(target=cls.server.serve_forever, daemon=True)
+        cls.thread.start()
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.server.shutdown()
+        cls.server.server_close()
+        cls.thread.join(timeout=5)
+        os.environ.pop("HERMES_WIDGET_DIR", None)
+
+    def setUp(self):
+        self._dir = Path(tempfile.mkdtemp(prefix="hermes-tap-observability-"))
+        os.environ["HERMES_WIDGET_DIR"] = str(self._dir)
+        self.addCleanup(shutil.rmtree, self._dir, ignore_errors=True)
+        self.store.init_db()
+        self.agent_token = self.store.get_agent_token()
+        self.widget = "hermes-tap"
+        self.store.put_publication(self.widget, title="Status", summary="ok", text="body")
+
+    def request(self, method, path, body=None, token=None, headers=None):
+        data = json.dumps(body).encode("utf-8") if body is not None else None
+        request_headers = {"Content-Type": "application/json"} if body is not None else {}
+        if token:
+            request_headers["Authorization"] = f"Bearer {token}"
+        request_headers.update(headers or {})
+        connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+        try:
+            connection.request(method, path, body=data, headers=request_headers)
+            response = connection.getresponse()
+            raw = response.read().decode("utf-8") or "{}"
+            try:
+                return response.status, json.loads(raw)
+            except json.JSONDecodeError:
+                return response.status, {"raw": raw}
+        finally:
+            connection.close()
+
+    def pair_device(self):
+        _, minted = self.request("POST", "/v1/pairing-codes", {}, self.agent_token)
+        _, paired = self.request(
+            "POST", "/v1/pair", {"code": minted["code"], "deviceLabel": "Pixel 10 Pro XL"}
+        )
+        return paired
+
+    def post_event(self, token, event, **fields):
+        body = {"event": event, **fields}
+        return self.request("POST", f"/v1/widgets/{self.widget}/events", body, token)
+
+    def test_a_refused_tap_is_persisted_not_just_logged(self):
+        paired = self.pair_device()
+        # An agent token is a valid bearer but not a device token: 403, zero event rows.
+        status, body = self.post_event(self.agent_token, "request_update")
+        self.assertEqual(status, 403, body)
+        self.assertEqual(body["error"], "device_required")
+        events = self.store.get_events(widget_id=self.widget)
+        self.assertEqual(events, [], "a refused tap must not become an event row")
+
+        rejections = self.store.list_rejected_events(self.widget)
+        self.assertEqual(len(rejections), 1)
+        row = rejections[0]
+        self.assertEqual(row["status"], 403)
+        self.assertEqual(row["code"], "device_required")
+        self.assertEqual(row["event"], "request_update")
+        self.assertEqual(row["method"], "POST")
+        self.assertIn("/events", row["path"])
+        self.assertEqual(row["deviceId"], "agent")  # the agent principal, by design
+        # No token and no payload content is retained.
+        self.assertNotIn("Authorization", json.dumps(row))
+
+    def test_the_rejection_summary_says_what_failed_and_how_often(self):
+        paired = self.pair_device()
+        self.post_event(self.agent_token, "request_update")
+        self.post_event(None, "request_update")               # 401, not a device
+        self.post_event(paired["token"], "request_update", instanceId="38")
+        summary = self.store.publication_status(self.widget)["rejections"]
+        self.assertEqual(summary["byCode"].get("device_required"), 1)
+        self.assertEqual(summary["byCode"].get("unauthorized"), 1)
+        # An unauthenticated caller is recorded as such, not dropped for having no id.
+        anonymous = [row for row in summary["rejected"] if row["status"] == 401]
+        self.assertEqual(anonymous[0]["deviceId"], "anonymous")
+        self.assertGreaterEqual(summary["recentCount"], 2)
+        # The 403 is read after the body, so it knows the event; the 401 is refused before
+        # the body is parsed, so it honestly does not.
+        self.assertEqual(
+            [row["event"] for row in summary["rejected"] if row["status"] == 403],
+            ["request_update"],
+        )
+        self.assertIsNone(
+            [row["event"] for row in summary["rejected"] if row["status"] == 401][0]
+        )
+        self.assertIsNotNone(summary["lastOccurredAt"])
+
+    def test_a_successful_tap_records_the_instance_that_was_pressed(self):
+        paired = self.pair_device()
+        with unittest.mock.patch.object(self.server_module, "proactive") as host:
+            host.trigger_refresh.return_value = {"triggered": True, "pid": 1}
+            status, body = self.post_event(
+                paired["token"], "request_update",
+                clientEventId="abc-123", instanceId="38",
+            )
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["instanceId"], "38")
+        self.assertTrue(body["requestId"])
+
+        events = self.store.get_events(widget_id=self.widget)
+        self.assertEqual(events[0]["event"], "request_update")
+        self.assertEqual(events[0]["instanceId"], "38")
+        request = self.store.list_update_requests(self.widget)[0]
+        self.assertEqual(request["instanceId"], "38")
+
+    def test_an_instance_that_does_not_report_is_null_not_guessed(self):
+        paired = self.pair_device()
+        with unittest.mock.patch.object(self.server_module, "proactive") as host:
+            host.trigger_refresh.return_value = {"triggered": True, "pid": 1}
+            status, _ = self.post_event(paired["token"], "request_update")
+        self.assertEqual(status, 200)
+        events = self.store.get_events(widget_id=self.widget)
+        self.assertIsNone(events[0]["instanceId"])
+        self.assertIsNone(self.store.list_update_requests(self.widget)[0]["instanceId"])
+
+    def test_the_render_receipt_names_instance_and_commit(self):
+        paired = self.pair_device()
+        revision = self.store.get_publication(self.widget)["revision"]
+        # A render receipt is only honest after a fetch, so the test walks the real order.
+        status, _ = self.request(
+            "GET", f"/v1/widgets/{self.widget}/publication", None, paired["token"],
+        )
+        self.assertEqual(status, 200)
+        status, ack = self.request(
+            "POST", f"/v1/widgets/{self.widget}/publication/ack",
+            {
+                "revision": revision, "status": "render_submitted",
+                "renderedWidth": 1221, "renderedHeight": 1236,
+                "clientVersion": "0.3.0", "clientBuildCode": 3,
+                "clientBuildSha": "719cb8139b07", "instanceId": "38",
+            },
+            paired["token"],
+        )
+        self.assertEqual(status, 200, ack)
+        self.assertEqual(ack["renderedBy"]["instanceId"], "38")
+        self.assertEqual(ack["renderedBy"]["appBuildSha"], "719cb8139b07")
+        delivery = self.store.publication_status(self.widget)["delivery"][0]
+        self.assertEqual(delivery["renderedBy"]["instanceId"], "38")
+        self.assertEqual(delivery["renderedBy"]["appBuildSha"], "719cb8139b07")
+
+    def test_the_poll_records_the_commit_alongside_the_build_code(self):
+        paired = self.pair_device()
+        self.request(
+            "GET", f"/v1/widgets/{self.widget}/publication", None, paired["token"],
+            headers={"X-Hermes-App-Version": "0.3.0", "X-Hermes-App-Build": "3",
+                     "X-Hermes-App-Sha": "719cb8139b07", "X-Hermes-Os-Sdk": "35"},
+        )
+        row = self.store.get_device_client_info(paired["deviceId"])
+        self.assertEqual(row["appBuildSha"], "719cb8139b07")
+        self.assertEqual(row["appBuildCode"], 3)
+        self.assertEqual(
+            self.store.list_devices()[0]["appBuildSha"], "719cb8139b07"
+        )
+
+    def test_a_dirty_build_marker_is_kept_and_junk_is_dropped(self):
+        paired = self.pair_device()
+        self.store.record_device_client(
+            paired["deviceId"], "0.3.0", 3, 35, "719cb8139b07-dirty"
+        )
+        self.assertEqual(
+            self.store.get_device_client_info(paired["deviceId"])["appBuildSha"],
+            "719cb8139b07-dirty",
+        )
+        self.store.record_device_client(paired["deviceId"], "0.3.0", 3, 35, "not a sha")
+        self.assertEqual(
+            self.store.get_device_client_info(paired["deviceId"])["appBuildSha"],
+            "719cb8139b07-dirty",
+        )
+
+    def test_rejections_are_bounded_and_pruned_oldest_first(self):
+        paired = self.pair_device()
+        # The production bound is 2000 rows; the pruning rule is the same at 40, and
+        # inserting two thousand rows one connection at a time makes the suite slow.
+        limit = 40
+        with unittest.mock.patch.object(self.store, "MAX_REJECTION_ROWS", limit):
+            for index in range(limit + 15):
+                self.store.record_rejected_event(
+                    self.widget, paired["deviceId"], "request_update",
+                    method="POST", path="/v1/widgets/x/events",
+                    status=500, code=f"boom{index}",
+                )
+        rows = self.store.list_rejected_events(self.widget, limit=200)
+        with open_db(self.store.db_path()) as conn:
+            total = conn.execute("SELECT COUNT(*) FROM event_rejections").fetchone()[0]
+        self.assertEqual(total, limit)
+        self.assertEqual(len(rows), limit)
+        # Oldest first is what gets dropped, so the newest failure is always kept.
+        self.assertEqual(rows[0]["code"], f"boom{limit + 14}")
+        self.assertGreaterEqual(self.store.MAX_REJECTION_ROWS, limit)

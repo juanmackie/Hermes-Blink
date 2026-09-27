@@ -310,6 +310,7 @@ build it is running on **every** request, including the GET poll:
 | `X-Hermes-App-Version` | `0.2.0` | `versionName` of the installed package |
 | `X-Hermes-App-Build` | `200` | `versionCode` / `longVersionCode` |
 | `X-Hermes-Os-Sdk` | `35` | Android API level |
+| `X-Hermes-App-Sha` | `719cb8139b07` | the commit this APK was built from (`-dirty` when the tree was not clean) |
 
 The combined form `0.2.0 (200)` in the version header is also accepted. The same values
 travel in a `client` object on `PATCH /v1/device` (`{"appVersion","appBuildCode","osSdk"}`)
@@ -317,8 +318,10 @@ and as `clientVersion` / `clientBuildCode` on the render acknowledgement.
 
 The server stores the latest report per device (`device_client_info`, first and last seen)
 and, per `(widget, device, revision)`, which build rendered it
-(`publication_render_builds`). `widget_status` surfaces both as `devices[].appVersion` /
-`appBuildCode` and `delivery[].renderedBy` / `delivery[].client`.
+(`publication_render_builds`). The SHA is the precise answer: `app_build_code` says which *release* a phone is on, and
+four different APKs once shared one code, so the commit is what actually identifies a build.
+`widget_status` surfaces all of it as `devices[].appVersion` / `appBuildCode` /
+`appBuildSha` and `delivery[].renderedBy` / `delivery[].client`.
 
 Deliberately narrow, and deliberately lenient:
 
@@ -330,6 +333,33 @@ Deliberately narrow, and deliberately lenient:
 - an unchanged build writes nothing, so the 15-minute poll does not become a write per wakeup;
 - a device that reports nothing (an app predating this) keeps working; its `client` and
   `renderedBy` fields are `null` rather than a guess, and a revoked device gets no row.
+
+### Tap attribution and failed-request visibility
+
+A press of a widget button has to leave a trail on both sides, because a tap that
+produces no row is ambiguous by nature. Three things make it answerable:
+
+| What | Where | Notes |
+| --- | --- | --- |
+| `instanceId` on every event and update request | `events.instance_id`, `widget_update_requests.instance_id` | null when the client did not report one, never guessed |
+| `instanceId` + `appBuildSha` on the render receipt | `publication_render_builds` | which instance drew which revision, and from which commit |
+| Refused device requests | `event_rejections` (bounded, pruned oldest-first) | method, path, status, error code, request id; no token, no payload |
+| One access line per device request | `hermes_widget.server` log | `access POST /v1/widgets/x/events -> 403 req=… device=… event=… code=…` |
+
+`widget_status` surfaces `rejections` (with `byCode`, `byDevice`, `lastCode`,
+`lastEvent`, `lastStatus`) next to `delivery[]`, so "the tap produced no row" has
+an answer instead of six possibilities: refused at auth, refused as a non-device
+principal, malformed, rate limited, server error, or never left the phone.
+
+On the phone the same trail is local: `Config.actionOutcomes` keeps the last ten
+(button, instance, HTTP status, code, message, time) and Diagnostics renders them.
+`Outcome.kt` turns an `HttpResult` into one honest sentence, so 401, 403, 404, 429,
+5xx and "no connection" are no longer the same toast — and the two silent exits of
+the tap path (no server URL, no device token) now say which one they were.
+
+Attribution added in this round starts empty by construction: revisions that were
+already on a device were rendered by a build nobody recorded, and they are reported
+as `renderedBy: null` rather than back-filled with a guess.
 
 ## Forward compatibility
 

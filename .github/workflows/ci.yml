@@ -26,6 +26,58 @@ jobs:
           -s hermes-plugin/hermes-widget/tests -v
       - name: Contract parity across host and Android contracts
         run: python scripts/check-contract-parity.py
+      # A closed resource leak used to hide behind a green run. ResourceWarning is an error
+      # here, and the dev-mode allocator is on so a leak cannot pass unnoticed.
+      - name: Host tests with ResourceWarning as an error
+        env:
+          HERMES_WIDGET_FORCE_ENV: supported
+          PYTHONWARNINGS: "error::ResourceWarning"
+          PYTHONDEVMODE: "1"
+        run: >-
+          python -m unittest discover
+          -s hermes-plugin/hermes-widget/tests
+  # The publication preview has two text backends. CI installs requirements.txt, so
+  # CairoSVG is importable there and the Pillow path is only exercised when it is not.
+  # test_feature_proposals.py:134 asserted one renderer unguarded and turned CI red for five
+  # commits; this job pins the contract in both directions instead.
+  preview-renderers:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [cairosvg, pillow-only]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install host test dependencies
+        if: matrix.backend == 'cairosvg'
+        run: >-
+          python -m pip install
+          -r hermes-plugin/hermes-widget/requirements.txt
+      - name: Install Pillow only (no CairoSVG)
+        if: matrix.backend == 'pillow-only'
+        run: python -m pip install "Pillow>=10.4,<12"
+      - name: Show which text backend is importable
+        run: |
+          python -c "import importlib.util as u; print('cairosvg:', bool(u.find_spec('cairosvg')))"
+      # `-p` takes one pattern, and the dashed plugin directory is not importable as a
+      # dotted module, so discovery is the only invocation that works here.
+      - name: Publication preview tests (this backend)
+        env:
+          HERMES_WIDGET_FORCE_ENV: supported
+        run: >-
+          python -m unittest discover
+          -s hermes-plugin/hermes-widget/tests
+          -p "test_feature_proposals.py"
+      - name: Contract and budget tests (this backend)
+        env:
+          HERMES_WIDGET_FORCE_ENV: supported
+        run: >-
+          python -m unittest discover
+          -s hermes-plugin/hermes-widget/tests
+          -p "test_contract.py"
   # The Windows launcher branch is exercised on a real Windows interpreter; the
   # same tests run on Linux above by patching the hook's platform decision.
   windows-tests:
@@ -91,11 +143,19 @@ jobs:
           cd android
           chmod +x gradlew
           ./gradlew lintDebug --max-workers=1 -Dorg.gradle.jvmargs=-Xmx1536m
-      - name: Assemble the debug APK
+      - name: Assemble the debug APK (clean: published sizes are clean-build sizes)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --max-workers=1 -Dorg.gradle.jvmargs=-Xmx1536m
+          ./gradlew clean assembleDebug --max-workers=1 -Dorg.gradle.jvmargs=-Xmx1536m
+      # Field round 5: four different APKs shipped as versionCode 2, and the release doc
+      # described a commit three behind. Both are now gates rather than habits.
+      - name: Version code was bumped for the shipped app
+        run: python scripts/check-version-bump.py
+      - name: Release evidence matches the build
+        run: python scripts/release-evidence.py --check --doc docs/APK_RELEASE.md
+      - name: Print release evidence for this build
+        run: python scripts/release-evidence.py --apk android/app/build/outputs/apk/debug/app-debug.apk
       - uses: actions/upload-artifact@v4
         with:
           name: app-debug-apk

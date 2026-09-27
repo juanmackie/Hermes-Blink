@@ -583,6 +583,7 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
                     # the widget looks like Y" is answerable without asking the user.
                     "appVersion": d.get("appVersion"),
                     "appBuildCode": d.get("appBuildCode"),
+                    "appBuildSha": d.get("appBuildSha"),
                     "osSdk": d.get("osSdk"),
                 }
                 for d in devices
@@ -596,6 +597,8 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             "wake": publication.get("wake", {"devices": [], "registeredCount": 0}),
             "attention": publication.get("attention", {}),
             "updateRequests": publication.get("updateRequests", []),
+            # Refused device requests: the answer when a tap produced no row.
+            "rejections": publication.get("rejections", {}),
             "delivery": publication.get("delivery", []),
             "deliveryState": delivery_state,
             "inventory": publication.get("inventory", []),

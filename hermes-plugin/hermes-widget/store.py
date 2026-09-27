@@ -94,7 +94,12 @@ MAX_WIDGET_INSTANCES = 32
 MAX_APP_VERSION_LEN = 32
 MAX_APP_BUILD_CODE = 2_147_483_647
 MAX_OS_SDK = 100
+MAX_APP_SHA_LEN = 20
 _APP_VERSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,31}$")
+_APP_SHA_RE = re.compile(r"^[0-9a-f]{7,20}(-dirty)?$")
+# Rejections are a diagnostic trail, not an archive: bounded so a flapping client cannot
+# grow the file, and pruned oldest-first on insert.
+MAX_REJECTION_ROWS = 2_000
 PAIRING_TTL_MINUTES = 10
 DEVICE_TOKEN_PREFIX = "dvc" + "_"
 AGENT_TOKEN_ENV = "HERMES_WIDGET_" + "AGENT_TOKEN"
@@ -427,7 +432,7 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE TABLE IF NOT EXISTS device_client_info ("
             "device_id TEXT PRIMARY KEY, app_version TEXT, app_build_code INTEGER, "
-            "os_sdk INTEGER, first_reported_at TEXT, updated_at TEXT)"
+            "os_sdk INTEGER, app_build_sha TEXT, first_reported_at TEXT, updated_at TEXT)"
         )
         conn.execute(
             "CREATE TABLE IF NOT EXISTS publication_render_builds ("
@@ -435,8 +440,50 @@ def _ensure_schema(conn: sqlite3.Connection) -> None:
             "app_version TEXT, app_build_code INTEGER, reported_at TEXT NOT NULL, "
             "PRIMARY KEY (widget_id, device_id, revision))"
         )
+        # A device request that was refused. Before this table, "no row in events" could
+        # mean an unauthenticated request, a non-device token, a malformed body, a
+        # rate limit, a server error, or a tap that never left the phone. Now each of
+        # those leaves a row of its own (see server._access_log).
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS event_rejections ("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, widget_id TEXT, device_id TEXT, "
+            "event TEXT, method TEXT, path TEXT, status INTEGER, code TEXT, detail TEXT, "
+            "request_id TEXT, occurred_at TEXT NOT NULL)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS event_rejections_device_idx "
+            "ON event_rejections(device_id, occurred_at)"
+        )
         conn.commit()
+        _add_column_if_missing(conn, "events", "instance_id", "TEXT")
+        _add_column_if_missing(conn, "widget_update_requests", "instance_id", "TEXT")
+        _add_column_if_missing(conn, "publication_render_builds", "instance_id", "TEXT")
+        _add_column_if_missing(conn, "device_client_info", "app_build_sha", "TEXT")
+        _add_column_if_missing(conn, "publication_render_builds", "app_build_sha", "TEXT")
         _initialised.add(str(db_path()))
+
+
+def _add_column_if_missing(
+    conn: sqlite3.Connection, table: str, column: str, declaration: str
+) -> None:
+    """Add a column to an existing table, once.
+
+    The schema is normally created fresh with CREATE TABLE IF NOT EXISTS, which does
+    not add columns to a database that already exists. Every one of these additions is
+    nullable, so an old row keeps working and reads as "not reported" rather than as a
+    default we invented.
+    """
+    try:
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+    except sqlite3.Error:
+        return
+    if not existing or column in existing:
+        return
+    try:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {declaration}")
+        conn.commit()
+    except sqlite3.Error as exc:  # pragma: no cover - concurrent migration
+        logger.debug("could not add %s.%s: %s", table, column, exc)
 
 
 def _connect() -> sqlite3.Connection:
@@ -1760,11 +1807,13 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
                 (row["device_id"], int(row["revision"])): {
                     "appVersion": row["app_version"],
                     "appBuildCode": row["app_build_code"],
+                    "appBuildSha": row["app_build_sha"],
+                    "instanceId": row["instance_id"],
                     "reportedAt": row["reported_at"],
                 }
                 for row in conn.execute(
-                    "SELECT device_id, revision, app_version, app_build_code, reported_at "
-                    "FROM publication_render_builds WHERE widget_id = ?",
+                    "SELECT device_id, revision, app_version, app_build_code, app_build_sha, "
+                    "instance_id, reported_at FROM publication_render_builds WHERE widget_id = ?",
                     (widget_id,),
                 ).fetchall()
             }
@@ -1772,12 +1821,13 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
                 row["device_id"]: {
                     "appVersion": row["app_version"],
                     "appBuildCode": row["app_build_code"],
+                    "appBuildSha": row["app_build_sha"],
                     "osSdk": row["os_sdk"],
                     "firstReportedAt": row["first_reported_at"],
                     "updatedAt": row["updated_at"],
                 }
                 for row in conn.execute(
-                    "SELECT device_id, app_version, app_build_code, os_sdk, "
+                    "SELECT device_id, app_version, app_build_code, app_build_sha, os_sdk, "
                     "first_reported_at, updated_at FROM device_client_info"
                 ).fetchall()
             }
@@ -1977,6 +2027,8 @@ def publication_status(widget_id: str = DEFAULT_WIDGET_ID) -> dict:
         },
         "attention": attention_summary(widget_id),
         "updateRequests": list_update_requests(widget_id),
+        # Refused device requests: the answer when a tap produced no row.
+        "rejections": rejection_summary(widget_id),
         "delivery": delivery,
         "inventory": list_widget_instances(widget_id),
         "anomalies": anomalies,
@@ -2528,10 +2580,17 @@ def report_widget_instances(device_id: str, widget_id: str, instances: Any) -> l
     return list_widget_instances(widget_id, device_id=device_id)
 
 
-def request_update(widget_id: str, device_id: str | None, client_event_id: str | None = None) -> dict:
+def request_update(
+    widget_id: str,
+    device_id: str | None,
+    client_event_id: str | None = None,
+    *,
+    instance_id: Any = None,
+) -> dict:
     """Record one generic 'poke'; the existing refresh routine decides the content."""
     now = _now()
     request_id = "update_request_" + uuid.uuid4().hex[:24]
+    instance = _short_str(instance_id, 64)
     with _LOCK:
         conn = _connect()
         try:
@@ -2543,9 +2602,10 @@ def request_update(widget_id: str, device_id: str | None, client_event_id: str |
                 if existing is not None:
                     return _update_request_row(existing)
             conn.execute(
-                "INSERT INTO widget_update_requests (request_id, widget_id, device_id, client_event_id, status, created_at) "
-                "VALUES (?, ?, ?, ?, 'pending', ?)",
-                (request_id, widget_id, device_id, client_event_id, now),
+                "INSERT INTO widget_update_requests "
+                "(request_id, widget_id, device_id, client_event_id, instance_id, status, created_at) "
+                "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+                (request_id, widget_id, device_id, client_event_id, instance, now),
             )
             conn.commit()
             row = conn.execute("SELECT * FROM widget_update_requests WHERE request_id = ?", (request_id,)).fetchone()
@@ -2591,11 +2651,15 @@ def list_update_requests(widget_id: str | None = None, *, limit: int = 50) -> li
 
 
 def _update_request_row(row: Any) -> dict:
+    keys = row.keys() if hasattr(row, "keys") else []
     return {
         "requestId": row["request_id"],
         "widgetId": row["widget_id"],
         "deviceId": row["device_id"],
         "clientEventId": row["client_event_id"],
+        # Which widget instance asked. Absent on rows written before the column existed,
+        # and reported as null rather than guessed from the single-instance assumption.
+        "instanceId": row["instance_id"] if "instance_id" in keys else None,
         "status": row["status"],
         "createdAt": row["created_at"],
         "triggeredAt": row["triggered_at"],
@@ -2729,6 +2793,16 @@ def _clean_app_build_code(value: Any) -> int | None:
     return value
 
 
+def _clean_app_build_sha(value: Any) -> str | None:
+    """A short commit id, or the same id marked dirty. Anything else is dropped."""
+    if value is None or not isinstance(value, str):
+        return None
+    trimmed = value.strip().lower()
+    if len(trimmed) > MAX_APP_SHA_LEN:
+        return None
+    return trimmed if _APP_SHA_RE.match(trimmed) else None
+
+
 def _clean_os_sdk(value: Any) -> int | None:
     if value is None or isinstance(value, bool):
         return None
@@ -2747,6 +2821,7 @@ def record_device_client(
     app_version: Any = None,
     app_build_code: Any = None,
     os_sdk: Any = None,
+    app_build_sha: Any = None,
 ) -> dict | None:
     """Record which build a device is running, from the poll headers or a `client` block.
 
@@ -2761,7 +2836,8 @@ def record_device_client(
     version = _clean_app_version(app_version)
     build = _clean_app_build_code(app_build_code)
     sdk = _clean_os_sdk(os_sdk)
-    if version is None and build is None and sdk is None:
+    sha = _clean_app_build_sha(app_build_sha)
+    if version is None and build is None and sdk is None and sha is None:
         return get_device_client_info(device_id)
     now = _now()
     with _LOCK:
@@ -2775,7 +2851,7 @@ def record_device_client(
                 # and a revoked token should not keep leaving traces.
                 return None
             current = conn.execute(
-                "SELECT app_version, app_build_code, os_sdk FROM device_client_info "
+                "SELECT app_version, app_build_code, os_sdk, app_build_sha FROM device_client_info "
                 "WHERE device_id = ?",
                 (device_id,),
             ).fetchone()
@@ -2784,15 +2860,20 @@ def record_device_client(
                 and current["app_version"] == version
                 and current["app_build_code"] == build
                 and current["os_sdk"] == sdk
+                and current["app_build_sha"] == sha
             ):
                 return get_device_client_info(device_id)
             conn.execute(
                 "INSERT INTO device_client_info "
-                "(device_id, app_version, app_build_code, os_sdk, first_reported_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(device_id) DO UPDATE SET "
-                "app_version=excluded.app_version, app_build_code=excluded.app_build_code, "
-                "os_sdk=excluded.os_sdk, updated_at=excluded.updated_at",
-                (device_id, version, build, sdk, now, now),
+                "(device_id, app_version, app_build_code, os_sdk, app_build_sha, "
+                "first_reported_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(device_id) DO UPDATE SET "
+                "app_version=COALESCE(excluded.app_version, device_client_info.app_version), "
+                "app_build_code=COALESCE(excluded.app_build_code, device_client_info.app_build_code), "
+                "os_sdk=COALESCE(excluded.os_sdk, device_client_info.os_sdk), "
+                "app_build_sha=COALESCE(excluded.app_build_sha, device_client_info.app_build_sha), "
+                "updated_at=excluded.updated_at",
+                (device_id, version, build, sdk, sha, now, now),
             )
             conn.commit()
         finally:
@@ -2805,8 +2886,8 @@ def get_device_client_info(device_id: str) -> dict | None:
         conn = _connect()
         try:
             row = conn.execute(
-                "SELECT app_version, app_build_code, os_sdk, first_reported_at, updated_at "
-                "FROM device_client_info WHERE device_id = ?",
+                "SELECT app_version, app_build_code, os_sdk, app_build_sha, "
+                "first_reported_at, updated_at FROM device_client_info WHERE device_id = ?",
                 (device_id,),
             ).fetchone()
         finally:
@@ -2817,6 +2898,7 @@ def get_device_client_info(device_id: str) -> dict | None:
         "appVersion": row["app_version"],
         "appBuildCode": row["app_build_code"],
         "osSdk": row["os_sdk"],
+        "appBuildSha": row["app_build_sha"],
         "firstReportedAt": row["first_reported_at"],
         "updatedAt": row["updated_at"],
     }
@@ -2828,6 +2910,8 @@ def record_render_build(
     revision: int,
     app_version: Any = None,
     app_build_code: Any = None,
+    instance_id: Any = None,
+    app_build_sha: Any = None,
 ) -> None:
     """Note which build rendered a revision, alongside the render acknowledgement.
 
@@ -2836,7 +2920,8 @@ def record_render_build(
     """
     version = _clean_app_version(app_version)
     build = _clean_app_build_code(app_build_code)
-    if version is None and build is None:
+    sha = _clean_app_build_sha(app_build_sha)
+    if version is None and build is None and sha is None:
         return
     if not isinstance(device_id, str) or not device_id:
         return
@@ -2845,11 +2930,18 @@ def record_render_build(
         try:
             conn.execute(
                 "INSERT INTO publication_render_builds "
-                "(widget_id, device_id, revision, app_version, app_build_code, reported_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(widget_id, device_id, revision) DO UPDATE SET "
+                "(widget_id, device_id, revision, app_version, app_build_code, app_build_sha, "
+                "instance_id, reported_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(widget_id, device_id, revision) "
+                "DO UPDATE SET "
                 "app_version=excluded.app_version, app_build_code=excluded.app_build_code, "
+                "app_build_sha=excluded.app_build_sha, "
+                "instance_id=COALESCE(excluded.instance_id, publication_render_builds.instance_id), "
                 "reported_at=excluded.reported_at",
-                (widget_id, device_id, revision, version, build, _now()),
+                (
+                    widget_id, device_id, revision, version, build, sha,
+                    _short_str(instance_id, 64), _now(),
+                ),
             )
             conn.commit()
         finally:
@@ -2861,8 +2953,8 @@ def get_render_builds(widget_id: str) -> dict[tuple[str, int], dict]:
         conn = _connect()
         try:
             rows = conn.execute(
-                "SELECT device_id, revision, app_version, app_build_code, reported_at "
-                "FROM publication_render_builds WHERE widget_id = ?",
+                "SELECT device_id, revision, app_version, app_build_code, app_build_sha, "
+                "instance_id, reported_at FROM publication_render_builds WHERE widget_id = ?",
                 (widget_id,),
             ).fetchall()
         finally:
@@ -2871,10 +2963,139 @@ def get_render_builds(widget_id: str) -> dict[tuple[str, int], dict]:
         (str(row["device_id"]), int(row["revision"])): {
             "appVersion": row["app_version"],
             "appBuildCode": row["app_build_code"],
+            "appBuildSha": row["app_build_sha"],
+            "instanceId": row["instance_id"],
             "reportedAt": row["reported_at"],
         }
         for row in rows
     }
+
+
+def record_rejected_event(
+    widget_id: Any,
+    device_id: str,
+    event: Any,
+    *,
+    method: str = "",
+    path: str = "",
+    status: int = 0,
+    code: str = "unknown",
+    detail: str = "",
+    request_id: str = "",
+) -> dict:
+    """Persist a refused device request so a missing row stops being ambiguous.
+
+    Bounded and content-free: method, path shape, status, error code and the event name
+    only. No token, no payload, no request body.
+    """
+    now = _now()
+    row = {
+        "widgetId": _short_str(widget_id, 128) or None,
+        "deviceId": device_id,
+        "event": _short_str(event, 64) or None,
+        "method": _short_str(method, 8) or None,
+        "path": _short_str(path, 256) or None,
+        "status": int(status) if isinstance(status, int) and not isinstance(status, bool) else 0,
+        "code": _short_str(code, 64) or "unknown",
+        "detail": _short_str(detail, 256) or None,
+        "requestId": _short_str(request_id, 32) or None,
+        "occurredAt": now,
+    }
+    with _LOCK:
+        conn = _connect()
+        try:
+            conn.execute(
+                "INSERT INTO event_rejections "
+                "(widget_id, device_id, event, method, path, status, code, detail, request_id, occurred_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    row["widgetId"], row["deviceId"], row["event"], row["method"], row["path"],
+                    row["status"], row["code"], row["detail"], row["requestId"], now,
+                ),
+            )
+            conn.execute(
+                "DELETE FROM event_rejections WHERE id <= ("
+                "  SELECT MAX(id) - ? FROM event_rejections)",
+                (MAX_REJECTION_ROWS,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+    return row
+
+
+def list_rejected_events(
+    widget_id: str | None = None,
+    *,
+    device_id: str | None = None,
+    limit: int = 50,
+) -> list[dict]:
+    try:
+        limit = max(1, min(int(limit), 200))
+    except (TypeError, ValueError):
+        limit = 50
+    clauses: list[str] = []
+    params: list[Any] = []
+    if widget_id is not None:
+        clauses.append("(widget_id = ? OR widget_id IS NULL)")
+        params.append(widget_id)
+    if device_id is not None:
+        clauses.append("device_id = ?")
+        params.append(device_id)
+    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
+    with _LOCK:
+        conn = _connect()
+        try:
+            rows = conn.execute(
+                "SELECT widget_id, device_id, event, method, path, status, code, detail, "
+                f"request_id, occurred_at FROM event_rejections{where} "
+                "ORDER BY id DESC LIMIT ?",
+                (*params, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+    return [
+        {
+            "widgetId": row["widget_id"],
+            "deviceId": row["device_id"],
+            "event": row["event"],
+            "method": row["method"],
+            "path": row["path"],
+            "status": row["status"],
+            "code": row["code"],
+            "detail": row["detail"],
+            "requestId": row["request_id"],
+            "occurredAt": row["occurred_at"],
+        }
+        for row in rows
+    ]
+
+
+def rejection_summary(widget_id: str | None = None) -> dict:
+    """Counts a support answer needs: which failures, how often, since when."""
+    recent = list_rejected_events(widget_id, limit=200)
+    by_code: dict[str, int] = {}
+    by_device: dict[str, int] = {}
+    for row in recent:
+        by_code[row["code"]] = by_code.get(row["code"], 0) + 1
+        by_device[row["deviceId"]] = by_device.get(row["deviceId"], 0) + 1
+    return {
+        "recentCount": len(recent),
+        "byCode": by_code,
+        "byDevice": by_device,
+        "lastOccurredAt": recent[0]["occurredAt"] if recent else None,
+        "lastCode": recent[0]["code"] if recent else None,
+        "lastEvent": recent[0]["event"] if recent else None,
+        "lastStatus": recent[0]["status"] if recent else None,
+        "rejected": recent,
+    }
+
+
+def _short_str(value: Any, limit: int) -> str | None:
+    if not isinstance(value, str):
+        return None
+    trimmed = value.strip()
+    return trimmed[:limit] or None
 
 
 def list_devices() -> list[dict]:
@@ -2884,7 +3105,8 @@ def list_devices() -> list[dict]:
             rows = conn.execute(
                 "SELECT d.device_id, d.label, d.created_at, d.last_seen_at, d.revoked, "
                 "CASE WHEN p.device_id IS NULL THEN 0 ELSE 1 END AS push_registered, "
-                "c.app_version, c.app_build_code, c.os_sdk, c.updated_at AS client_updated_at "
+                "c.app_version, c.app_build_code, c.app_build_sha, c.os_sdk, "
+                "c.updated_at AS client_updated_at "
                 "FROM devices d "
                 "LEFT JOIN device_push_endpoints p ON p.device_id = d.device_id "
                 "LEFT JOIN device_client_info c ON c.device_id = d.device_id "
@@ -2904,6 +3126,7 @@ def list_devices() -> list[dict]:
             # upgrade without guessing.
             "appVersion": row["app_version"],
             "appBuildCode": row["app_build_code"],
+            "appBuildSha": row["app_build_sha"],
             "osSdk": row["os_sdk"],
             "clientReportedAt": row["client_updated_at"],
         }
@@ -3280,7 +3503,14 @@ def resolve_intent(
             conn.close()
 
 
-def post_event(widget_id: str, device_id: str, event: str, payload: dict | None) -> int:
+def post_event(
+    widget_id: str,
+    device_id: str,
+    event: str,
+    payload: dict | None,
+    *,
+    instance_id: Any = None,
+) -> int:
     if event in ACTION_KINDS:
         result = post_action_event(widget_id, device_id, event, payload)
         return int(result["eventId"])
@@ -3296,6 +3526,7 @@ def post_event(widget_id: str, device_id: str, event: str, payload: dict | None)
         if not isinstance(client_event_id, str) or not client_event_id:
             client_event_id = None
     payload_json = json.dumps(payload, separators=(",", ":")) if payload is not None else None
+    instance = _short_str(instance_id, 64)
     with _LOCK:
         conn = _connect()
         try:
@@ -3314,9 +3545,9 @@ def post_event(widget_id: str, device_id: str, event: str, payload: dict | None)
                     if isinstance(prev, dict) and prev.get("clientEventId") == client_event_id:
                         return int(row["id"])
             cur = conn.execute(
-                "INSERT INTO events (widget_id, device_id, event, payload, created_at) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (widget_id, device_id, event, payload_json, _now()),
+                "INSERT INTO events (widget_id, device_id, event, payload, instance_id, created_at) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (widget_id, device_id, event, payload_json, instance, _now()),
             )
             conn.commit()
             event_id = cur.lastrowid
@@ -3350,23 +3581,23 @@ def get_events(
         try:
             if since and widget_id:
                 query = (
-                    "SELECT id, widget_id, device_id, event, payload, created_at "
+                    "SELECT id, widget_id, device_id, event, payload, instance_id, created_at "
                     "FROM events WHERE created_at > ? AND widget_id = ? "
                     "ORDER BY id DESC LIMIT ?"
                 )
             elif since:
                 query = (
-                    "SELECT id, widget_id, device_id, event, payload, created_at "
+                    "SELECT id, widget_id, device_id, event, payload, instance_id, created_at "
                     "FROM events WHERE created_at > ? ORDER BY id DESC LIMIT ?"
                 )
             elif widget_id:
                 query = (
-                    "SELECT id, widget_id, device_id, event, payload, created_at "
+                    "SELECT id, widget_id, device_id, event, payload, instance_id, created_at "
                     "FROM events WHERE widget_id = ? ORDER BY id DESC LIMIT ?"
                 )
             else:
                 query = (
-                    "SELECT id, widget_id, device_id, event, payload, created_at "
+                    "SELECT id, widget_id, device_id, event, payload, instance_id, created_at "
                     "FROM events ORDER BY id DESC LIMIT ?"
                 )
             rows = conn.execute(query, params).fetchall()
@@ -3405,6 +3636,9 @@ def get_events(
             "widgetId": row["widget_id"],
             "deviceId": row["device_id"],
             "event": row["event"],
+            # Which widget instance was tapped. null on rows written before the column
+            # existed, and on any client that does not send it.
+            "instanceId": row["instance_id"] if "instance_id" in row.keys() else None,
             "payload": payload,
             "createdAt": row["created_at"],
         }

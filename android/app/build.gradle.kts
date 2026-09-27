@@ -43,11 +43,19 @@ android {
         applicationId = "com.you.hermeswidget"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "0.2.0"
+        // Bumped per release: 3 = the 2026-09-27 widget-UX + build-reporting + tap
+        // observability round. CI fails the build when a source change lands with the
+        // same versionCode (scripts/check-version-bump.py).
+        versionCode = 3
+        versionName = "0.3.0"
     }
     buildFeatures {
         compose = true
+        // BuildConfig carries the commit this APK was built from. Field round 5: four
+        // different APKs shared versionCode 2, so `app_build_code = 2` could not answer
+        // "which build is on this phone?" — the very question build reporting was added
+        // for. The SHA does answer it, and it is exact.
+        buildConfig = true
     }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
@@ -85,6 +93,28 @@ android {
         }
     }
 }
+
+// The commit this APK was built from, resolved once at configuration time. A dirty tree
+// is reported as such rather than pretending to be the commit.
+val gitDescribe: String = run {
+    fun git(vararg args: String): String = try {
+        val process = ProcessBuilder(*arrayOf("git") + args)
+            .directory(rootProject.projectDir.parentFile)
+            .redirectErrorStream(true)
+            .start()
+        process.inputStream.bufferedReader().use { it.readText() }.trim()
+    } catch (e: Exception) {
+        ""
+    }
+    val head = git("rev-parse", "--short=12", "HEAD")
+    val dirty = git("status", "--porcelain", "--untracked-files=no")
+    when {
+        head.isEmpty() -> "unknown"
+        dirty.isNotEmpty() -> "$head-dirty"
+        else -> head
+    }
+}
+android.defaultConfig.buildConfigField("String", "COMMIT_SHA", "\"$gitDescribe\"")
 
 dependencies {
     // Deliberately minimal. Removed as unused in the v2.1.0 bloat audit (they were never

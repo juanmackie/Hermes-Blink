@@ -131,7 +131,11 @@ class FeatureProposals(unittest.TestCase):
         self.assertTrue(result["darkPalette"])
         self.assertEqual(result["variants"]["2x2"]["text"], "compact")
         rendered = self.preview.render_publication_previews(result, sizes=["2x2"])
-        self.assertEqual(rendered[0]["renderer"], "pillow-text")
+        # Which text backend runs depends on whether CairoSVG is importable (CI installs
+        # requirements.txt; a minimal host does not). The contract is "a real text
+        # renderer", not a specific one — see the suppressed tests below for the
+        # deterministic path.
+        self.assertIn(rendered[0]["renderer"], {"pillow-text", "cairosvg"})
 
     def test_request_update_pokes_the_existing_refresh_routine(self):
         self.store.put_publication("poke", title="A", summary="S", text="body")

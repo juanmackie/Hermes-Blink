@@ -81,6 +81,9 @@ class HermesWidget : GlanceAppWidget() {
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val snapshot = withContext(Dispatchers.IO) { loadSnapshot(context) }
+        // Which widget instance this composition belongs to. Attributing a tap or a render
+        // to a device but not an instance is what made round 5 unanswerable.
+        val instanceId = WidgetInstanceIds.of(id)
         // The size the launcher actually gave this instance, for the render receipt.
         var composed: Pair<Float, Float>? = null
         provideContent {
@@ -104,7 +107,7 @@ class HermesWidget : GlanceAppWidget() {
                         secondary = WidgetTheme.secondary(context, dark),
                     )
                     snapshot.publication != null && !snapshot.publication.isExpired() ->
-                        PublicationSurface(snapshot, spec, dark)
+                        PublicationSurface(snapshot, spec, dark, instanceId)
                     snapshot.publication?.isExpired() == true -> EmptyState(
                         "Publication expired",
                         "Open the app to refresh the connection.",
@@ -133,7 +136,10 @@ class HermesWidget : GlanceAppWidget() {
                 WidgetSize.toPixels(context, widthDp, heightDp)
             } ?: WidgetDimensions.fromContext(context)
             renderAckScope.launch {
-                if (PublicationRepository.acknowledgeRenderSubmitted(context, width, height)) {
+                if (PublicationRepository.acknowledgeRenderSubmitted(
+                        context, width, height, instanceId = instanceId,
+                    )
+                ) {
                     Config.setDiagnosticTime(context, "render")
                 }
             }
@@ -162,7 +168,12 @@ class HermesWidget : GlanceAppWidget() {
 }
 
 @Composable
-private fun PublicationSurface(snapshot: WidgetSnapshot, spec: BandSpec, dark: Boolean) {
+private fun PublicationSurface(
+    snapshot: WidgetSnapshot,
+    spec: BandSpec,
+    dark: Boolean,
+    instanceId: String?,
+) {
     val publication = snapshot.publication ?: return
     val context = LocalContext.current
     val ink = WidgetTheme.ink(context, dark)
@@ -175,6 +186,9 @@ private fun PublicationSurface(snapshot: WidgetSnapshot, spec: BandSpec, dark: B
     val body = variant?.let { PublicationContent.Text(it.text) } ?: publication.content
     val intent = Intent(context, PublicationActivity::class.java)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        // Carried so the in-app "Request update" button can name the instance it belongs
+        // to, the same way the widget's own button now does.
+        .putExtra(PublicationActivity.EXTRA_INSTANCE_ID, instanceId ?: "")
     // The outer target is "open the app"; the pinned footer keeps its own action and
     // Glance resolves the inner target first.
     Column(
