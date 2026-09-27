@@ -1066,7 +1066,7 @@ class RequestUpdatePathsAreDistinct(unittest.TestCase):
             raw = response.read().decode("utf-8") or "{}"
             try:
                 return response.status, json.loads(raw)
-            except json.DecodeError:
+            except json.JSONDecodeError:
                 return response.status, {"raw": raw}
         finally:
             connection.close()
