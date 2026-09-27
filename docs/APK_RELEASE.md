@@ -14,11 +14,11 @@ an earlier commit is worse than no document at all — it looks current.
 | Field | Value |
 | --- | --- |
 | Artifact | `android/app/build/outputs/apk/debug/app-debug.apk` |
-| Size | 7,276,063 bytes |
-| SHA-256 | `ba225c2e242fb77e17e31695adf0de3ead1860f0a286ce657b3f1979f2fad63d` |
+| Size | 7,276,071 bytes |
+| SHA-256 | `11d0ced37f47b99b5ef778a6990986f98830566ba917d34aa6510e354655a7be` |
 | Package | `com.you.hermeswidget` |
 | Version | `0.4.6` (`versionCode=10`) |
-| Build commit | `90bb78be79d6` (also sent by the app as `X-Hermes-App-Sha`) |
+| Build commit | `d76066db63d5` (also sent by the app as `X-Hermes-App-Sha`) |
 | SDK range | minSdk 26, targetSdk 35 |
 | Signer | Android debug certificate; local testing only |
 
@@ -26,7 +26,7 @@ an earlier commit is worse than no document at all — it looks current.
 
 | Version | Commit | Size | SHA-256 |
 | --- | --- | --- | --- |
-| `0.4.6` (versionCode 10) | `90bb78be79d6` | 7,276,063 bytes | `ba225c2e242fb77e17e31695adf0de3ead1860f0a286ce657b3f1979f2fad63d` |
+| `0.4.6` (versionCode 10) | `d76066db63d5` | 7,276,071 bytes | `11d0ced37f47b99b5ef778a6990986f98830566ba917d34aa6510e354655a7be` |
 | `0.4.5` (versionCode 9) | `822437668205` | 7,269,419 bytes | `b27fd03d060dec5317c3efb0ef72c96f6de97d9fc6816029517fcb18179c4fc4` |
 | `0.4.4` (versionCode 8) | `01b5006` | 7,269,591 bytes | `1aacd52f103cd623999999999999999999999999999999999999999999999999` |
 | `0.3.0` (versionCode 3) | `e1a9cf8` | 7,229,478 bytes | `7663fa98a56f006e23e2219811b99fb46ecde948fa53550e878e44be9f455b79` |
