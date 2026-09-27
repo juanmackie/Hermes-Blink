@@ -103,6 +103,17 @@ class BuildProvenanceGate(unittest.TestCase):
         )
         return result.returncode, result.stdout + result.stderr
 
+    @staticmethod
+    def _stamp(repo: pathlib.Path, commit: str) -> None:
+        """Write the BuildConfig a build of `commit` would have generated."""
+        generated = (
+            repo / "android/app/build/generated/source/buildConfig/debug/com/you/hermeswidget"
+        )
+        generated.mkdir(parents=True, exist_ok=True)
+        (generated / "BuildConfig.java").write_text(
+            f'  public static final String COMMIT_SHA = "{commit}";\n'
+        )
+
     def _fixture(self) -> pathlib.Path:
         root = pathlib.Path(tempfile.mkdtemp(prefix="hermes-provenance-"))
         self.addCleanup(shutil.rmtree, root, ignore_errors=True)
@@ -125,13 +136,16 @@ class BuildProvenanceGate(unittest.TestCase):
         return repo
 
     def test_a_reissued_version_code_is_refused(self):
-        # The exact finding: code 10 published by one binary, a second binary claiming 10.
+        # The exact finding: code 5 published by one binary, a second binary claiming 5.
         repo = self._fixture()
-        (repo / self.BUILD).write_text('        versionCode = 5\n        versionName = "0.4.9"\n')
-        commit_all(repo, "reuse a spent code")
+        head = git(repo, "rev-parse", "HEAD")
+        self._stamp(repo, head)
+        (repo / "second.txt").write_text("a different binary\n")
+        commit_all(repo, "a different binary ships the same code")
+        self._stamp(repo, git(repo, "rev-parse", "HEAD"))
         code, out = self._run(repo)
         self.assertEqual(code, 1, out)
-        self.assertIn("already published", out)
+        self.assertIn("two binaries would claim one versionCode", out)
         self.assertIn("Retire it", out)
 
     def test_the_same_build_re_verified_is_not_a_reissue(self):
@@ -140,6 +154,7 @@ class BuildProvenanceGate(unittest.TestCase):
         # committing it would move HEAD and make it a different build, correctly.
         repo = self._fixture()
         head = git(repo, "rev-parse", "HEAD")
+        self._stamp(repo, head)
         doc = repo / DOC
         doc.parent.mkdir(parents=True, exist_ok=True)
         doc.write_text(
@@ -154,10 +169,10 @@ class BuildProvenanceGate(unittest.TestCase):
         # Five of five builds on the review device were stamped -dirty, so this is the
         # rule that would have prevented every one of them.
         repo = self._fixture()
+        self._stamp(repo, git(repo, "rev-parse", "HEAD"))
         generated = (
             repo / "android/app/build/generated/source/buildConfig/debug/com/you/hermeswidget"
         )
-        generated.mkdir(parents=True)
         (generated / "BuildConfig.java").write_text(
             '  public static final String COMMIT_SHA = "abc1234-dirty";\n'
         )
@@ -168,14 +183,8 @@ class BuildProvenanceGate(unittest.TestCase):
 
     def test_a_clean_stamp_is_accepted(self):
         repo = self._fixture()
-        generated = (
-            repo / "android/app/build/generated/source/buildConfig/debug/com/you/hermeswidget"
-        )
-        generated.mkdir(parents=True)
         head = git(repo, "rev-parse", "HEAD")[:12]
-        (generated / "BuildConfig.java").write_text(
-            f'  public static final String COMMIT_SHA = "{head}";\n'
-        )
+        self._stamp(repo, head)
         # An undocumented versionCode is still a finding, so the ledger must know it.
         doc = repo / DOC
         doc.parent.mkdir(parents=True, exist_ok=True)

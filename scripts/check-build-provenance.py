@@ -86,15 +86,29 @@ def spent_version_codes() -> dict[int, str]:
     return spent
 
 
-def recent_commits(count: int = 2) -> list[str]:
-    """HEAD and the commits just behind it.
+def head_pair() -> list[str]:
+    """HEAD and the commit behind it: the span the evidence document legitimately spans."""
+    return [
+        line for line in git("rev-list", "--max-count=2", "HEAD").splitlines() if line
+    ]
 
-    The release document trails HEAD by exactly one commit, because recording the numbers is
-    itself a commit. An artifact built at HEAD~1 and recorded from it is the normal steady
-    state, not a stale build: a gate that reads that as "older than the tree" makes
-    following its own convention impossible.
+
+def is_ancestor(sha: str) -> bool:
+    """True when `sha` is in this branch's history.
+
+    Ancestry, not recency, is the right question for an artifact. The release document
+    trails HEAD, recording the numbers is itself a commit, and commits that touch nothing
+    shipped — a gate fix, a doc — move the artifact further back without making it stale.
+    Whether *shipped app code* changed after the artifact was built is
+    check-version-bump.py's question, and asking it twice with different answers is how
+    two gates end up contradicting each other.
     """
-    return [line for line in git("rev-list", f"--max-count={count}", "HEAD").splitlines() if line]
+    if not sha:
+        return False
+    return subprocess.run(
+        ["git", "merge-base", "--is-ancestor", sha, "HEAD"],
+        cwd=REPO, capture_output=True,
+    ).returncode == 0
 
 
 def matches_any(sha: str, candidates: list[str]) -> bool:
@@ -131,20 +145,20 @@ def main() -> int:
     code, name = build_identity()
     spent = spent_version_codes()
 
-    # 1. A versionCode that has already been published cannot be reissued.
-    if code is not None and code in spent:
-        published_by = spent[code]
-        same_build = matches_any(published_by, recent_commits(2))
-        if not same_build:
-            problems.append(
-                f"versionCode {code} was already published by commit {published_by[:12]}. "
-                f"Android will install a different binary over the one on the device and "
-                f"app_build_code cannot tell them apart. Retire it: use {code + 1}."
-            )
-    if code is None:
-        problems.append(f"no versionCode found in {BUILD_FILE}")
-
-    # 2. The commit stamp has to be trustworthy.
+    # Three things, each one a finding, and no rule that belongs to a different gate.
+    #
+    # 1. The stamp. A dirty or unreadable COMMIT_SHA is why every build on the review
+    #    device was unattributable (finding 2). A stamp that is not in this branch's
+    #    history describes code we do not have.
+    # 2. The ledger. The recorded row must name the commit this artifact was built from.
+    #    When it does not, two binaries claim one versionCode (finding 1) - that is the
+    #    whole check, because a version number that is merely "old" is not a defect.
+    # 3. A versionCode with no row at all is undocumented, which is finding 3: a
+    #    document that does not describe the build is worse than none.
+    #
+    # Whether *shipped app code* changed after the artifact was built is
+    # check-version-bump.py's question, and asking it here as well is how two gates end up
+    # contradicting each other.
     stamp = stamped_commit()
     if stamp is None:
         if not args.allow_dirty:
@@ -155,33 +169,39 @@ def main() -> int:
             )
     elif stamp == "unknown" and not args.allow_dirty:
         problems.append(
-            "COMMIT_SHA is 'unknown': the build could not read git, so this artifact "
-            "cannot be attributed to any commit."
+            "COMMIT_SHA is 'unknown': the build could not read git, so this artifact cannot "
+            "be attributed to any commit."
         )
     elif stamp.endswith("-dirty"):
         problems.append(
-            f"COMMIT_SHA is '{stamp}': this artifact was built from a tree that did not "
-            f"match a commit, so the version it reports is not a version anyone can "
-            f"retrieve. Five consecutive builds on the review device were stamped this "
-            f"way. Commit first, then build, or the stamp only records that nobody was "
-            f"paying attention."
+            f"COMMIT_SHA is '{stamp}': this artifact was built from a tree that did not match "
+            f"a commit, so the version it reports is not a version anyone can retrieve. Five "
+            f"consecutive builds on the review device were stamped this way. Commit first, "
+            f"then build, or the stamp only records that nobody was paying attention."
         )
-    elif head and not matches_any(stamp, recent_commits(2)):
+    elif stamp and not is_ancestor(stamp):
         problems.append(
-            f"COMMIT_SHA is '{stamp}' but the tree is at {short_head}: this APK is more than "
-            f"one commit behind, so the document would describe different code. Build again."
-        )
-    elif code is not None and code in spent and stamp and not matches_any(stamp, [spent[code]]):
-        # The ledger and the artifact must agree. Two binaries claiming one versionCode
-        # differ exactly here: the ledger names the first, this stamp is the second.
-        problems.append(
-            f"versionCode {code} is recorded against {spent[code][:12]} but this artifact "
-            f"was built from {stamp}: two binaries would claim one versionCode, which is "
-            f"the exact failure this gate exists to prevent. Retire the code."
+            f"COMMIT_SHA is '{stamp}', which is not in this branch's history at "
+            f"{short_head}: the artifact was built from code this repository does not "
+            f"contain, or from a branch that has since moved. Rebuild before recording it."
         )
 
-    # 3. The release this build belongs to must be documented.
-    if code is not None and code not in spent and problems == []:
+    if code is not None and code in spent:
+        recorded = spent[code]
+        if stamp and not matches_any(stamp, [recorded]):
+            problems.append(
+                f"versionCode {code} is recorded against {recorded[:12]} but this artifact "
+                f"was built from {stamp}: two binaries would claim one versionCode, which is "
+                f"the failure this gate exists to prevent. Android installs the second over "
+                f"the first silently and app_build_code cannot tell them apart. Retire it: "
+                f"use {code + 1}."
+            )
+        elif not stamp:
+            problems.append(
+                f"versionCode {code} is recorded against {recorded[:12]} but this build "
+                f"carries no stamp, so it cannot be shown to be that same build."
+            )
+    elif code is not None and not problems:
         problems.append(
             f"versionCode {code} ({name}) has no row in {DOC}. Record it with "
             f"scripts/release-evidence.py so the artifact and the code that made it stay "
