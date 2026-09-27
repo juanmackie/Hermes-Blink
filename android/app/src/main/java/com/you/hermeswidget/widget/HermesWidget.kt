@@ -148,8 +148,9 @@ class HermesWidget : GlanceAppWidget() {
                     snapshot.publication != null && !snapshot.publication.isExpired() ->
                         PublicationSurface(snapshot, spec, dark, instanceId)
                     snapshot.publication?.isExpired() == true -> EmptyState(
-                        "Publication expired",
-                        "Open the app to refresh the connection.",
+                        "Nothing current to show",
+                        "This phone is healthy — Hermes has no unexpired publication, so " +
+                            "the next one it publishes appears here.",
                         spec = spec,
                         dark = dark,
                         accent = WidgetTheme.accent(context, dark, null),

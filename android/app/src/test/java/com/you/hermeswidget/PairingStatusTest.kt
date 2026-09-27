@@ -2,6 +2,7 @@ package com.you.hermeswidget
 
 import com.you.hermeswidget.net.ConnectionState
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -25,6 +26,8 @@ class PairingStatusTest {
         connection: ConnectionState = ConnectionState.ONLINE,
         lastPollAt: Long? = now - 30_000,
         lastFetchAt: Long? = now - 25_000,
+        lastCheckedAt: Long? = now - 27_000,
+        content: PairingStatus.Content? = null,
         pairingInFlight: Boolean = false,
     ) = PairingStatus(
         paired = paired,
@@ -32,6 +35,8 @@ class PairingStatusTest {
         connection = connection,
         lastPollAt = lastPollAt,
         lastFetchAt = lastFetchAt,
+        lastCheckedAt = lastCheckedAt,
+        content = content,
         pairingInFlight = pairingInFlight,
         now = now,
     )
@@ -51,8 +56,45 @@ class PairingStatusTest {
         assertEquals(PairingStatus.Tone.PAIRED, s.tone)
         assertTrue(s.summary.contains("Paired as dvc_abc123"))
         assertTrue(s.summary, s.summary.contains("polled 30s ago"))
-        assertTrue(s.summary, s.summary.contains("fetched 25s ago"))
-        assertTrue(s.detail!!, s.detail!!.contains("Last fetch"))
+        assertTrue(s.summary, s.summary.contains("new content 25s ago"))
+        assertTrue(s.detail!!, s.detail!!.contains("Last new content"))
+    }
+
+    @Test
+    fun `being asked is not the same as receiving`() {
+        // Round 15: a 304 was recorded as a fetch, so this screen said "Last fetch 26s
+        // ago" while the widget said the publication had expired. Both were true and the
+        // two numbers contradicted each other.
+        val s = status(lastFetchAt = now - 4 * 3_600_000, lastCheckedAt = now - 26_000)
+        assertTrue(s.summary, s.summary.contains("polled 30s ago"))
+        assertTrue(s.summary, s.summary.contains("new content 4 h ago"))
+
+        val neverNew = status(lastFetchAt = null, lastCheckedAt = now - 26_000)
+        assertTrue(
+            neverNew.summary,
+            neverNew.summary.contains("nothing new; asked 26s ago"),
+        )
+        assertTrue(
+            "with no new content the summary must not claim a fetch",
+            !neverNew.summary.contains("new content"),
+        )
+    }
+
+    @Test
+    fun `expired content reads as waiting on Hermes, not as a fault`() {
+        val s = status(
+            content = PairingStatus.Content(ageMillis = 4 * 3_600_000, expired = true, revision = 24),
+            lastFetchAt = null, lastCheckedAt = now - 26_000,
+        )
+        assertEquals(PairingStatus.Tone.WAITING, s.tone)
+        assertTrue(s.summary, s.summary.contains("waiting on Hermes"))
+        assertTrue(s.summary, s.summary.contains("revision 24"))
+        assertTrue(s.summary, s.summary.contains("expired 4 h ago"))
+        assertTrue("no doubled unit", !s.summary.contains("ago ago"))
+        assertTrue(
+            s.detail!!,
+            s.detail!!.contains("healthy") && s.detail!!.contains("publishes"),
+        )
     }
 
     @Test
@@ -68,6 +110,12 @@ class PairingStatusTest {
         val s = status(pairingInFlight = true)
         assertEquals(PairingStatus.Tone.WORKING, s.tone)
         assertTrue(s.summary.contains("Pairing"))
+    }
+
+    @Test
+    fun `a never-polled phone says so`() {
+        val s = status(lastPollAt = null, lastFetchAt = null, lastCheckedAt = null)
+        assertTrue(s.summary, s.summary.contains("never polled"))
     }
 
     @Test

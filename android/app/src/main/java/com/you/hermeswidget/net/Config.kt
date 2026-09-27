@@ -23,6 +23,9 @@ object Config {
     private const val KEY_LAST_CHECKED_AT = "last_checked_at"
     private const val KEY_LAST_POLL_AT = "last_poll_at"
     private const val KEY_LAST_FETCH_AT = "last_fetch_at"
+    // Distinct from KEY_LAST_CHECKED_AT: that is when the connection state was last
+    // evaluated, this is when the server was last asked about the publication.
+    private const val KEY_LAST_PUBLICATION_CHECK = "last_publication_check"
     private const val KEY_LAST_RENDER_AT = "last_render_at"
     private const val KEY_BATTERY_EXEMPTION = "battery_exemption"
     private const val KEY_PENDING_ACTIONS = "pending_actions"
@@ -161,11 +164,15 @@ object Config {
     }
 
     fun setDiagnosticTime(context: Context, key: String, at: Long = System.currentTimeMillis()) {
-        require(key in setOf("poll", "fetch", "render")) { "unknown diagnostic time" }
+        // "fetch" is reserved for new content arriving. Asking the server and being told
+        // "unchanged" is `checked`: conflating the two is what made a screen report a
+        // healthy "Last fetch 26s ago" while the widget said the publication had expired.
+        require(key in setOf("poll", "fetch", "render", "checked")) { "unknown diagnostic time" }
         prefs(context).edit().putLong(
             when (key) {
                 "poll" -> KEY_LAST_POLL_AT
                 "fetch" -> KEY_LAST_FETCH_AT
+                "checked" -> KEY_LAST_PUBLICATION_CHECK
                 else -> KEY_LAST_RENDER_AT
             }, at
         ).apply()

@@ -61,9 +61,16 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
         if (result.outcome == RefreshOutcome.EMPTY) refreshLegacyLayout()
         HermesWidget().updateAll(applicationContext)
 
+        // Asked the server: true whether it sent something new or said "unchanged".
         if (result.outcome == RefreshOutcome.UPDATED ||
             result.outcome == RefreshOutcome.NOT_MODIFIED
         ) {
+            Config.setDiagnosticTime(applicationContext, "checked")
+        }
+        // New content actually arrived. Round 15: recording a 304 here is what let the
+        // status screen claim a fresh fetch while the widget reported an expired
+        // publication, and the two were both true and impossible to reconcile.
+        if (result.outcome == RefreshOutcome.UPDATED) {
             Config.setDiagnosticTime(applicationContext, "fetch")
             val (width, height) = WidgetDimensions.fromContext(applicationContext)
             if (PublicationRepository.acknowledgeRenderSubmitted(applicationContext, width, height)) {

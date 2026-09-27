@@ -158,6 +158,8 @@ class SettingsActivity : Activity() {
             PairingStatus.Tone.WORKING -> R.color.app_primary
             PairingStatus.Tone.PROBLEM -> R.color.unpaired_indicator
             PairingStatus.Tone.UNPAIRED -> R.color.unpaired_indicator
+            // Waiting is not a fault: the phone is healthy, the host has nothing current.
+            PairingStatus.Tone.WAITING -> R.color.app_primary
         }
         statusDot.background?.mutate()?.setTint(ContextCompat.getColor(this, color))
     }

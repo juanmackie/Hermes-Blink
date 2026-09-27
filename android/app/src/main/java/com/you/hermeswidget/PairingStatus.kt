@@ -1,6 +1,7 @@
 package com.you.hermeswidget
 
 import com.you.hermeswidget.net.ConnectionState
+import com.you.hermeswidget.net.PublicationRepository
 
 /**
  * What the Settings screen says about pairing, as a pure value.
@@ -16,19 +17,30 @@ data class PairingStatus(
     val connection: ConnectionState,
     /** Last successful poll, or null when this phone has never polled. */
     val lastPollAt: Long?,
-    /** Last successful fetch of a publication, or null. */
+    /** Last time new publication content arrived, or null. */
     val lastFetchAt: Long?,
+    /** Last time the server was asked about the publication, new content or not. */
+    val lastCheckedAt: Long? = null,
+    /** What the cached publication says about itself, for the status line. */
+    val content: Content? = null,
     /** A pairing attempt is in flight right now. */
     val pairingInFlight: Boolean = false,
     val now: Long = System.currentTimeMillis(),
 ) {
-    enum class Tone { PAIRED, WORKING, UNPAIRED, PROBLEM }
+    enum class Tone { PAIRED, WORKING, UNPAIRED, PROBLEM, WAITING }
+
+    /** The cached publication's own state, as opposed to the connection's. */
+    data class Content(val ageMillis: Long?, val expired: Boolean, val revision: Int?)
 
     val tone: Tone
         get() = when {
             pairingInFlight -> Tone.WORKING
             !paired -> Tone.UNPAIRED
             connection == ConnectionState.REVOKED || connection == ConnectionState.ERROR -> Tone.PROBLEM
+            // Expired content is a *condition*, not a fault: the phone is healthy and the
+            // host has nothing current to send. It reads as a problem here only because
+            // the user cannot otherwise tell "waiting" from "broken".
+            content?.expired == true -> Tone.WAITING
             else -> Tone.PAIRED
         }
 
@@ -42,6 +54,13 @@ data class PairingStatus(
                 ConnectionState.ERROR -> "Connected earlier, now failing — re-pair if this persists"
                 else -> "Connection problem — open Diagnostics"
             } + pollSuffix()
+            Tone.WAITING -> buildString {
+                append("Paired")
+                deviceId?.let { append(" as $it") }
+                append(" · waiting on Hermes")
+                append(contentSuffix())
+                append(pollSuffix())
+            }
             Tone.PAIRED -> buildString {
                 append("Paired")
                 deviceId?.let { append(" as $it") }
@@ -52,8 +71,13 @@ data class PairingStatus(
     /** A second line only when there is something worth saying beyond the summary. */
     val detail: String?
         get() = when (tone) {
+            Tone.WAITING ->
+                "Hermes has no current publication. This phone is healthy; the widget will " +
+                    "show the next one the agent publishes."
             Tone.PAIRED -> when (connection) {
-                ConnectionState.ONLINE -> "Last fetch: ${ageOf(lastFetchAt) ?: "waiting for the first one"}"
+                ConnectionState.ONLINE ->
+                    "Last new content: ${ageOf(lastFetchAt) ?: "none yet"} · " +
+                        "last asked: ${ageOf(lastCheckedAt) ?: "never"}"
                 // Never claim there is a cached publication before one has been fetched.
                 ConnectionState.OFFLINE -> if (lastFetchAt == null || lastFetchAt <= 0L) {
                     "Offline — nothing has been fetched yet, so the widget has nothing to show"
@@ -68,8 +92,28 @@ data class PairingStatus(
 
     private fun pollSuffix(): String {
         val poll = ageOf(lastPollAt) ?: return " · never polled"
-        val fetch = ageOf(lastFetchAt) ?: return " · last poll $poll"
-        return " · polled $poll · fetched $fetch"
+        // Two facts, not one: when we last asked, and when something new actually arrived.
+        val checked = ageOf(lastCheckedAt)
+        val fetch = ageOf(lastFetchAt)
+        return buildString {
+            append(" · polled ").append(poll)
+            when {
+                fetch != null -> append(" · new content ").append(fetch)
+                checked != null -> append(" · nothing new; asked ").append(checked)
+                else -> append(" · no content yet")
+            }
+        }
+    }
+
+    /** Why the widget is showing what it is showing. */
+    private fun contentSuffix(): String = buildString {
+        content?.revision?.let { append(" · revision ").append(it) }
+        val age = content?.ageMillis?.let { ageOf(now - it) }
+        when {
+            content?.expired == true && age != null ->
+                append(" · the copy on screen expired ").append(age)
+            age != null -> append(" · content ").append(age).append(" old")
+        }
     }
 
     private fun ageOf(at: Long?): String? {

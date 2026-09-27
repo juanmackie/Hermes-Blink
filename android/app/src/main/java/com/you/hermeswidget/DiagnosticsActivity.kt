@@ -125,7 +125,10 @@ class DiagnosticsActivity : Activity() {
             append("App: ${AppIdentity.describe(identity)} \u00b7 Android API ${identity.osSdk}\n")
             identity.appBuildSha?.let { append("Build commit: $it\n") }
             append("Last poll: ${label(times["lastPollAt"])}\n")
-            append("Last fetch: ${label(times["lastFetchAt"])}\n")
+            append("Asked the server: ${label(times["lastPublicationCheck"])}\n")
+            // "Last fetch" is new content arriving. A 304 is not a fetch, and counting
+            // one is what made this screen disagree with the widget.
+            append("New content: ${label(times["lastFetchAt"])}\n")
             append("Last render: ${label(times["lastRenderAt"])}\n")
             append("Last connection check: ${label(Config.getLastCheckedAt(this@DiagnosticsActivity))}")
         }

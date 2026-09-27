@@ -905,6 +905,49 @@ def main() -> int:
     if "ClientBuildReporting" not in (PLUGIN / "tests" / "test_delivery.py").read_text(encoding="utf-8"):
         fail("client-build", "no host test covers client build reporting")
 
+    # --- "asked" and "received" are different facts (round 15) ------------------
+    # Field evidence: the widget said the publication had expired while this app
+    # reported "Last fetch 26s ago". Both were true — the server had answered 304 to a
+    # poll, and nothing new had arrived in hours. A 304 is an *ask*, not a fetch.
+    worker_kt = source_of(
+        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
+        / "work" / "RefreshWorker.kt"
+    )
+    fetch_recorded = re.search(
+        r'if \(result\.outcome == RefreshOutcome\.UPDATED\) \{\s*'
+        r'Config\.setDiagnosticTime\(applicationContext, "fetch"\)',
+        worker_kt,
+    )
+    if not fetch_recorded:
+        fail("fetch-vs-check",
+             "a fetch may only be recorded for RefreshOutcome.UPDATED; NOT_MODIFIED is the "
+             "server saying 'unchanged' and must be recorded as a check instead")
+    check_recorded = re.search(
+        r'RefreshOutcome\.UPDATED \|\|\s*\n\s*result\.outcome == RefreshOutcome\.NOT_MODIFIED'
+        r'[\s\S]{0,120}?"checked"',
+        worker_kt,
+    )
+    if not check_recorded:
+        fail("fetch-vs-check",
+             "a 304 must still be recorded, as a check: the phone asked and the server "
+             "answered")
+    config_kt = source_of(
+        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
+        / "net" / "Config.kt"
+    )
+    if "last_checked_at" not in config_kt or "last_publication_check" not in config_kt:
+        fail("fetch-vs-check",
+             "the connection check and the publication check are different timestamps and "
+             "need different keys; merging them is how the two screens contradicted")
+    widget_src = source_of(
+        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
+        / "widget" / "HermesWidget.kt"
+    )
+    if "Open the app to refresh the connection" in widget_src:
+        fail("fetch-vs-check",
+             "the expired state must not tell the user to refresh from the app: the app "
+             "cannot publish, the host can, and the old wording sent them nowhere")
+
     # --- the radius fallback lives in resources, not in Kotlin -------------
     if not DIMENS_XML.is_file() or "widget_corner_radius" not in DIMENS_XML.read_text(encoding="utf-8"):
         fail("corner-radius", "values/dimens.xml must hold the widget_corner_radius fallback (WS-2)")
