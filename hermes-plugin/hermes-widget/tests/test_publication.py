@@ -240,6 +240,27 @@ class PublicationContract(unittest.TestCase):
         self.assertNotIn("widget_update", prompt)
         self.assertIn("not that the phone rendered", prompt)
 
+    def test_routine_prompt_honors_a_waiting_update_request(self):
+        prompt = self.proactive.routine_prompt("hermes-brief")
+        # The phone's Request update action records a row the routine has to notice.
+        # Without this the tap wakes the agent and it no-ops as an ambient refresh,
+        # so the user who asked for a fresher brief gets silence.
+        self.assertIn("updateRequests", prompt)
+        self.assertIn("Request update", prompt)
+        # A waiting request is a reason to publish, not a licence to invent content.
+        self.assertIn("publish what you already know now", prompt)
+        # The routine still must not steer the agent to the legacy tool.
+        self.assertNotIn("widget_update", prompt)
+
+    def test_proactive_guidance_covers_a_waiting_update_request(self):
+        plugin = _load_plugin()
+        guidance = plugin._system_prompt_section({})
+        # The in-session section is the only always-present trigger, so a mid-conversation
+        # poke has to be covered here as well as in the unattended routine prompt.
+        self.assertIn("updateRequests", guidance)
+        self.assertIn("Request update", guidance)
+        self.assertLessEqual(len(guidance), 1800)
+
     def test_routine_update_removes_duplicate_jobs(self):
         class FakeJobs:
             def __init__(self):

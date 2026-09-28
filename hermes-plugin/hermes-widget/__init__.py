@@ -67,7 +67,9 @@ _PROACTIVE_GUIDANCE = (
     "priority is only for genuinely time-sensitive content. Publishing stores a revision; "
     "it never proves the user saw it (publishing does not prove delivery or visibility). "
     "If setup is missing, use widget_setup rather than "
-    "guessing private paths."
+    "guessing private paths. When widget_status lists a waiting entry in updateRequests, the "
+    "user tapped Request update on the widget and wants something fresher: publish what you "
+    "know now rather than waiting for the next scheduled run."
 )
 
 

@@ -222,6 +222,12 @@ a reminder into every turn.
 
 The widget's **Request update** action is a generic poke: it records a request and triggers
 the existing refresh routine. The agent decides from current context whether to publish.
+A recorded request is a *reason to publish*, not just another wake: `widget_status` lists it
+under `updateRequests`, and both the in-session guidance and the routine prompt tell the agent
+that a waiting entry means the user asked for something fresher, so it publishes what it
+already knows instead of treating the run as an ambient refresh and doing nothing. A poke is
+still not proof of delivery — publish, then read `widget_status` for the fetch and render
+states.
 
 Standing watches are evaluated by the routine before an ordinary publish. The agent creates
 them with `widget_watch_create`, supplies bounded source snapshots to `widget_watch_tick`, and
