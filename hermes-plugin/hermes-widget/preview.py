@@ -789,7 +789,10 @@ def _size_names(sizes: Any, inventory: list[dict] | None = None) -> list[tuple[s
             else:
                 result.append((name, *PUBLICATION_SIZES[name], False))
             continue
-        match = re.fullmatch(r"(\d{2,5})x(\d{2,5})", name)
+        # One digit is allowed because the range check below admits 1dp; a widget can be
+        # dragged smaller than any named cell, and "unknown preview size 9x9" was a refusal
+        # the ladder never needed to make.
+        match = re.fullmatch(r"(\d{1,5})x(\d{1,5})", name)
         if not match:
             raise ValueError(f"unknown preview size {name!r}")
         width, height = int(match.group(1)), int(match.group(2))

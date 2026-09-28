@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import os
 import pathlib
+import re
 import unittest
 from datetime import datetime, timezone
 
@@ -23,6 +24,7 @@ try:
     from .. import tools
     from .. import schemas
     from .. import preview
+    from .. import validate
 except ImportError:
     import sys
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
@@ -377,6 +379,98 @@ class BandBudgets(unittest.TestCase):
         # A declared value from the wire contract is always honored verbatim.
         for declared in ("2x2", "4x2", "2x4", "4x4", "custom"):
             self.assertEqual(declared, store._size_class(407, 412, declared))
+
+
+class GeometryMirror(unittest.TestCase):
+    """Hold each pair of geometry implementations to the other.
+
+    Breakpoints.kt and WidgetDimensions.kt decide what the widget draws; validate.py and
+    store._size_class decide what a publisher is warned about and which content key is
+    read. Both Python files describe themselves as mirrors of the Kotlin, and nothing held
+    them to it. If an edge moves on one side only, a layout is budgeted against a band the
+    widget never draws and every warning is confidently wrong, with no test failing.
+
+    The assertions are behavioural rather than literal: a refactor that keeps the behaviour
+    does not have to touch this test, and a drifting edge cannot hide behind a rename.
+    """
+
+    KOTLIN_LADDER = REPO / "android/app/src/main/java/com/you/hermeswidget/widget/Breakpoints.kt"
+    KOTLIN_DIMS = REPO / "android/app/src/main/java/com/you/hermeswidget/widget/WidgetDimensions.kt"
+
+    def _const(self, path: pathlib.Path, name: str) -> int:
+        match = re.search(rf"const val {name} = (\d+)", path.read_text(encoding="utf-8"))
+        self.assertIsNotNone(match, f"{name} is not declared in {path.name}")
+        return int(match.group(1))
+
+    def test_band_edges_match_the_validator(self):
+        if not self.KOTLIN_LADDER.is_file():
+            self.skipTest("Android sources are not part of this distribution")
+        xs = self._const(self.KOTLIN_LADDER, "XS_MAX_HEIGHT_DP")
+        small = self._const(self.KOTLIN_LADDER, "S_MAX_HEIGHT_DP")
+        medium = self._const(self.KOTLIN_LADDER, "M_MAX_HEIGHT_DP")
+        wide = self._const(self.KOTLIN_LADDER, "SINGLE_COLUMN_MAX_WIDTH_DP")
+        self.assertLess(xs, small, "the height ladder must be monotonic")
+        self.assertLess(small, medium, "the height ladder must be monotonic")
+        for height in range(56, 423):
+            expected = "xs" if height < xs else "s" if height < small else "m" if height < medium else "l"
+            with self.subTest(height=height):
+                self.assertEqual(expected, validate.size_band(300, height))
+        for width in (109, wide - 1, wide, wide + 1, 624):
+            with self.subTest(width=width):
+                self.assertEqual(width < wide, validate.is_single_column(width))
+
+    def test_size_class_boundaries_match_the_store(self):
+        if not self.KOTLIN_DIMS.is_file():
+            self.skipTest("Android sources are not part of this distribution")
+        min_w = self._const(self.KOTLIN_DIMS, "MIN_WIDTH_DP")
+        max_w = self._const(self.KOTLIN_DIMS, "MAX_WIDTH_DP")
+        min_h = self._const(self.KOTLIN_DIMS, "MIN_HEIGHT_DP")
+        max_h = self._const(self.KOTLIN_DIMS, "MAX_HEIGHT_DP")
+        wide = self._const(self.KOTLIN_DIMS, "WIDE_MIN_DP")
+        tall = self._const(self.KOTLIN_DIMS, "TALL_MIN_DP")
+
+        def expected(width: int, height: int) -> str:
+            if not (min_w <= width <= max_w and min_h <= height <= max_h):
+                return "custom"
+            if width >= wide and height >= tall:
+                return "4x4"
+            if width >= wide:
+                return "4x2"
+            if height >= tall:
+                return "2x4"
+            return "2x2"
+
+        widths = (min_w - 1, min_w, wide - 1, wide, wide + 1, max_w, max_w + 1)
+        heights = (min_h - 1, min_h, tall - 1, tall, tall + 1, max_h, max_h + 1)
+        for width in widths:
+            for height in heights:
+                with self.subTest(size=f"{width}x{height}"):
+                    self.assertEqual(expected(width, height), store._size_class(width, height))
+
+    def test_any_size_is_classified_rather_than_refused(self):
+        """A resizable widget gets dragged to sizes nobody enumerated; none may be refused.
+
+        Every geometry below has to produce a band, one of the contract's five size
+        classes, and a preview, because the ladders are step functions over a range and
+        not lookup tables over a fixed set of cells.
+        """
+        for width, height in ((180, 110), (300, 180), (624, 422), (110, 180), (700, 300), (100, 50)):
+            with self.subTest(size=f"{width}x{height}"):
+                self.assertIsNotNone(validate.size_band(width, height))
+                self.assertIn(
+                    store._size_class(width, height),
+                    {"2x2", "4x2", "2x4", "4x4", "custom"},
+                )
+                self.assertEqual((width, height), preview._size_names(f"{width}x{height}")[0][1:3])
+
+    def test_single_digit_preview_sizes_are_accepted(self):
+        # preview.py range-checks 1..4096, so a one-digit size has to parse too.
+        for size in ("9x9", "1x1", "12x7"):
+            with self.subTest(size=size):
+                self.assertEqual(
+                    (int(size.split("x")[0]), int(size.split("x")[1])),
+                    preview._size_names(size)[0][1:3],
+                )
 
 
 class PreviewRender(unittest.TestCase):
