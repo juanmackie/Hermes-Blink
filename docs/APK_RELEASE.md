@@ -14,16 +14,16 @@ an earlier commit is worse than no document at all — it looks current.
 | Field | Value |
 | --- | --- |
 | Artifact | `android/app/build/outputs/apk/debug/app-debug.apk` |
-| Size | 9,749,443 bytes |
-| SHA-256 | `61e8f6f22088540c8467957646fff08e76c58dadf67c8654da0cebf3859da700` |
+| Size | 9,750,534 bytes |
+| SHA-256 | `c36b13d479521c565b1d6bd28ace5b844ba1a9d35dc1f08204ea27c5b06f7404` |
 | Package | `com.you.hermeswidget` |
 | Version | `0.4.9` (`versionCode=13`) |
-| Build commit | `d4c7f4c56be5` (also sent by the app as `X-Hermes-App-Sha`) |
+| Build commit | `0f25d7713639` (also sent by the app as `X-Hermes-App-Sha`) |
 | SDK range | minSdk 26, targetSdk 35 |
 | Signer | Android debug certificate; local testing only |
 
 0.4.9 is the Material 3 round and the first build with `com.google.android.material` in
-it: 7,279,075 → 9,749,443 bytes (+33.9%) against 0.4.8. Nothing here sets
+it: 7,279,075 → 9,750,534 bytes (+33.9%) against 0.4.8. Nothing here sets
 `isMinifyEnabled`, so that is the release cost too, not a debug-only one — see round 15 in
 `docs/APP_SURFACE.md`.
 
@@ -31,7 +31,7 @@ it: 7,279,075 → 9,749,443 bytes (+33.9%) against 0.4.8. Nothing here sets
 
 | Version | Commit | Size | SHA-256 |
 | --- | --- | --- | --- |
-| `0.4.9` (versionCode 13) | `d4c7f4c56be5` | 9,749,443 bytes | `61e8f6f22088540c8467957646fff08e76c58dadf67c8654da0cebf3859da700` |
+| `0.4.9` (versionCode 13) | `0f25d7713639` | 9,750,534 bytes | `c36b13d479521c565b1d6bd28ace5b844ba1a9d35dc1f08204ea27c5b06f7404` |
 | `0.4.8` (versionCode 12) | `1b16bb6c5a51` | 7,279,099 bytes | `0191a3a5560d1e6164f496cbe8c48dedb40804d864e856bc228ce47eb9a86c40` |
 | `0.4.7` (versionCode 11) | `bf56f9e930b4` | 7,278,183 bytes | `bb53fa6e3e79933ffebb4aece0fb22084639347ce0422228de4fbe111b846f30` |
 | `0.4.6` (versionCode 10) | `076f56e512d6` | 7,278,191 bytes | `f03494c32a62747a400000000000000000000000000000000000000000000000` |

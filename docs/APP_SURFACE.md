@@ -430,7 +430,7 @@ drawerlayout, cardview. The cost, measured on a clean `assembleDebug` against `f
 | Build | Bytes | Note |
 | --- | --- | --- |
 | `f5c0068` (before) | 7,279,075 | |
-| versionCode 13 (this round) | 9,749,455 | +2,470,380 (+33.9%) |
+| versionCode 13 (this round) | 9,750,534 | +2,471,459 (+33.9%) |
 | uncompressed | 16,991,803 → 21,524,094 | +4,532,291 (+26.7%) |
 
 No build type here sets `isMinifyEnabled`, so the release APK is unminified too and this
