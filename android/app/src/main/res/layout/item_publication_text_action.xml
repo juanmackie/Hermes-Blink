@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A low-emphasis action on the publication screen: "Previous states" is inspection, not
+  something to do, so it gets the MD3 text-button step rather than a pill.
+-->
+<com.google.android.material.button.MaterialButton
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/action_button"
+    style="@style/ButtonText"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="@dimen/space_xs" />

@@ -1,15 +1,16 @@
 package com.you.hermeswidget
 
-import android.app.Activity
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
 import android.os.Bundle
 import android.os.PowerManager
 import android.provider.Settings
-import android.widget.Button
+import android.view.View
 import android.widget.TextView
-import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.snackbar.Snackbar
 import org.json.JSONObject
 import android.util.Log
 import com.you.hermeswidget.net.AppIdentity
@@ -20,13 +21,14 @@ import java.text.DateFormat
 import java.util.Date
 
 /** A deliberately boring diagnostics screen: timestamps and exemption state, no secrets. */
-class DiagnosticsActivity : Activity() {
+class DiagnosticsActivity : AppCompatActivity() {
     private lateinit var status: TextView
     private lateinit var exemption: TextView
     private lateinit var pushState: TextView
     private lateinit var instances: TextView
     private lateinit var actions: TextView
     private lateinit var composition: TextView
+    private lateinit var root: View
 
     /**
      * The whole widget-action trail as one block of text, for the clipboard.
@@ -87,32 +89,53 @@ class DiagnosticsActivity : Activity() {
         super.onCreate(savedInstanceState)
         AppIdentity.attach(this)
         setContentView(R.layout.activity_diagnostics)
+        // MD3 top app bar with a close affordance: this screen is a panel, not a step in a
+        // flow, so it closes rather than navigating up — and the back affordance still
+        // works, because the platform's back gesture does the same thing.
+        setSupportActionBar(findViewById<MaterialToolbar>(R.id.top_app_bar))
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        // Set through the ActionBar rather than left to the layout: what
+        // setDisplayHomeAsUpEnabled does to an icon that is already there has changed
+        // between AppCompat versions, and "looks like a back arrow but closes the screen"
+        // is the kind of small lie a top app bar should not tell.
+        supportActionBar?.setHomeAsUpIndicator(R.drawable.ic_close)
+        root = findViewById(android.R.id.content)
         status = findViewById(R.id.diagnostics_status)
         exemption = findViewById(R.id.battery_exemption_status)
         pushState = findViewById(R.id.push_state_status)
         instances = findViewById(R.id.widget_instances_status)
         actions = findViewById(R.id.action_outcomes_status)
         composition = findViewById(R.id.widget_composition_status)
-        findViewById<Button>(R.id.request_battery_exemption).setOnClickListener {
+        findViewById<View>(R.id.request_battery_exemption).setOnClickListener {
             requestExemption()
         }
         // The manual pin button always acts and always reports: it used to return silently
         // once an automatic offer had been made, which is what made it look broken.
-        findViewById<Button>(R.id.pin_widget).setOnClickListener {
+        findViewById<View>(R.id.pin_widget).setOnClickListener {
             WidgetPinning.offerNow(this, this)
         }
-        findViewById<Button>(R.id.copy_widget_trail).setOnClickListener {
+        findViewById<View>(R.id.copy_widget_trail).setOnClickListener {
             val report = widgetTrailReport()
             val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
             clipboard.setPrimaryClip(ClipData.newPlainText("hermes-widget-trail", report))
-            Toast.makeText(this, R.string.diagnostics_copied, Toast.LENGTH_SHORT).show()
+            say(getString(R.string.diagnostics_copied))
         }
-        findViewById<Button>(R.id.close_diagnostics).setOnClickListener {
+        findViewById<View>(R.id.close_diagnostics).setOnClickListener {
             // No transition: this is a plain screen closing, and the system animation on a
             // diagnostics panel read as the button not having worked.
             finish()
             overridePendingTransition(0, 0)
         }
+    }
+
+    override fun onSupportNavigateUp(): Boolean {
+        finish()
+        return true
+    }
+
+    /** MD3's transient message: a snackbar, in the app's own surface and type scale. */
+    private fun say(message: String) {
+        Snackbar.make(root, message, Snackbar.LENGTH_SHORT).show()
     }
 
     override fun onResume() {
@@ -291,18 +314,18 @@ class DiagnosticsActivity : Activity() {
     private fun requestExemption() {
         val manager = getSystemService(POWER_SERVICE) as PowerManager
         if (manager.isIgnoringBatteryOptimizations(packageName)) {
-            Toast.makeText(this, R.string.battery_exempt, Toast.LENGTH_SHORT).show()
+            say(getString(R.string.battery_exempt))
             return
         }
         val opened = runCatching {
             startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
             true
         }.getOrDefault(false)
-        Toast.makeText(
-            this,
-            if (opened) R.string.battery_settings_opened else R.string.battery_settings_failed,
-            Toast.LENGTH_LONG,
-        ).show()
+        say(
+            getString(
+                if (opened) R.string.battery_settings_opened else R.string.battery_settings_failed,
+            ),
+        )
         Log.i("HermesDiagnostics", "battery settings opened=$opened")
     }
 }

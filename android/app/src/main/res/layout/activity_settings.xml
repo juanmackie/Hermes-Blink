@@ -1,128 +1,163 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Settings: the private address, the pairing code and this device's name, stacked with
-  16dp gutters on the themed canvas. Fields sit on a tonal container so the three of them
-  read as one group rather than three loose boxes.
+  Settings: the private address, the pairing code and this device's name, in Material 3.
+
+  What changed from the hand-rolled version: the fields are TextInputLayout outlined
+  boxes, so the label sits in the outline's cut-out and grows into the outline on focus
+  (the old `TextField` style could only swap its whole background, which is why a focused
+  field had to invent its own state); the grouping surfaces are MaterialCardView, so depth
+  is tone rather than a drop shadow; and the top app bar gives the screen a way back,
+  which the DarkActionBar used to provide.
 -->
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true">
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
 
-    <LinearLayout
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/top_app_bar"
+        style="@style/TopAppBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="@dimen/space_lg">
+        app:navigationIcon="@drawable/ic_arrow_back"
+        app:title="@string/settings_title" />
 
-        <TextView
-            style="@style/TextTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/settings_title" />
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
 
-        <TextView
-            style="@style/TextBodySmall"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_sm"
-            android:text="@string/pairing_instructions" />
-
-        <!-- Live pairing state. Polled every 2s while this screen is open, so a pairing
-             that completes in another window shows up here without a manual refresh. -->
         <LinearLayout
-            style="@style/SurfaceCard"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md"
-            android:orientation="vertical">
-
-            <LinearLayout
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:gravity="center_vertical"
-                android:orientation="horizontal">
-
-                <View
-                    android:id="@+id/pairing_status_dot"
-                    android:layout_width="10dp"
-                    android:layout_height="10dp"
-                    android:background="@drawable/status_dot" />
-
-                <TextView
-                    android:id="@+id/pairing_status"
-                    style="@style/TextBody"
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:layout_marginStart="@dimen/space_sm"
-                    android:text="@string/settings_unpaired"
-                    android:textStyle="bold" />
-            </LinearLayout>
+            android:orientation="vertical"
+            android:padding="@dimen/space_lg">
 
             <TextView
-                android:id="@+id/pairing_status_detail"
                 style="@style/TextBodySmall"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/space_xs"
-                android:visibility="gone" />
-        </LinearLayout>
+                android:text="@string/pairing_instructions" />
 
-        <LinearLayout
-            style="@style/SurfaceCard"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_sm"
-            android:orientation="vertical">
+            <!-- Live pairing state. Polled every 2s while this screen is open, so a pairing
+                 that completes in another window shows up here without a manual refresh. -->
+            <com.google.android.material.card.MaterialCardView
+                style="@style/SurfaceCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_md">
 
-            <EditText
-                android:id="@+id/backend_url_input"
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <LinearLayout
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
+
+                        <View
+                            android:id="@+id/pairing_status_dot"
+                            android:layout_width="10dp"
+                            android:layout_height="10dp"
+                            android:background="@drawable/status_dot" />
+
+                        <TextView
+                            android:id="@+id/pairing_status"
+                            style="@style/TextBody"
+                            android:layout_width="match_parent"
+                            android:layout_height="wrap_content"
+                            android:layout_marginStart="@dimen/space_sm"
+                            android:text="@string/settings_unpaired"
+                            android:textStyle="bold" />
+                    </LinearLayout>
+
+                    <TextView
+                        android:id="@+id/pairing_status_detail"
+                        style="@style/TextBodySmall"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_xs"
+                        android:visibility="gone" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/backend_url_field"
                 style="@style/TextField"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:autofillHints="url"
-                android:hint="@string/backend_url_hint"
-                android:inputType="textUri" />
+                android:layout_marginTop="@dimen/space_md"
+                android:hint="@string/backend_url_hint">
 
-            <EditText
-                android:id="@+id/pairing_code_input"
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/backend_url_input"
+                    style="@style/TextFieldInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autofillHints="url"
+                    android:imeOptions="actionNext"
+                    android:inputType="textUri" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/pairing_code_field"
                 style="@style/TextField"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_md"
+                android:hint="@string/pairing_code_hint">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/pairing_code_input"
+                    style="@style/TextFieldInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autofillHints="off"
+                    android:imeOptions="actionNext"
+                    android:inputType="textCapCharacters"
+                    android:maxLength="32" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/device_label_field"
+                style="@style/TextField"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_md"
+                android:hint="@string/device_label_hint">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/device_label_input"
+                    style="@style/TextFieldInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autofillHints="off"
+                    android:imeOptions="actionDone"
+                    android:inputType="textPersonName"
+                    android:maxLength="64" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/connect_btn"
+                style="@style/ButtonFilled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_lg"
+                android:text="@string/pair_device" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/rename_btn"
+                style="@style/ButtonOutlined"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="@dimen/space_sm"
-                android:autofillHints="off"
-                android:hint="@string/pairing_code_hint"
-                android:inputType="textCapCharacters"
-                android:maxLength="32" />
-
-            <EditText
-                android:id="@+id/device_label_input"
-                style="@style/TextField"
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="@dimen/space_sm"
-                android:autofillHints="off"
-                android:hint="@string/device_label_hint"
-                android:inputType="textPersonName"
-                android:maxLength="64" />
+                android:text="@string/rename_device" />
         </LinearLayout>
-
-        <Button
-            android:id="@+id/connect_btn"
-            style="@style/ButtonFilled"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="end"
-            android:layout_marginTop="@dimen/space_md"
-            android:text="@string/pair_device" />
-
-        <Button
-            android:id="@+id/rename_btn"
-            style="@style/ButtonOutlined"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_gravity="end"
-            android:layout_marginTop="@dimen/space_sm"
-            android:text="@string/rename_device" />
-    </LinearLayout>
-</ScrollView>
+    </ScrollView>
+</LinearLayout>

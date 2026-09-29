@@ -5,7 +5,7 @@ import android.appwidget.AppWidgetManager
 import android.content.ComponentName
 import android.content.Context
 import android.util.Log
-import android.widget.Toast
+import com.google.android.material.snackbar.Snackbar
 import com.you.hermeswidget.widget.HermesWidgetReceiver
 
 /**
@@ -58,7 +58,7 @@ object WidgetPinning {
         // user should not be asked a second time.
         prefs.edit().putBoolean(KEY_OFFERED, true).apply()
         if (result == Result.REQUESTED) {
-            Toast.makeText(context, context.getString(R.string.widget_pin_offered), Toast.LENGTH_LONG).show()
+            say(activity, context.getString(R.string.widget_pin_offered))
         }
         return result
     }
@@ -81,8 +81,19 @@ object WidgetPinning {
             Result.UNSUPPORTED -> context.getString(R.string.widget_pin_unsupported)
             Result.REFUSED -> context.getString(R.string.widget_pin_refused)
         }
-        Toast.makeText(context, message, Toast.LENGTH_LONG).show()
+        say(activity, message)
         return result
+    }
+
+    /**
+     * MD3's transient message. Anchored to the activity rather than the application
+     * context: a snackbar needs a view to attach to, and the platform toast this replaces
+     * drew itself over whatever was on screen — including the system "add widget" sheet
+     * that is on screen at exactly this moment.
+     */
+    private fun say(activity: Activity, message: String) {
+        val anchor = activity.findViewById<android.view.View>(android.R.id.content) ?: return
+        Snackbar.make(anchor, message, Snackbar.LENGTH_LONG).show()
     }
 
     private fun request(context: Context): Result {

@@ -1,8 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Outlined button: hairline outline, transparent fill, pill, with a press state.
-     The mask matters here: the fill is transparent, so without it the ripple would spill
-     past the pill's rounded corners. -->
+<!--
+  Outlined button: transparent fill inside a 1dp outline boundary, pill, state layer in
+  primary over the surface it sits on.
+
+  Kept as the fallback for a plain <Button>, with the same reason and the same gate as
+  bg_button_tonal.xml: MaterialButton draws this itself now, and
+  `check-contract-parity.py` fails if the ripple or the mask goes. The mask is the part
+  that matters most here — without it the ripple spills outside the pill on a button whose
+  fill is transparent.
+-->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="UnusedResources"
     android:color="@color/app_state_layer_outlined">
     <item android:id="@android:id/mask">
         <shape android:shape="rectangle">

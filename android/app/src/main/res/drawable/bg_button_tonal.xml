@@ -1,6 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Tonal button: primary-container fill, pill, with a press state. -->
+<!--
+  Tonal button: primary-container fill, pill, state layer in the control's own ink.
+
+  Kept as the fallback for a plain <Button>. The MD3 screens use MaterialButton, which
+  draws this shape and this state layer itself from the theme, so the file is no longer
+  what a user sees — but it is the app's statement of the tonal button's geometry, and
+  `check-contract-parity.py` fails if a button background ever loses its ripple, which is
+  the whole of "the buttons do nothing" (round 6).
+-->
 <ripple xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="UnusedResources"
     android:color="@color/app_state_layer_tonal">
     <item android:id="@android:id/mask">
         <shape android:shape="rectangle">

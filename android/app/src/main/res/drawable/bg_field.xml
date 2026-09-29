@@ -1,7 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Text field: container-high fill, 12dp radius, outline-variant boundary, and a
-     focused state so a user knows which field they are typing into. -->
-<selector xmlns:android="http://schemas.android.com/apk/res/android">
+<!--
+  The plain-View field: a tonal container with a focused state, kept as the fallback for a
+  bare <EditText> that is not inside a TextInputLayout.
+
+  The MD3 screens use TextInputLayout's outlined box, which carries its own focus cue (the
+  outline thickens to 2dp in primary and the label moves up into it) — that is the reason
+  this file is no longer what a user sees. It stays because it is the app's statement of
+  the field geometry (container-high fill, 12dp = the `medium` step, outline-variant
+  boundary) and because `AppSurfaceTest` fails if a field ever loses its focused state, on
+  this file or on the component that replaced it.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="UnusedResources">
     <item android:state_focused="true">
         <shape android:shape="rectangle">
             <solid android:color="@color/app_surface_container_high" />

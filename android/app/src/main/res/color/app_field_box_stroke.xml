@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The MD3 text field's outline, as a state list rather than a colour.
+
+  This is the focused cue the field actually has. A single colour here does not fail: the
+  box still thickens from 1dp to 2dp, so *something* changes — it just changes to the same
+  grey, which reads as a rendering difference rather than as "you are typing here". MD3's
+  point is that the outline moves to the primary role when the field takes focus, and a
+  state list is the only way to say that.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:color="@color/app_primary"
+        android:state_enabled="true"
+        android:state_focused="true" />
+    <item
+        android:color="@color/app_primary"
+        android:state_enabled="true"
+        android:state_hovered="true" />
+    <item android:color="@color/app_outline" />
+</selector>

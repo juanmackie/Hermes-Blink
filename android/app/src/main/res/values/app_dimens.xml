@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <!--
-      Spacing: an 8dp baseline grid with 4dp sub-increments. The companion screens use
-      margin/gutter (16dp) and the inner rhythm (8dp) only.
+      Spacing: the MD3 spacing scale, one name per step (4 / 8 / 16 / 24). The screens use
+      these directly; there used to be a second name for 16dp (`gutter`), and two names
+      for one step is how a layout ends up half on one scale and half on the other.
     -->
     <dimen name="space_xs">4dp</dimen>
     <dimen name="space_sm">8dp</dimen>
     <dimen name="space_md">16dp</dimen>
     <dimen name="space_lg">24dp</dimen>
-    <dimen name="gutter">16dp</dimen>
 
     <!--
       Shape: the Material 3 corner radius scale, by name.

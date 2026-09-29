@@ -1,144 +1,208 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Diagnostics: what the last round taught us is that this screen is the only place a
-  failure can be *seen*, so it is built as a stack of tonal cards: a section label, the
-  value, and a hairline between sections. Monospace is used for the values that a user
-  compares across refreshes (build, device id, revision) so a changing digit does not
-  reflow the line.
+  Diagnostics: the only screen where a failure can be *seen*, so it is a stack of tonal
+  cards — a section label, the value, and a divider between the two values in a section
+  that reports more than one thing.
+
+  MD3 structure: a top app bar with a close affordance (this is a panel, not a step in a
+  flow), each section on a MaterialCardView so the grouping is tone rather than a stack of
+  hairlines, and the actions ranked — one filled primary, one tonal, one outlined, one text
+  button — because MD3 allows exactly one primary action per screen and this screen has
+  four things a user can do.
+
+  Monospace is still used for the values a user compares across refreshes (build, device
+  id, revision) so a changing digit does not reflow the line.
 -->
-<ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true">
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
 
-    <LinearLayout
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/top_app_bar"
+        style="@style/TopAppBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:orientation="vertical"
-        android:padding="@dimen/space_lg">
+        app:navigationIcon="@drawable/ic_close"
+        app:title="@string/diagnostics_title" />
 
-        <TextView
-            style="@style/TextTitle"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="@string/diagnostics_title" />
-
-        <TextView
-            style="@style/TextLabel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md"
-            android:text="@string/section_delivery" />
-
-        <TextView
-            android:id="@+id/diagnostics_status"
-            style="@style/TextMono"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md"
-            android:textIsSelectable="true" />
-
-        <TextView
-            style="@style/TextLabel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md"
-            android:text="@string/section_instances" />
-
-        <TextView
-            android:id="@+id/widget_instances_status"
-            style="@style/TextMono"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md"
-            android:textIsSelectable="true" />
-
-        <TextView
-            style="@style/TextLabel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md"
-            android:text="@string/section_actions" />
-
-        <TextView
-            android:id="@+id/widget_composition_status"
-            style="@style/TextMono"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md"
-            android:textIsSelectable="true" />
-
-        <TextView
-            android:id="@+id/action_outcomes_status"
-            style="@style/TextMono"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md"
-            android:textIsSelectable="true" />
-
-        <View
-            android:layout_width="match_parent"
-            android:layout_height="@dimen/hairline"
-            android:layout_marginTop="@dimen/space_lg"
-            android:background="@drawable/divider_hairline" />
-
-        <TextView
-            style="@style/TextLabel"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md"
-            android:text="@string/section_wake" />
-
-        <TextView
-            android:id="@+id/push_state_status"
-            style="@style/TextBody"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md" />
-
-        <TextView
-            android:id="@+id/battery_exemption_status"
-            style="@style/TextBodySmall"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md" />
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
 
         <LinearLayout
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_lg"
-            android:orientation="horizontal">
+            android:orientation="vertical"
+            android:paddingStart="@dimen/space_md"
+            android:paddingTop="@dimen/space_md"
+            android:paddingEnd="@dimen/space_md"
+            android:paddingBottom="@dimen/space_lg">
 
-            <Button
+            <com.google.android.material.card.MaterialCardView
+                style="@style/SurfaceCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/TextLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/section_delivery" />
+
+                    <TextView
+                        android:id="@+id/diagnostics_status"
+                        style="@style/TextMono"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_sm"
+                        android:textIsSelectable="true" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
+                style="@style/SurfaceCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_sm">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/TextLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/section_instances" />
+
+                    <TextView
+                        android:id="@+id/widget_instances_status"
+                        style="@style/TextMono"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_sm"
+                        android:textIsSelectable="true" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
+                style="@style/SurfaceCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_sm">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/TextLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/section_actions" />
+
+                    <TextView
+                        android:id="@+id/widget_composition_status"
+                        style="@style/TextMono"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_sm"
+                        android:textIsSelectable="true" />
+
+                    <!-- MD3's own divider: one hairline in outline-variant, the colour the
+                         spec reserves for decorative separation (outline itself is for
+                         boundaries that carry meaning). -->
+                    <com.google.android.material.divider.MaterialDivider
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_md"
+                        android:layout_marginBottom="@dimen/space_sm" />
+
+                    <TextView
+                        android:id="@+id/action_outcomes_status"
+                        style="@style/TextMono"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:textIsSelectable="true" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.card.MaterialCardView
+                style="@style/SurfaceCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_sm">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        style="@style/TextLabel"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/section_wake" />
+
+                    <TextView
+                        android:id="@+id/push_state_status"
+                        style="@style/TextBody"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_sm" />
+
+                    <TextView
+                        android:id="@+id/battery_exemption_status"
+                        style="@style/TextBodySmall"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_sm" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/pin_widget"
                 style="@style/ButtonFilled"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_md"
                 android:text="@string/pin_widget" />
 
-            <Button
+            <com.google.android.material.button.MaterialButton
                 android:id="@+id/request_battery_exemption"
                 style="@style/ButtonTonal"
-                android:layout_width="wrap_content"
+                android:layout_width="match_parent"
                 android:layout_height="wrap_content"
-                android:layout_marginStart="@dimen/space_sm"
+                android:layout_marginTop="@dimen/space_sm"
                 android:text="@string/review_battery" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/copy_widget_trail"
+                style="@style/ButtonOutlined"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_sm"
+                android:text="@string/copy_widget_trail" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/close_diagnostics"
+                style="@style/ButtonText"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_xs"
+                android:text="@string/close" />
         </LinearLayout>
-
-        <Button
-            android:id="@+id/copy_widget_trail"
-            style="@style/ButtonFilled"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_md"
-            android:text="@string/copy_widget_trail" />
-
-        <Button
-            android:id="@+id/close_diagnostics"
-            style="@style/ButtonOutlined"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="@dimen/space_sm"
-            android:text="@string/close" />
-    </LinearLayout>
-</ScrollView>
+    </ScrollView>
+</LinearLayout>

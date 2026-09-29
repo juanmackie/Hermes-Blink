@@ -1,52 +1,79 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  Pairing: one field, one primary action, and the code's expiry stated plainly. The form
-  reads top-down with 16dp gutters, the way the design system's mobile layout does.
+  Pairing: one field, one primary action, and the code's expiry stated plainly.
+
+  MD3 form: title in the top app bar, the explanation as body-small above the field, a
+  single outlined text field (label in the outline's cut-out, 12dp corners, focus cue in
+  primary), and one filled action at the end of the form. The reading order is unchanged
+  from the version that used a raw EditText — only the field and the chrome are Material
+  now.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="@dimen/space_lg">
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
 
-    <TextView
-        style="@style/TextTitle"
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/top_app_bar"
+        style="@style/TopAppBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="@string/pairing_title" />
+        app:navigationIcon="@drawable/ic_arrow_back"
+        app:title="@string/pairing_title" />
 
-    <TextView
-        style="@style/TextBodySmall"
+    <ScrollView
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_sm"
-        android:text="@string/pairing_explainer" />
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
 
-    <EditText
-        android:id="@+id/pairing_code_input"
-        style="@style/TextField"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_md"
-        android:autofillHints="off"
-        android:hint="@string/pairing_code_hint_short"
-        android:inputType="textCapCharacters"
-        android:maxLength="32" />
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="vertical"
+            android:padding="@dimen/space_lg">
 
-    <TextView
-        android:id="@+id/pairing_expiry"
-        style="@style/TextBodySmall"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_sm"
-        android:textSize="13sp" />
+            <TextView
+                style="@style/TextBodySmall"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/pairing_explainer" />
 
-    <Button
-        android:id="@+id/pair_btn"
-        style="@style/ButtonFilled"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:layout_gravity="end"
-        android:layout_marginTop="@dimen/space_md"
-        android:text="@string/pair" />
+            <com.google.android.material.textfield.TextInputLayout
+                android:id="@+id/pairing_code_field"
+                style="@style/TextField"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_md"
+                android:hint="@string/pairing_code_hint_short">
+
+                <com.google.android.material.textfield.TextInputEditText
+                    android:id="@+id/pairing_code_input"
+                    style="@style/TextFieldInput"
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:autofillHints="off"
+                    android:imeOptions="actionDone"
+                    android:inputType="textCapCharacters"
+                    android:maxLength="32" />
+            </com.google.android.material.textfield.TextInputLayout>
+
+            <TextView
+                android:id="@+id/pairing_expiry"
+                style="@style/TextBodySmall"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_sm" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/pair_btn"
+                style="@style/ButtonFilled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_md"
+                android:text="@string/pair" />
+        </LinearLayout>
+    </ScrollView>
 </LinearLayout>

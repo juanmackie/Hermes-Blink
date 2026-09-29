@@ -1,37 +1,188 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources>
+<!--
+  Material 3. `AppTheme` is a real Theme.Material3 theme now, not a hand-rolled AppCompat
+  one that only borrowed the palette: every MD3 component resolves its colour roles,
+  shape steps, state layers, ripple and typography from here, so a control added later
+  arrives already Material.
+
+  The palette itself has not moved. app_colors.xml still holds the M3 baseline light/dark
+  schemes and values-v31/values-night-v31 still point them at the device's own tonal
+  palette, so the *role* mapping below is the only new thing: the tokens are unchanged, the
+  theme now says which token is which role. Every role is mapped on purpose — an unmapped
+  role does not fall back to the app's palette, it falls back to the Material library's
+  static purple, which is how a screen ends up half Material You and half stock.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools">
     <!--
-      The companion surfaces follow the device's light/dark setting rather than forcing
-      one: the design system calls dark canonical, and it is the default we *author*
-      (values-night), but a user in light mode gets the light tonal ladder instead of a
-      white-on-white screen. Everything below resolves to a token, so no layout needs to
-      know which mode it is in.
+      System-bar icon polarity is a bool, not a per-mode style: a style defined in
+      values-night replaces the light one wholesale instead of merging, so the item would
+      have to be repeated (and could drift). A bool resolves per configuration while the
+      style that uses it stays single-sourced.
     -->
-    <style name="AppTheme" parent="Theme.AppCompat.DayNight.DarkActionBar">
+    <!--
+      The name matters: a style called A.B implicitly inherits from A when A exists, so
+      `AppTheme.Base` would have inherited from `AppTheme`, which inherits from it, and
+      the cycle is a runtime crash on every screen. `Base.Theme.Hermes` has no `Base` to
+      find, which is also how the Material library names its own base theme.
+    -->
+    <style name="Base.Theme.Hermes" parent="Theme.Material3.DayNight.NoActionBar">
+
+        <!-- ==== Colour roles ==== -->
+        <!-- Primary: the brand, and the fill of a filled button. -->
+        <item name="colorPrimary">@color/app_primary</item>
+        <item name="colorOnPrimary">@color/app_on_primary</item>
+        <item name="colorPrimaryContainer">@color/app_primary_container</item>
+        <item name="colorOnPrimaryContainer">@color/app_on_primary_container</item>
+
+        <!-- Secondary/tertiary: tonal buttons and chips, switches, dialog accents. -->
+        <item name="colorSecondary">@color/app_secondary</item>
+        <item name="colorOnSecondary">@color/app_on_secondary</item>
+        <item name="colorSecondaryContainer">@color/app_secondary_container</item>
+        <item name="colorOnSecondaryContainer">@color/app_on_secondary_container</item>
+        <item name="colorTertiary">@color/app_tertiary</item>
+        <item name="colorOnTertiary">@color/app_on_tertiary</item>
+        <item name="colorTertiaryContainer">@color/app_tertiary_container</item>
+        <item name="colorOnTertiaryContainer">@color/app_on_tertiary_container</item>
+
+        <!-- The "fixed" roles are the container tones, so a FAB or an icon button that
+             reads them stays inside the same tonal pair as everything else. -->
+        <item name="colorPrimaryFixed">@color/app_primary_container</item>
+        <item name="colorPrimaryFixedDim">@color/app_primary_container</item>
+        <item name="colorOnPrimaryFixed">@color/app_on_primary_container</item>
+        <item name="colorSecondaryFixed">@color/app_secondary_container</item>
+        <item name="colorSecondaryFixedDim">@color/app_secondary_container</item>
+        <item name="colorOnSecondaryFixed">@color/app_on_secondary_container</item>
+        <item name="colorTertiaryFixed">@color/app_tertiary_container</item>
+        <item name="colorTertiaryFixedDim">@color/app_tertiary_container</item>
+        <item name="colorOnTertiaryFixed">@color/app_on_tertiary_container</item>
+
+        <!-- Surfaces: the tonal ladder, lowest to highest. MD3 replaced elevation overlays
+             with these, which is why `colorSurfaceContainer` is mapped and not invented. -->
+        <item name="colorSurface">@color/app_surface</item>
+        <item name="colorOnSurface">@color/app_on_surface</item>
+        <item name="colorSurfaceVariant">@color/app_surface_variant</item>
+        <item name="colorOnSurfaceVariant">@color/app_on_surface_variant</item>
+        <item name="colorSurfaceDim">@color/app_surface_dim</item>
+        <item name="colorSurfaceBright">@color/app_surface_bright</item>
+        <item name="colorSurfaceContainerLowest">@color/app_surface_container_lowest</item>
+        <item name="colorSurfaceContainerLow">@color/app_surface_container_low</item>
+        <item name="colorSurfaceContainer">@color/app_surface_container</item>
+        <item name="colorSurfaceContainerHigh">@color/app_surface_container_high</item>
+        <item name="colorSurfaceContainerHighest">@color/app_surface_container_highest</item>
+
+        <!-- Inverse: the snackbar's own surface. It is a separate role on purpose — a
+             snackbar that were "surface, but darker" would sink into the content. -->
+        <item name="colorSurfaceInverse">@color/app_inverse_surface</item>
+        <item name="colorOnSurfaceInverse">@color/app_inverse_on_surface</item>
+        <item name="colorPrimaryInverse">@color/app_inverse_primary</item>
+
+        <!-- Error. -->
+        <item name="colorError">@color/app_error</item>
+        <item name="colorOnError">@color/app_on_error</item>
+        <item name="colorErrorContainer">@color/app_error_container</item>
+        <item name="colorOnErrorContainer">@color/app_on_error_container</item>
+
+        <!-- Outline is for boundaries that matter (a text field's box); outline-variant is
+             for the decorative hairline. Swapping them is the single most common MD3
+             mistake and it is why both roles are spelled out here. -->
+        <item name="colorOutline">@color/app_outline</item>
+        <item name="colorOutlineVariant">@color/app_outline_variant</item>
+
+        <!-- Platform/system roles the platform still reads directly. -->
+        <item name="android:colorBackground">@color/app_surface</item>
         <item name="android:windowBackground">@color/app_surface</item>
         <item name="android:textColorPrimary">@color/app_on_surface</item>
         <item name="android:textColorSecondary">@color/app_on_surface_variant</item>
-        <item name="android:colorBackground">@color/app_surface</item>
-        <item name="colorPrimary">@color/app_primary</item>
-        <item name="colorPrimaryDark">@color/app_surface_container_high</item>
-        <item name="colorAccent">@color/app_primary</item>
         <item name="android:colorControlHighlight">@color/app_primary_container</item>
+        <item name="colorControlHighlight">@color/app_primary_container</item>
+        <item name="colorAccent">@color/app_primary</item>
+        <item name="colorPrimaryDark">@color/app_surface_container_high</item>
+        <item name="android:statusBarColor">@color/app_surface_container</item>
+        <item name="android:navigationBarColor">@color/app_surface_container</item>
+        <item name="android:windowLightStatusBar">@bool/app_light_system_bars</item>
+        <!-- API 27+; ignored below that, where the platform has no light navigation bar
+             to ask for. tools:targetApi is the documented way to say so — the alternative,
+             a values-v27 copy of this style, would *replace* the whole style on API 27+
+             instead of adding one item to it. -->
+        <item name="android:windowLightNavigationBar" tools:targetApi="27">@bool/app_light_system_bars</item>
+
+        <!-- ==== Shape ==== -->
+        <!-- The MD3 corner scale, by name: 4 / 8 / 12 / 16 / 28dp. Each component takes a
+             step from it — a pill for anything pressed, medium for fields, large for
+             cards, extra-large for dialogs and sheets — so no layout invents a radius. -->
+        <item name="shapeAppearanceCornerExtraSmall">@style/ShapeAppearance.Hermes.ExtraSmall</item>
+        <item name="shapeAppearanceCornerSmall">@style/ShapeAppearance.Hermes.Small</item>
+        <item name="shapeAppearanceCornerMedium">@style/ShapeAppearance.Hermes.Medium</item>
+        <item name="shapeAppearanceCornerLarge">@style/ShapeAppearance.Hermes.Large</item>
+        <item name="shapeAppearanceCornerExtraLarge">@style/ShapeAppearance.Hermes.ExtraLarge</item>
+        <item name="shapeAppearanceSmallComponent">@style/ShapeAppearance.Hermes.Small</item>
+        <item name="shapeAppearanceMediumComponent">@style/ShapeAppearance.Hermes.Medium</item>
+        <item name="shapeAppearanceLargeComponent">@style/ShapeAppearance.Hermes.Large</item>
+
+        <!--
+          MD3 signals depth with tone, not with a tinted shadow. Leaving the Material
+          elevation overlay on is MD2 behaviour: it re-tints a raised card toward the
+          primary hue, which fights the surfaceContainer ladder the palette already
+          provides. A raised card here is `Widget.Material3.CardView.Elevated`, which draws
+          a real shadow and nothing else.
+        -->
+        <item name="elevationOverlayEnabled">false</item>
     </style>
+
+    <!-- Only the icon polarity differs between the two modes; see the bool above. -->
+    <style name="AppTheme" parent="Base.Theme.Hermes" />
 
     <!--
       The widget's own theme (WC-1): its window background and primary ink are the surface
       tokens, so ?android:colorBackground resolves to the same day/night/dynamic values
-      HermesWidget.kt paints. Applied to the provider in the manifest.
+      HermesWidget.kt paints. Applied to the provider in the manifest. It is an MD3 theme
+      for the same reason as AppTheme: the widget host resolves these roles too, and a
+      control that inflates in that context should not get a different palette.
     -->
-    <style name="WidgetTheme" parent="Theme.AppCompat.DayNight">
+    <style name="WidgetTheme" parent="Theme.Material3.DayNight">
         <item name="android:windowBackground">@color/widget_surface</item>
         <item name="android:textColorPrimary">@color/widget_on_surface</item>
+        <item name="colorSurface">@color/widget_surface</item>
+        <item name="colorOnSurface">@color/widget_on_surface</item>
+        <item name="colorPrimary">@color/widget_accent</item>
+        <item name="colorOnPrimary">@color/widget_on_accent</item>
+        <item name="colorOutlineVariant">@color/widget_hairline</item>
+        <item name="elevationOverlayEnabled">false</item>
     </style>
 
-    <!-- Type roles. The design system's scale, kept to the four steps these screens use:
-         title-lg 22, body-lg 16, body-md 14, label-md 12. The widget's own closed scale
-         (Typo.kt) is a publisher-facing contract and is deliberately not shared. -->
-    <style name="TextTitle" parent="">
+    <!-- ==== Shape scale ==== -->
+    <style name="ShapeAppearance.Hermes.ExtraSmall" parent="ShapeAppearance.Material3.Corner.ExtraSmall">
+        <item name="cornerSize">@dimen/shape_xs</item>
+    </style>
+    <style name="ShapeAppearance.Hermes.Small" parent="ShapeAppearance.Material3.Corner.Small">
+        <item name="cornerSize">@dimen/shape_sm</item>
+    </style>
+    <style name="ShapeAppearance.Hermes.Medium" parent="ShapeAppearance.Material3.Corner.Medium">
+        <item name="cornerSize">@dimen/shape_md</item>
+    </style>
+    <style name="ShapeAppearance.Hermes.Large" parent="ShapeAppearance.Material3.Corner.Large">
+        <item name="cornerSize">@dimen/shape_lg</item>
+    </style>
+    <style name="ShapeAppearance.Hermes.ExtraLarge" parent="ShapeAppearance.Material3.Corner.ExtraLarge">
+        <item name="cornerSize">@dimen/shape_xl</item>
+    </style>
+
+    <!-- ==== Type roles ====
+         The design system's scale, kept to the four steps these screens use: title-lg 22,
+         body-lg 16, body-md 14, label-md 12. These are the M3 steps (size, line height and
+         tracking all match the spec), spelled out rather than inherited so the ladder is
+         legible without cross-referencing the library, and so a regression test can check
+         them against the spec directly. The widget's own closed scale (Typo.kt) is a
+         publisher-facing contract and is deliberately not shared. -->
+    <!--
+      themes.xml is a *scale*, not a bag of styles. The MD3 roles are defined as a
+      complete set — every type step, every corner step, every container variant — so a
+      role can be present before the screen that uses it (TextTitle: every title on these
+      screens is the app bar's, so the body-title role is defined and not yet used) and
+      `AppSurfaceTest` can assert the scale itself. Deleting the unused ones would quietly
+      turn the scale into whatever happens to be in use today.
+    -->
+    <style name="TextTitle" tools:ignore="UnusedResources" parent="">
         <!-- title-lg: 22sp on a 28sp line (22 + 6), 500 weight, -0.15sp tracking.
              The line height is size + spacing extra rather than android:lineHeight, which
              is API 28+ and this app supports 26. -->
@@ -76,47 +227,141 @@
         <item name="android:textColor">@color/app_on_surface</item>
     </style>
 
-    <!-- Buttons: pill shapes at the 48dp touch-target floor. Filled is reserved for the
-         one primary action on a screen; tonal for secondary; outlined for low priority. -->
-    <style name="ButtonFilled" parent="">
-        <item name="android:background">@drawable/bg_button_filled</item>
+    <!--
+      The type *appearance* form of the same scale, for the components that take one
+      (Toolbar, chips, buttons) rather than a raw textSize. title-large: 22sp on a 28sp
+      line, 500, -0.15sp tracking — the MD3 step, matching TextTitle above.
+    -->
+    <style name="TextAppearance.Hermes.TitleLarge" parent="TextAppearance.Material3.TitleLarge">
+        <item name="android:textSize">22sp</item>
+        <item name="android:lineSpacingExtra">6sp</item>
+        <item name="android:letterSpacing">-0.0068</item>
+        <item name="android:textColor">@color/app_on_surface</item>
+    </style>
+
+    <style name="TextAppearance.Hermes.BodySmall" tools:ignore="UnusedResources" parent="TextAppearance.Material3.BodySmall">
+        <item name="android:textSize">12sp</item>
+        <item name="android:lineSpacingExtra">4sp</item>
+        <item name="android:letterSpacing">0.0208</item>
+        <item name="android:textColor">@color/app_on_surface_variant</item>
+    </style>
+
+    <!-- ==== Controls ====
+         All three button styles now describe a MaterialButton: the fill is a colour role
+         (backgroundTint), the shape is a step from the corner scale, the press state is
+         Material's own state layer over that fill, and the insets are zero so the drawn
+         pill is the control's whole height.
+
+         Filled is reserved for the one primary action on a screen, tonal for secondary,
+         outlined for low priority. The 48dp touch target stays: MD3's button is 40dp
+         tall, which is below the platform's accessibility floor, so the button keeps the
+         40dp visual height inside a 48dp target. -->
+    <style name="ButtonFilled" parent="Widget.Material3.Button">
+        <item name="backgroundTint">@color/app_primary</item>
         <item name="android:textColor">@color/app_on_primary</item>
-        <item name="android:textSize">14sp</item>
-        <item name="android:lineSpacingExtra">6sp</item>   <!-- label-lg: 20sp line -->
-        <item name="android:letterSpacing">0.0071</item>
-        <item name="android:fontFamily">sans-serif-medium</item>
+        <item name="rippleColor">@color/app_state_layer_filled</item>
+        <item name="cornerRadius">@dimen/shape_button</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
         <item name="android:minHeight">@dimen/touch_target</item>
         <item name="android:minWidth">88dp</item>
-        <item name="android:paddingStart">@dimen/gutter</item>
-        <item name="android:paddingEnd">@dimen/gutter</item>
-        <item name="android:paddingTop">0dp</item>
-        <item name="android:paddingBottom">0dp</item>
+        <item name="android:paddingStart">@dimen/space_md</item>
+        <item name="android:paddingEnd">@dimen/space_md</item>
+        <item name="android:textSize">14sp</item>
+        <item name="android:letterSpacing">0.0071</item>
+        <item name="android:fontFamily">sans-serif-medium</item>
         <item name="android:textAllCaps">false</item>
         <item name="android:gravity">center</item>
     </style>
 
     <style name="ButtonTonal" parent="ButtonFilled">
-        <item name="android:background">@drawable/bg_button_tonal</item>
+        <item name="backgroundTint">@color/app_primary_container</item>
         <item name="android:textColor">@color/app_on_primary_container</item>
+        <item name="rippleColor">@color/app_state_layer_tonal</item>
     </style>
 
     <style name="ButtonOutlined" parent="ButtonFilled">
-        <item name="android:background">@drawable/bg_button_outlined</item>
+        <item name="backgroundTint">@android:color/transparent</item>
         <item name="android:textColor">@color/app_primary</item>
+        <item name="rippleColor">@color/app_state_layer_outlined</item>
+        <item name="strokeColor">@color/app_outline</item>
+        <item name="strokeWidth">1dp</item>
     </style>
 
-    <style name="TextField" parent="">
-        <item name="android:background">@drawable/bg_field</item>
-        <item name="android:textColor">@color/app_on_surface</item>
-        <item name="android:textColorHint">@color/app_on_surface_variant</item>
-        <item name="android:textSize">16sp</item>
+    <!-- Text button: the MD3 "low emphasis" action, for a row of equal-weight choices. -->
+    <style name="ButtonText" parent="Widget.Material3.Button.TextButton">
+        <item name="android:textColor">@color/app_primary</item>
+        <item name="rippleColor">@color/app_state_layer_outlined</item>
+        <item name="cornerRadius">@dimen/shape_button</item>
+        <item name="android:insetTop">0dp</item>
+        <item name="android:insetBottom">0dp</item>
         <item name="android:minHeight">@dimen/touch_target</item>
-        <item name="android:paddingStart">@dimen/space_md</item>
-        <item name="android:paddingEnd">@dimen/space_md</item>
+        <item name="android:minWidth">64dp</item>
+        <item name="android:textAllCaps">false</item>
     </style>
 
-    <style name="SurfaceCard" parent="">
-        <item name="android:background">@drawable/surface_card</item>
-        <item name="android:padding">@dimen/gutter</item>
+    <!-- ==== Containers ====
+         Tonal, not shadowed: MD3's filled card is surfaceContainerHighest with no
+         elevation at all, and the outlined card replaces the shadow with a hairline in
+         outline-variant (never outline, which is for a boundary that carries meaning). -->
+    <style name="SurfaceCard" parent="Widget.Material3.CardView.Filled">
+        <item name="cardBackgroundColor">@color/app_surface_container</item>
+        <item name="cardCornerRadius">@dimen/shape_container</item>
+        <item name="cardElevation">0dp</item>
+        <item name="strokeWidth">0dp</item>
+        <item name="contentPadding">@dimen/space_md</item>
+    </style>
+
+    <style name="SurfaceCardOutlined" tools:ignore="UnusedResources" parent="Widget.Material3.CardView.Outlined">
+        <item name="cardBackgroundColor">@color/app_surface</item>
+        <item name="cardCornerRadius">@dimen/shape_container</item>
+        <item name="cardElevation">0dp</item>
+        <item name="strokeColor">@color/app_outline_variant</item>
+        <item name="strokeWidth">@dimen/hairline</item>
+        <item name="contentPadding">@dimen/space_md</item>
+    </style>
+
+    <!-- ==== Text fields ====
+         MD3's outlined box: 4dp box in outline, 2dp in primary when it is focused, with
+         the label cut into the top of the outline. The corner is `medium` (12dp), which
+         is the MD3 step for a field — a card's 16dp would make the field look like a
+         card and the card look like a field. -->
+    <style name="TextField" parent="Widget.Material3.TextInputLayout.OutlinedBox">
+        <!-- A state list, not a colour: 1dp outline at rest, 2dp in primary on focus. The
+             single-colour version still satisfies every gate and still fails the point —
+             the cue has to move to the primary role to be read as focus. -->
+        <item name="boxStrokeColor">@color/app_field_box_stroke</item>
+        <item name="boxStrokeWidth">1dp</item>
+        <item name="boxStrokeWidthFocused">2dp</item>
+        <item name="boxStrokeErrorColor">@color/app_error</item>
+        <item name="boxCornerRadiusTopStart">@dimen/shape_field</item>
+        <item name="boxCornerRadiusTopEnd">@dimen/shape_field</item>
+        <item name="boxCornerRadiusBottomStart">@dimen/shape_field</item>
+        <item name="boxCornerRadiusBottomEnd">@dimen/shape_field</item>
+        <!-- Same reason: the label is secondary ink until it floats up, primary after. -->
+        <item name="hintTextColor">@color/app_field_hint_text</item>
+        <item name="android:textColorHint">@color/app_on_surface_variant</item>
+        <item name="errorTextColor">@color/app_error</item>
+        <item name="errorIconTint">@color/app_error</item>
+        <item name="boxBackgroundColor">@android:color/transparent</item>
+    </style>
+
+    <!-- The EditText inside the box: the field's own text is body-lg, and the MD3
+         interaction hint (the label that becomes the outline's cut-out) is a caption. -->
+    <style name="TextFieldInput" parent="Widget.Material3.TextInputEditText.OutlinedBox">
+        <item name="android:minHeight">@dimen/touch_target</item>
+        <item name="android:paddingTop">@dimen/space_md</item>
+        <item name="android:paddingBottom">@dimen/space_md</item>
+    </style>
+
+    <!-- ==== App bar ====
+         A small top app bar: 64dp, no elevation, on the surface colour. -->
+    <style name="TopAppBar" parent="Widget.Material3.Toolbar.Surface">
+        <item name="android:background">@color/app_surface_container</item>
+        <item name="titleTextColor">@color/app_on_surface</item>
+        <item name="subtitleTextColor">@color/app_on_surface_variant</item>
+        <item name="android:minHeight">64dp</item>
+        <item name="titleTextAppearance">@style/TextAppearance.Hermes.TitleLarge</item>
+        <item name="navigationIconTint">@color/app_on_surface_variant</item>
     </style>
 </resources>

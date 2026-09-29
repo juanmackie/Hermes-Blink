@@ -14,10 +14,10 @@ So this page records the split: what was adopted, what was deliberately left, an
 | Tonal surface tiers, dark canonical | `res/values-night/app_colors.xml` is the design system's ladder token for token (`#131314` / `#1C1B1C` / `#2A2A2B`), with a light ladder in `res/values/app_colors.xml` | Depth by luminance, not drop shadow. Also fixes a real defect: the main screen was `#FFFFFF` on `#000000` text, and the pairing screen the same, so neither had a dark mode. |
 | Elevation direction | Asserted per mode in `AppSurfaceTest` | Light raises by darkening, dark raises by lightening. The first version of the light ladder had this backwards, and the test caught it. |
 | Type roles (title-lg 22, body-lg 16, body-md 14, label-md 12) | `styles/TextTitle`, `TextBody`, `TextBodySmall`, `TextLabel` | The screens were 22/16/15/13sp ad hoc. The widget's own four-step scale (`Typo.kt`) is a publisher-facing contract and is deliberately **not** shared with the app. |
-| 8dp grid, 16dp margin/gutter, 4dp sub-increments | `res/values/app_dimens.xml` | 24dp everywhere was not on the grid the system describes. |
-| Shape: 24dp card radii, pill buttons, 12dp fields | `res/drawable/surface_card.xml`, `bg_button_*.xml`, `bg_field.xml` | Concentric harmony: 24dp cards inside the 28dp widget root. |
+| 8dp grid, 16dp margin/gutter, 4dp sub-increments | `res/values/app_dimens.xml` | 24dp everywhere was not on the grid the system describes. The duplicate `gutter` name for 16dp was removed in round 15: two names for one step is how a layout ends up half on one scale and half on the other. |
+| Shape: 24dp card radii, pill buttons, 12dp fields | `res/values/app_dimens.xml` (the scale), `res/values/themes.xml` (the scale handed to components) | Concentric harmony: 16dp cards inside the 28dp widget root. Round 15: components take a step from the named scale instead of naming a radius. |
 | Filled / tonal / outlined button hierarchy | `ButtonFilled`, `ButtonTonal`, `ButtonOutlined` | One primary action per screen, which is also the accessibility guidance. |
-| Outline-variant hairline instead of shadow | `divider_hairline.xml`, card stroke | Reads on any wallpaper, which is the whole point for a launcher surface. |
+| Outline-variant hairline instead of shadow | `MaterialDivider`, card stroke | Reads on any wallpaper, which is the whole point for a launcher surface. The hand-drawn `divider_hairline.xml` is gone: it was a `View` with a colour where a component belongs. |
 | 28dp widget root | `shape_widget_root`, as the *floor* | The system calls it non-negotiable; on API 31+ the widget still resolves the launcher's own radius first (`WidgetRadius`), so 28dp is only the fallback. |
 | Monospace for values that change | `TextMono` in Diagnostics | Device ids, revisions and request ids should not reflow while being read. The system's monospaced Roboto Flex instances are not available offline; `monospace` is the platform equivalent. |
 
@@ -358,7 +358,6 @@ that cannot distinguish live code from dead code is a check that has not been
 written yet.
 
 ## Material 3 adoption (round 14)
-
 Read from m3.material.io, the Android Material 3 guidance, Google's Expressive research and
 the M3 design kit. As with the earlier design document, the split matters: this is a Glance
 widget plus four XML screens, and the parts of M3 that suit it are taken whole while the
@@ -382,7 +381,7 @@ parts that describe a different product are named and skipped.
 
 | Not taken | Why |
 | --- | --- |
-| `com.google.android.material` / Compose components | A dependency and APK-weight decision, and the project already removed Compose/glance-material3 on purpose. Every role here is expressible in a style plus a drawable. |
+| `com.google.android.material` / Compose components | **Superseded in round 15**: the Material Components library is in, because a style plus a drawable can express a *token* but not a component (no label in a field's outline, no state layer drawn by the control, no MD3 dialog geometry). Compose is still out: the screens are Views, and a rewrite is a different decision. See round 15 for the measured cost. |
 | Spring-physics motion, shape morphing, expressive springs | There is no animation surface to apply them to: RemoteViews layouts are static and the one transition in the app is deliberately suppressed. |
 | Chips, switches, checkboxes, progress, FABs, bottom sheets, nav bars | No such feature exists. Adding them to a diagnostics screen would be decoration, not design. |
 | Fixed / add-on colour roles (`primary-fixed` and friends) | The spec itself scopes them to a hero-CTA use case we do not have. |
@@ -399,6 +398,71 @@ compares the two. The publisher-facing contract (`Typo.kt`, `layout.schema.json`
 deliberately untouched: it is a closed wire contract, and `ContrastTest` now also proves its
 `SECONDARY` still clears 4.5:1 on every new light surface (worst case 4.89:1).
 
+## Round 15 — Material 3 *components*, not just Material 3 *colours*
+
+Round 14 made the palette Material 3. Every control was still a platform widget with a
+hand-drawn background, which is the half that looks almost right and is not Material: a
+`<Button>` cannot take a colour role, so it cannot dark-mode correctly from the theme, it
+cannot draw the state layer the spec asks for, and a text field built on `bg_field.xml`
+could only swap its whole background on focus — which is why that file needed a
+hand-written `state_focused` item to have a focus cue at all.
+
+### What changed
+
+| Before | After |
+|---|---|
+| `Theme.AppCompat.DayNight.DarkActionBar` + hand-mapped roles | `Theme.Material3.DayNight.NoActionBar`, every role mapped, corner scale handed to the components, `elevationOverlayEnabled=false` |
+| `<Button>` + a per-button `<ripple>` drawable | `MaterialButton` (filled / tonal / outlined / text); the state layer is the control's own ink over its own fill |
+| `<EditText>` + `bg_field.xml` | `TextInputLayout` outlined box: label in the outline's cut-out, 1dp outline → 2dp primary on focus, `medium` corners |
+| `<LinearLayout style="@style/SurfaceCard">` + `surface_card.xml` | `MaterialCardView` filled / outlined — tone and a hairline instead of a shadow |
+| A `View` + `divider_hairline.xml` | `MaterialDivider` |
+| No app bar of our own | `MaterialToolbar` as a small top app bar on all five screens, with `ic_arrow_back` / `ic_close` |
+| `Toast` | `Snackbar`, anchored to the screen |
+| `AlertDialog.Builder` | `MaterialAlertDialogBuilder` (28dp corners, tonal surface) |
+| 13sp and 18sp text | `TextBodySmall` / `TextBody` — both were off the type scale |
+| Missing `secondary` / `tertiary` / `errorContainer` / `inverse*` roles | all present in `values/`, `values-night/` and both `-v31` sets |
+
+The dependency: **`com.google.android.material:material:1.12.0`**, and it is the only one
+added. It brings no network, database or analytics surface — appcompat, recyclerview,
+constraintlayout, coordinatorlayout, transition, dynamicanimation, vectordrawable,
+drawerlayout, cardview. The cost, measured on a clean `assembleDebug` against `f5c0068`:
+
+| Build | Bytes | Note |
+| --- | --- | --- |
+| `f5c0068` (before) | 7,279,075 | |
+| versionCode 13 (this round) | 9,749,455 | +2,470,380 (+33.9%) |
+| uncompressed | 16,991,803 → 21,524,094 | +4,532,291 (+26.7%) |
+
+No build type here sets `isMinifyEnabled`, so the release APK is unminified too and this
+is not a debug-only number — the library's unused components ship. Turning on R8 plus
+resource shrinking is the obvious follow-up, and it is a *separate* decision with its own
+risk: a shrunk build has to be installed and exercised on a device before it is trusted,
+and this repo does not claim device verification it has not done.
+
+`glance-material3` stays out. The widget has no chip, FAB or button component to use one
+for, its action's 8dp corner is `LayoutDefaults.BUTTON_CORRIER` publisher parity rather
+than an app-side shape decision, and its type scale is a closed wire contract.
+
+### Two failures this round found that were not about Material
+
+1. **The tree did not build.** `work/DwellWorker.kt` (untracked, left behind by a discarded
+   experiment) called `BackoffPolicy.EXPENSIVE`, which does not exist in
+   `work-runtime:2.9.1`. `EXPONENTIAL` is the value it meant, and the build had been red
+   before any of this work started.
+2. **The gates were not re-running.** `AppSurfaceTest` reads `src/main/res` and the
+   activity sources straight off disk — a theme is not a runtime class, so Gradle saw no
+   input change and reported the test task `UP-TO-DATE` after a token was edited. The
+   res and java directories are now declared as test resources, so the dependency is real.
+   A gate that does not re-run is not a gate; it was verified by mutation (edit a token,
+   watch the task fail).
+
+### Also removed
+
+`gutter` (a second name for 16dp — two names for one step is how a layout ends up half on
+one scale and half on the other), `divider_hairline.xml` (a colour where a component
+belongs), and the five `android:background="@color/app_surface"` on layout roots, which
+the theme's `windowBackground` already paints (five overdraw warnings).
+
 ## Gates
 
 `AppSurfaceTest` (JVM, runs in CI):
@@ -409,7 +473,27 @@ deliberately untouched: it is a closed wire contract, and `ContrastTest` now als
 - the tonal ladder rises and falls in the right direction per mode, and the dark set is the
   design system's values exactly;
 - every ink token clears 4.5:1 on every surface it is painted on, in both modes;
-- touch targets stay ≥ 48dp.
+- touch targets stay ≥ 48dp;
+- **the app theme is a real `Theme.Material3`, and it is the NoActionBar variant**;
+- **every MD3 colour role the theme uses is mapped to a Hermes token** — an unmapped role
+  does not fall back to the app's palette, it falls back to the library's static purple;
+- **the secondary, tertiary, error-container and inverse pairs clear AA in both modes**;
+- **no screen uses a platform `<Button>`/`<EditText>`/`<Switch>`/`<CheckBox>`/`<SeekBar>`**;
+- **every screen has an MD3 top app bar and applies the window insets**;
+- **text fields are TextInputLayout outlined boxes with a focus stroke in the theme**;
+- **the corner scale handed to components is the M3 scale, and each step is a shared dimen**;
+- **`elevationOverlayEnabled=false`** — depth is tone, not a tinted overlay;
+- **system-bar icon polarity follows the device mode** (a bool, because a night style
+  replaces the light one rather than merging with it);
+- **no type size off the M3 scale** (11/12/14/16/22/24/28/32/36/45/57);
+- **transient messages are snackbars, and a surviving toast has to say why** — the two that
+  do (a message for a screen that is closing, with nothing left to anchor to) are checked
+  for that comment, so a decision cannot decay into looking like an oversight.
 
 `scripts/check-contract-parity.py` also fails if a screen layout or `PublicationActivity`
 reintroduces a literal, so the gate survives someone editing the XML without running tests.
+
+`docs/MD3_COMPLIANCE.md` is the self-audit this round was measured against: what is
+compliant, what is deliberately not, and — in as many words — what cannot be answered from
+the repository at all.
+

@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The night half of app_light_system_bars: the bars follow the surface in both modes, so
+  the icons have to flip with them or the status bar reads as light-on-light in dark mode.
+-->
+<resources>
+    <bool name="app_light_system_bars">false</bool>
+</resources>

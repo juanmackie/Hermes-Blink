@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The publication screen's primary action, as a layout rather than a programmatically
+  styled button.
+
+  Why a layout: a MaterialButton's MD3 appearance is a *style* (fill from a colour role,
+  a corner step from the shape scale, the state layer over that fill), and a style can only
+  be applied from XML or from a themed context. Inflating keeps every appearance decision
+  in themes.xml, where the rest of them live, instead of duplicating the tokens in Kotlin.
+-->
+<com.google.android.material.button.MaterialButton
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/action_button"
+    style="@style/ButtonFilled"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="@dimen/space_md" />

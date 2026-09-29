@@ -1,16 +1,17 @@
 package com.you.hermeswidget
 
-import android.app.Activity
 import android.content.pm.ApplicationInfo
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.view.View
-import android.widget.Button
-import android.widget.EditText
 import android.widget.TextView
-import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.snackbar.Snackbar
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import com.you.hermeswidget.config.PairingLink
 import com.you.hermeswidget.net.AppIdentity
 import com.you.hermeswidget.net.Config
@@ -20,25 +21,35 @@ import com.you.hermeswidget.net.SecureStore
 import com.you.hermeswidget.work.RefreshWorker
 import org.json.JSONObject
 
-class SettingsActivity : Activity() {
+class SettingsActivity : AppCompatActivity() {
     private val ticker = Handler(Looper.getMainLooper())
     private var pairingInFlight = false
     private lateinit var statusLabel: TextView
     private lateinit var statusDetail: TextView
     private lateinit var statusDot: View
+    private lateinit var root: View
+    private lateinit var urlField: TextInputLayout
+    private lateinit var codeField: TextInputLayout
+    private lateinit var labelField: TextInputLayout
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         AppIdentity.attach(this)
         setContentView(R.layout.activity_settings)
+        setSupportActionBar(findViewById<MaterialToolbar>(R.id.top_app_bar))
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        root = findViewById(android.R.id.content)
+        urlField = findViewById(R.id.backend_url_field)
+        codeField = findViewById(R.id.pairing_code_field)
+        labelField = findViewById(R.id.device_label_field)
         statusLabel = findViewById(R.id.pairing_status)
         statusDetail = findViewById(R.id.pairing_status_detail)
         statusDot = findViewById(R.id.pairing_status_dot)
-        val urlEdit = findViewById<EditText>(R.id.backend_url_input)
-        val codeEdit = findViewById<EditText>(R.id.pairing_code_input)
-        val pairButton = findViewById<Button>(R.id.connect_btn)
-        val labelEdit = findViewById<EditText>(R.id.device_label_input)
-        val renameButton = findViewById<Button>(R.id.rename_btn)
+        val urlEdit = findViewById<TextInputEditText>(R.id.backend_url_input)
+        val codeEdit = findViewById<TextInputEditText>(R.id.pairing_code_input)
+        val pairButton = findViewById<View>(R.id.connect_btn)
+        val labelEdit = findViewById<TextInputEditText>(R.id.device_label_input)
+        val renameButton = findViewById<View>(R.id.rename_btn)
 
         SecureStore.baseUrl(this)?.let { urlEdit.setText(it) }
         labelEdit.setText(PairingLink.deviceLabel())
@@ -48,20 +59,24 @@ class SettingsActivity : Activity() {
             val token = SecureStore.token(this)
             val label = labelEdit.text.toString().trim()
             if (token.isNullOrBlank()) {
-                Toast.makeText(this, "Pair this phone before renaming it", Toast.LENGTH_SHORT).show()
+                // A problem with the form, on the form: MD3 puts a field-level error on
+                // the field rather than in a floating message the user may not be looking
+                // at. Nothing here is wrong with the name, so the error goes elsewhere.
+                say("Pair this phone before renaming it")
                 return@setOnClickListener
             }
             if (label.isEmpty()) {
-                Toast.makeText(this, "Enter a device name", Toast.LENGTH_SHORT).show()
+                labelField.error = "Enter a device name"
+                labelEdit.requestFocus()
                 return@setOnClickListener
             }
             Thread {
                 val result = HermesApi.renameDevice(baseUrl, token, label)
                 runOnUiThread {
                     if (result.code in 200..299) {
-                        Toast.makeText(this, "Renamed to $label", Toast.LENGTH_SHORT).show()
+                        say("Renamed to $label")
                     } else {
-                        Toast.makeText(this, "Rename failed (HTTP ${result.code})", Toast.LENGTH_LONG).show()
+                        say("Rename failed (HTTP ${result.code})")
                     }
                 }
             }.start()
@@ -70,19 +85,28 @@ class SettingsActivity : Activity() {
         pairButton.setOnClickListener {
             val baseUrl = urlEdit.text.toString().trim().trimEnd('/')
             val code = codeEdit.text.toString().trim()
+            // Both problems below belong to one field each, so both are reported on the
+            // field and the focus moves there, instead of both arriving as one toast the
+            // user has to guess the subject of.
             if (!isAllowedUrl(baseUrl)) {
-                Toast.makeText(this, "Use the HTTPS address of your Hermes widget server", Toast.LENGTH_LONG).show()
+                urlField.error = "Use the HTTPS address of your Hermes widget server"
+                urlEdit.requestFocus()
                 return@setOnClickListener
             }
             if (!code.matches(Regex("[A-Za-z0-9-]{8,32}"))) {
-                Toast.makeText(this, "Enter the short-lived pairing code from Hermes", Toast.LENGTH_SHORT).show()
+                codeField.error = "Enter the short-lived pairing code from Hermes"
+                codeEdit.requestFocus()
                 return@setOnClickListener
             }
+            // The field is accepted: the error has to go, or it stays on screen after a
+            // corrected value and contradicts it.
+            urlField.error = null
+            codeField.error = null
 
             pairButton.isEnabled = false
             pairingInFlight = true
             renderStatus()
-            Toast.makeText(this, "Pairing securely…", Toast.LENGTH_SHORT).show()
+            say("Pairing securely…")
             Thread {
                 val result = runCatching {
                     val (code, body) = HermesApi.pair(baseUrl, code, PairingLink.deviceLabel())
@@ -101,24 +125,34 @@ class SettingsActivity : Activity() {
                 runOnUiThread {
                     pairButton.isEnabled = true
                     pairingInFlight = false
-                    // Read the new state before the toast, so the indicator is never
-                    // showing "pairing…" behind a success dialog.
+                    // Read the new state before the message, so the indicator is never
+                    // showing "pairing…" behind a success notice.
                     renderStatus()
                     result.onSuccess { deviceId ->
                         RefreshWorker.enqueueNow(this)
-                        Toast.makeText(
-                            this,
-                            "Paired as $deviceId; waiting for the first publication",
-                            Toast.LENGTH_LONG,
-                        ).show()
+                        say("Paired as $deviceId; waiting for the first publication")
                         // Discovery: one automatic pin offer after pairing, never blocking.
                         WidgetPinning.offerOnceAfterPairing(this, this)
                     }.onFailure { error ->
-                        Toast.makeText(this, error.message ?: "Pairing failed", Toast.LENGTH_LONG).show()
+                        say(error.message ?: "Pairing failed")
                     }
                 }
             }.start()
         }
+    }
+
+    /**
+     * MD3's transient message: a snackbar rather than a toast. It sits in the app's own
+     * surface, carries the app's type scale, and can carry an action — which matters here,
+     * because "Pairing failed" without a way forward is a dead end the toast had too.
+     */
+    private fun say(message: String) {
+        Snackbar.make(root, message, Snackbar.LENGTH_LONG).show()
+    }
+
+    override fun onSupportNavigateUp(): Boolean {
+        finish()
+        return true
     }
 
     /**

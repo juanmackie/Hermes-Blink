@@ -17,9 +17,19 @@ import org.unifiedpush.android.connector.data.PushMessage
 class UnifiedPushService : PushService() {
     override fun onNewEndpoint(endpoint: PushEndpoint, instance: String) {
         val context = applicationContext
+        val baseUrl = SecureStore.baseUrl(context) ?: Config.getBackendUrl(context)
+        val token = SecureStore.token(context)
+        // The state used to be set to "registered" before these two guards, so a phone with
+        // no server URL or no token claimed a registration the server never received — and
+        // DiagnosticsActivity reads that local state straight back to the user.
+        if (baseUrl == null || token == null) {
+            Config.setPushState(
+                context, "failed", true,
+                if (baseUrl == null) "no widget server URL is configured" else "no device token is stored",
+            )
+            return
+        }
         Config.setPushState(context, "registered", true)
-        val baseUrl = SecureStore.baseUrl(context) ?: Config.getBackendUrl(context) ?: return
-        val token = SecureStore.token(context) ?: return
         Thread {
             val result = HermesApi.registerPushEndpoint(baseUrl, token, endpoint.url)
             if (result.code !in 200..299) {

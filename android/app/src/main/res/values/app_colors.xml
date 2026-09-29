@@ -32,8 +32,39 @@
     <color name="app_primary_container">#EADDFF</color>
     <color name="app_on_primary_container">#4F378B</color>
 
-    <!-- Status: error 40 -->
+    <!--
+      Secondary 40/100/90/30 and tertiary 40/100/90/30. These were missing while every
+      control was hand-drawn from primary tokens; Theme.Material3 resolves them for every
+      MD3 component that is not a filled/tonal button (assist chips, tonal surfaces,
+      switches, dialog accents), and an unmapped role silently falls back to the library's
+      default purple rather than to Hermes' own palette. Same reference tones as primary,
+      so they can be checked against the spec the same way.
+    -->
+    <color name="app_secondary">#625B71</color>
+    <color name="app_on_secondary">#FFFFFF</color>
+    <color name="app_secondary_container">#E8DEF8</color>
+    <color name="app_on_secondary_container">#1D192B</color>
+
+    <color name="app_tertiary">#7D5260</color>
+    <color name="app_on_tertiary">#FFFFFF</color>
+    <color name="app_tertiary_container">#FFD8E4</color>
+    <color name="app_on_tertiary_container">#31111D</color>
+
+    <!-- Status: error 40, on-error 100, error-container 90, on-error-container 30 -->
     <color name="app_error">#B3261E</color>
+    <color name="app_on_error">#FFFFFF</color>
+    <color name="app_error_container">#F9DEDC</color>
+    <color name="app_on_error_container">#410E0B</color>
+
+    <!--
+      Inverse roles: the pair a snackbar is painted in (inverse-surface n20 with
+      inverse-on-surface n95), plus the accent that stays legible on it. MD3 keeps these
+      separate from the normal surface roles precisely so a snackbar is never "surface,
+      but darker", which is what makes it float over the content.
+    -->
+    <color name="app_inverse_surface">#322F35</color>
+    <color name="app_inverse_on_surface">#F5EFF7</color>
+    <color name="app_inverse_primary">#D0BCFF</color>
 
     <!-- Outline: neutral-variant 50 / 80 -->
     <color name="app_outline">#79747E</color>

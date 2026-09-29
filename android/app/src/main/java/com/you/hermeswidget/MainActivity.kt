@@ -3,10 +3,11 @@ package com.you.hermeswidget
 import android.content.Intent
 import android.os.Bundle
 import android.text.format.DateUtils
-import android.widget.Button
+import android.view.View
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.work.WorkManager
+import com.google.android.material.appbar.MaterialToolbar
 import com.you.hermeswidget.net.AppIdentity
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.HermesApi
@@ -26,10 +27,14 @@ class MainActivity : AppCompatActivity() {
         // Redraw the widget if this launch follows an app upgrade (stale RemoteViews).
         runCatching { WidgetRerender.runIfVersionChanged(this) }
         setContentView(R.layout.activity_main)
-        findViewById<Button>(R.id.connect_btn).setOnClickListener {
+        // The theme is NoActionBar on purpose: that is the MD3 top app bar, not a missing
+        // one. Handing the layout's toolbar to the action bar is what makes up navigation,
+        // window insets and the overflow menu behave the way the platform expects.
+        setSupportActionBar(findViewById<MaterialToolbar>(R.id.top_app_bar))
+        findViewById<View>(R.id.connect_btn).setOnClickListener {
             startActivity(Intent(this, SettingsActivity::class.java))
         }
-        findViewById<Button>(R.id.diagnostics_btn).setOnClickListener {
+        findViewById<View>(R.id.diagnostics_btn).setOnClickListener {
             startActivity(Intent(this, DiagnosticsActivity::class.java))
         }
         WorkManager.getInstance(this)

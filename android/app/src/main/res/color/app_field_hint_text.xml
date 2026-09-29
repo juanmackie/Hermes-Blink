@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  The field label's colour: secondary ink while it sits in the box, primary once it has
+  floated up into the outline — which is the same moment the outline moves, so the two
+  always agree about whether this field is focused.
+-->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item
+        android:color="@color/app_primary"
+        android:state_enabled="true"
+        android:state_focused="true" />
+    <item android:color="@color/app_on_surface_variant" />
+</selector>

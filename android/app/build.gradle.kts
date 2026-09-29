@@ -109,8 +109,16 @@ android {
         // apart. See docs/APK_RELEASE.md and scripts/check-build-provenance.py.
         // 12, not 11: 11 is recorded in the release ledger and the review device has been
         // sent one, so reusing it would be the divergence check-build-provenance refuses.
-        versionCode = 12
-        versionName = "0.4.8"
+        // 13, not 12: 12 is 0.4.8, the release ledger's newest row, so reusing it is the
+        // same divergence. This one is the Material 3 round: a real Theme.Material3 theme
+        // (so every colour role, the corner scale, the state layers and the ripple come
+        // from one place), MaterialButton / TopAppBar / TextInputLayout / MaterialCardView
+        // / MaterialDivider / Snackbar on the screens, and the com.google.android.material
+        // dependency that makes them real. A new dependency is a new APK, and an APK that
+        // cannot be told apart from the last one is exactly the problem this field exists
+        // to prevent.
+        versionCode = 13
+        versionName = "0.4.9"
     }
     buildFeatures {
         compose = true
@@ -131,6 +139,15 @@ android {
         getByName("test") {
             // Shared fixtures (single source of truth for layout v2) — see fixtures/
             resources.srcDir(File(rootProject.projectDir, "../fixtures"))
+            // AppSurfaceTest reads src/main/res and the activity sources straight off disk
+            // (a layout or a theme is not a runtime class, so there is nothing to
+            // classload), which means Gradle saw no input change and reported the test
+            // task UP-TO-DATE after a token was edited — a gate that does not re-run is a
+            // gate that has stopped being one. Declaring the same directory as a test
+            // resource makes the dependency real: edit a colour token, and the gates
+            // re-run.
+            resources.srcDir(File(rootProject.projectDir, "app/src/main/res"))
+            resources.srcDir(File(rootProject.projectDir, "app/src/main/java"))
         }
     }
     signingConfigs {
@@ -164,7 +181,19 @@ dependencies {
     // imported): retrofit (HTTP is HttpURLConnection), kotlinx-serialization-json (JSON is
     // org.json), datastore-preferences (storage is SharedPreferences/EncryptedSharedPreferences,
     // and datastore still arrives transitively via glance-appwidget), glance-material3.
-    implementation("androidx.appcompat:appcompat:1.7.0")  // only as the AppTheme parent; see themes.xml
+    //
+    // Material Components is the one dependency added after the bloat audit, and it is the
+    // one the audit itself points at: it is what makes `Theme.Material3` (and with it
+    // MaterialButton / TopAppBar / TextInputLayout / MaterialCardView / Snackbar) real
+    // instead of hand-rolled. It carries no network, database or analytics surface — only
+    // appcompat, recyclerview, coordinatorlayout, constraintlayout, transition and
+    // vectordrawable — and it draws every state layer and ripple itself, which is why the
+    // per-control <ripple> drawables in res/drawable are now the fallback rather than the
+    // only way a control can show a press state.
+    implementation("com.google.android.material:material:1.12.0")
+    // Kept explicitly even though Material depends on it: AppTheme is still an AppCompat
+    // theme (Material3 extends it), and pinning it here documents that.
+    implementation("androidx.appcompat:appcompat:1.7.0")  // AppTheme's parent chain; see themes.xml
     implementation("androidx.glance:glance-appwidget:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("androidx.security:security-crypto:1.1.0-alpha06")

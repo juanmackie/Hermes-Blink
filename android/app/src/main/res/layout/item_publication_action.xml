@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  A secondary action on the publication screen. See item_publication_primary_action.xml
+  for why these are layouts rather than styled-in-code buttons; this is the tonal step of
+  the MD3 hierarchy, which is what peer actions get.
+-->
+<com.google.android.material.button.MaterialButton
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:id="@+id/action_button"
+    style="@style/ButtonTonal"
+    android:layout_width="match_parent"
+    android:layout_height="wrap_content"
+    android:layout_marginTop="@dimen/space_sm" />

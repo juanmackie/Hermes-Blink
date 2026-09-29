@@ -1,12 +1,14 @@
 package com.you.hermeswidget.config
 
-import android.app.Activity
 import android.os.Bundle
 import android.os.CountDownTimer
-import android.widget.Button
-import android.widget.EditText
+import android.view.View
 import android.widget.TextView
-import android.widget.Toast
+import androidx.appcompat.app.AppCompatActivity
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.snackbar.Snackbar
+import com.google.android.material.textfield.TextInputEditText
+import com.google.android.material.textfield.TextInputLayout
 import com.you.hermeswidget.R
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.ConnectionState
@@ -15,15 +17,28 @@ import com.you.hermeswidget.net.SecureStore
 import com.you.hermeswidget.work.RefreshWorker
 import org.json.JSONObject
 
-class PairingActivity : Activity() {
+/**
+ * The deep-link entry point: a QR code or the CLI one-liner lands here with the server URL
+ * and a short-lived code.
+ *
+ * MD3 rather than the raw form it replaced: a top app bar with a way back, an outlined
+ * text field (the label in the outline's cut-out, the focus cue in primary), a filled
+ * action, and the two kinds of message separated the way the spec separates them — a bad
+ * code is an error *on the field*, an outcome is a snackbar.
+ */
+class PairingActivity : AppCompatActivity() {
     private var countdown: CountDownTimer? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_pairing)
-        val codeInput = findViewById<EditText>(R.id.pairing_code_input)
-        val pairButton = findViewById<Button>(R.id.pair_btn)
+        setSupportActionBar(findViewById<MaterialToolbar>(R.id.top_app_bar))
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        val codeField = findViewById<TextInputLayout>(R.id.pairing_code_field)
+        val codeInput = findViewById<TextInputEditText>(R.id.pairing_code_input)
+        val pairButton = findViewById<View>(R.id.pair_btn)
         val expiry = findViewById<TextView>(R.id.pairing_expiry)
+        val root = findViewById<View>(android.R.id.content)
 
         // A QR code (or the CLI one-liner) can hand us the URL and code together.
         val deepLink = PairingLink.parse(intent?.data?.toString())
@@ -36,7 +51,9 @@ class PairingActivity : Activity() {
         }
 
         if (baseUrl.isBlank()) {
-            Toast.makeText(this, "Open Hermes settings and enter the server URL first", Toast.LENGTH_LONG).show()
+            // The screen is closing under this message, so a snackbar anchored to it would
+            // never be seen: this is the one case where the platform toast is still right.
+            Snackbar.make(root, "Open Hermes settings and enter the server URL first", Snackbar.LENGTH_LONG).show()
             finish()
             return
         }
@@ -45,9 +62,13 @@ class PairingActivity : Activity() {
         pairButton.setOnClickListener {
             val code = codeInput.text.toString().trim()
             if (!code.matches(Regex("[A-Za-z0-9-]{8,32}"))) {
-                Toast.makeText(this, "Enter the short-lived pairing code", Toast.LENGTH_SHORT).show()
+                // On the field, not in a floating message: the user is looking at the
+                // field they just typed into, and MD3 gives that place a first-class slot.
+                codeField.error = "Enter the short-lived pairing code"
+                codeInput.requestFocus()
                 return@setOnClickListener
             }
+            codeField.error = null
             pairButton.isEnabled = false
             Thread {
                 val result = runCatching {
@@ -66,10 +87,18 @@ class PairingActivity : Activity() {
                     pairButton.isEnabled = true
                     result.onSuccess { deviceId ->
                         RefreshWorker.enqueueNow(this)
-                        Toast.makeText(this, "Paired as $deviceId", Toast.LENGTH_LONG).show()
+                        Snackbar.make(
+                            root,
+                            "Paired as $deviceId",
+                            Snackbar.LENGTH_SHORT,
+                        ).show()
                         finish()
                     }.onFailure { error ->
-                        Toast.makeText(this, error.message ?: "Pairing failed", Toast.LENGTH_LONG).show()
+                        Snackbar.make(
+                            root,
+                            error.message ?: "Pairing failed",
+                            Snackbar.LENGTH_LONG,
+                        ).show()
                     }
                 }
             }.start()
@@ -88,6 +117,11 @@ class PairingActivity : Activity() {
                 view.text = "Code expired; mint a new one with hermes widget pair"
             }
         }.start()
+    }
+
+    override fun onSupportNavigateUp(): Boolean {
+        finish()
+        return true
     }
 
     override fun onDestroy() {

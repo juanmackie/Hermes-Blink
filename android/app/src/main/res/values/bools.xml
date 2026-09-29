@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  System-bar icon polarity. A theme item cannot branch on night mode by itself: a style
+  defined in values-night replaces the light one instead of merging, so the item would have
+  to be written twice and could drift. A bool resolves per configuration while the style
+  that reads it (AppTheme.Base in themes.xml) stays single-sourced.
+-->
+<resources>
+    <!-- Light: dark icons on the surfaceContainer-tinted bar. -->
+    <bool name="app_light_system_bars">true</bool>
+</resources>

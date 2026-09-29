@@ -1,57 +1,89 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The launcher surface. Tonal container on the themed canvas, one filled primary action,
-  one tonal secondary. Previously this was a white box with black text and no dark mode.
+  The launcher surface, in Material 3: a small top app bar on the surface container, the
+  publication state on a tonal card, one filled primary action and one tonal secondary.
+
+  The screen used to be a centred column of raw views on a bare window background. The
+  structure is the MD3 one — app bar, content, action row at the bottom of the content —
+  and every control is a Material component, so its state layer, ripple and shape come from
+  the theme rather than from a per-control drawable.
 -->
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:orientation="vertical"
-    android:padding="@dimen/space_lg"
-    android:gravity="center_vertical">
+    android:fitsSystemWindows="true"
+    android:orientation="vertical">
 
-    <ImageView
-        android:layout_width="32dp"
-        android:layout_height="32dp"
-        android:contentDescription="@null"
-        android:src="@drawable/ic_hermes_mono"
-        android:background="@drawable/bg_button_filled"
-        android:padding="6dp" />
-
-    <TextView
-        android:id="@+id/status_text"
-        style="@style/TextBody"
+    <com.google.android.material.appbar.MaterialToolbar
+        android:id="@+id/top_app_bar"
+        style="@style/TopAppBar"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_md"
-        android:text="@string/status_disconnected" />
+        app:title="@string/app_name" />
 
-    <TextView
-        style="@style/TextBodySmall"
+    <androidx.core.widget.NestedScrollView
         android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_sm"
-        android:text="@string/main_hint" />
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
 
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:layout_marginTop="@dimen/space_lg"
-        android:orientation="horizontal">
-
-        <Button
-            android:id="@+id/connect_btn"
-            style="@style/ButtonFilled"
-            android:layout_width="wrap_content"
+        <LinearLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="@string/connect" />
+            android:orientation="vertical"
+            android:padding="@dimen/space_lg">
 
-        <Button
-            android:id="@+id/diagnostics_btn"
-            style="@style/ButtonTonal"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:layout_marginStart="@dimen/space_sm"
-            android:text="@string/delivery_diagnostics" />
-    </LinearLayout>
+            <ImageView
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:background="@drawable/bg_button_filled"
+                android:contentDescription="@null"
+                android:padding="8dp"
+                android:src="@drawable/ic_hermes_mono" />
+
+            <com.google.android.material.card.MaterialCardView
+                style="@style/SurfaceCard"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_md">
+
+                <LinearLayout
+                    android:layout_width="match_parent"
+                    android:layout_height="wrap_content"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/status_text"
+                        style="@style/TextBody"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:text="@string/status_disconnected" />
+
+                    <TextView
+                        style="@style/TextBodySmall"
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="@dimen/space_sm"
+                        android:text="@string/main_hint" />
+                </LinearLayout>
+            </com.google.android.material.card.MaterialCardView>
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/connect_btn"
+                style="@style/ButtonFilled"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_lg"
+                android:text="@string/connect" />
+
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/diagnostics_btn"
+                style="@style/ButtonTonal"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="@dimen/space_sm"
+                android:text="@string/delivery_diagnostics" />
+        </LinearLayout>
+    </androidx.core.widget.NestedScrollView>
 </LinearLayout>

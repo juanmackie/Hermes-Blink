@@ -1,0 +1,14 @@
+<!--
+  MD3 navigation icon: close, for the screens that are a panel rather than a step in a
+  flow (diagnostics). Tinted by the toolbar, not baked in.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24"
+    android:tint="@color/app_on_surface_variant">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M19,6.41L17.59,5 12,10.59 6.41,5 5,6.41 10.59,12 5,17.59 6.41,19 12,13.41 17.59,19 19,17.59 13.41,12z" />
+</vector>

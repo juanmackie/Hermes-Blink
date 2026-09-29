@@ -1,8 +1,6 @@
 package com.you.hermeswidget
 
-import android.app.Activity
 import android.content.Context
-import android.graphics.Bitmap
 import android.graphics.Color
 import android.graphics.Matrix
 import android.os.Bundle
@@ -12,12 +10,19 @@ import android.util.Log
 import android.view.MotionEvent
 import android.view.ScaleGestureDetector
 import android.view.View
-import androidx.appcompat.widget.AppCompatImageView
+import android.view.ViewGroup
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
-import androidx.appcompat.app.AlertDialog
+import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.AppCompatImageView
+import androidx.core.widget.NestedScrollView
+import com.google.android.material.appbar.MaterialToolbar
+import com.google.android.material.button.MaterialButton
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
+import com.google.android.material.snackbar.Snackbar
+import com.google.android.material.textfield.TextInputEditText
 import com.you.hermeswidget.net.Config
 import com.you.hermeswidget.net.HermesApi
 import com.you.hermeswidget.net.Outcome
@@ -26,52 +31,65 @@ import com.you.hermeswidget.net.PublicationAction
 import com.you.hermeswidget.net.PublicationContent
 import com.you.hermeswidget.net.PublicationRepository
 import com.you.hermeswidget.net.SecureStore
+import com.you.hermeswidget.work.DwellWorker
 import com.you.hermeswidget.work.RefreshWorker
 import com.you.hermeswidget.widget.PublicationImages
 import org.json.JSONObject
 import java.util.UUID
 import kotlin.math.min
 
-class PublicationActivity : Activity() {
+class PublicationActivity : AppCompatActivity() {
     private val openedAt = SystemClock.elapsedRealtime()
+    private lateinit var root: View
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val publication = PublicationRepository.loadCached(this)
         if (publication == null || publication.isExpired()) {
+            // This screen closes immediately, so there is no surface for a snackbar to
+            // attach to and a message nobody can read is worse than none. The platform
+            // toast is the one place it is still the right tool.
             Toast.makeText(this, "No current publication is available", Toast.LENGTH_LONG).show()
             finish()
             return
         }
 
-        val root = LinearLayout(this).apply {
+        // The chrome is the layout; the body is whatever this publication contains.
+        setContentView(R.layout.activity_publication)
+        val toolbar = findViewById<MaterialToolbar>(R.id.top_app_bar)
+        setSupportActionBar(toolbar)
+        supportActionBar?.setDisplayHomeAsUpEnabled(true)
+        // The title is the publication's own, in the app bar where MD3 puts a screen's
+        // title, instead of a second 22sp heading in the body.
+        toolbar.title = publication.title
+        root = findViewById(R.id.publication_content)
+
+        val content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            // Themed surface, not a hard-coded near-black: the zoom view used to be a dark
-            // screen in every mode, which is a jarring jump out of a light launcher.
-            setBackgroundColor(color(R.color.app_surface))
-            setPadding(dp(20), dp(18), dp(20), dp(20))
+            // The image content wants the space the rest of the body does not use, so the
+            // column fills the viewport and the image takes the remainder by weight.
+            layoutParams = ViewGroup.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.MATCH_PARENT,
+            )
+            setPadding(dp(20), dp(16), dp(20), dp(20))
         }
-        root.addView(TextView(this).apply {
-            text = publication.title
-            setTextColor(color(R.color.app_on_surface))
-            textSize = 22f
-            typeface = android.graphics.Typeface.DEFAULT_BOLD
-        })
-        root.addView(TextView(this).apply {
+        (root as NestedScrollView).addView(content)
+
+        content.addView(TextView(this).apply {
+            // body-md: the summary is supporting text, not a second title.
+            setTextAppearance(R.style.TextBodySmall)
             text = publication.summary
-            setTextColor(color(R.color.app_on_surface_variant))
-            textSize = 15f
-            setPadding(0, dp(8), 0, dp(14))
         })
 
-        when (val content = publication.content) {
-            is PublicationContent.Text -> root.addView(textView(content.text))
+        when (val body = publication.content) {
+            is PublicationContent.Text -> content.addView(textView(body.text))
             is PublicationContent.Image -> {
                 val bitmap = PublicationImages.load(this, publication)
                 if (bitmap == null) {
-                    root.addView(textView("The visual is not cached on this phone yet."))
+                    content.addView(textView("The visual is not cached on this phone yet."))
                 } else {
-                    root.addView(
+                    content.addView(
                         ZoomImageView(this).apply {
                             setImageBitmap(bitmap)
                             contentDescription = publication.summary
@@ -86,43 +104,75 @@ class PublicationActivity : Activity() {
             }
         }
         publication.question?.takeIf { it.status == "open" }?.let { question ->
-            root.addView(android.widget.Button(this).apply {
-                text = getString(R.string.answer_question, question.prompt)
-                setOnClickListener { showQuestionDialog(question.questionId, question.prompt) }
-            })
+            content.addView(
+                actionButton(R.layout.item_publication_action, getString(R.string.answer_question, question.prompt)) {
+                    showQuestionDialog(question.questionId, question.prompt)
+                },
+            )
         }
         publication.ticker?.takeUnless { it.decayed }?.let { ticker ->
             val rotating = ticker.rotation.firstOrNull { !it.pinned }
-            root.addView(TextView(this).apply {
+            content.addView(TextView(this).apply {
+                // body-md, the same step the summary uses: both are supporting text.
+                setTextAppearance(R.style.TextBodySmall)
                 text = getString(
                     R.string.ticker_line,
                     ticker.title,
                     rotating?.summary ?: ticker.summary,
                 )
-                setTextColor(color(R.color.app_on_surface_variant))
-                textSize = 14f
                 setPadding(0, dp(12), 0, dp(4))
             })
         }
-        root.addView(android.widget.Button(this).apply {
-            text = getString(R.string.widget_request_update)
-            setOnClickListener { requestUpdate() }
-        })
-        root.addView(android.widget.Button(this).apply {
-            text = getString(R.string.previous_states)
-            setOnClickListener { showHistory() }
-        })
+        // One primary action per screen. "Request update" is the one thing this screen is
+        // for, so it is the only filled button; everything else steps down the MD3
+        // hierarchy (tonal for the publication's own actions, text for inspection) rather
+        // than a row of identical pills.
+        content.addView(
+            actionButton(R.layout.item_publication_primary_action, getString(R.string.widget_request_update)) {
+                requestUpdate()
+            },
+        )
+        content.addView(
+            actionButton(R.layout.item_publication_text_action, getString(R.string.previous_states)) {
+                showHistory()
+            },
+        )
         publication.actions.forEach { action ->
             val state = publication.actionStates[action.itemId]?.status
             val label = if (state == null || state == "queued") action.label else "${action.label} ($state)"
-            root.addView(android.widget.Button(this).apply {
-                text = label
-                isEnabled = state == null || state == "queued" || state == "awaiting_confirmation"
-                setOnClickListener { confirmAndSend(action) }
-            })
+            content.addView(
+                actionButton(R.layout.item_publication_action, label) {
+                    confirmAndSend(action)
+                }.apply {
+                    isEnabled = state == null || state == "queued" || state == "awaiting_confirmation"
+                },
+            )
         }
-        setContentView(root)
         recordTapAndRefresh()
+    }
+
+    /**
+     * Inflate one of the action item layouts and bind it. The appearance is the layout's
+     * style; only the label and the click are decided here.
+     */
+    private fun actionButton(
+        layout: Int,
+        label: String,
+        onClick: () -> Unit,
+    ): MaterialButton =
+        (layoutInflater.inflate(layout, null, false) as MaterialButton).apply {
+            text = label
+            setOnClickListener { onClick() }
+        }
+
+    override fun onSupportNavigateUp(): Boolean {
+        finish()
+        return true
+    }
+
+    /** MD3's transient message, in the app's own surface. */
+    private fun say(message: String) {
+        Snackbar.make(root, message, Snackbar.LENGTH_LONG).show()
     }
 
     /** Resolve a token, honouring the device's dark mode, with the caller's fallback. */
@@ -137,18 +187,44 @@ class PublicationActivity : Activity() {
      */
     override fun onStop() {
         super.onStop()
-        val publication = PublicationRepository.loadCached(this) ?: return
-        val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this) ?: return
-        val token = SecureStore.token(this) ?: return
+        // Measured here, at the moment the view stopped being visible, and carried into the
+        // worker: the report runs later and cannot re-derive it.
         val seconds = (SystemClock.elapsedRealtime() - openedAt) / 1000
         val bucket = when {
             seconds < 5 -> "lt5"
             seconds < 60 -> "5to60"
             else -> "gt60"
         }
-        Thread {
-            HermesApi.reportAttention(baseUrl, token, publication.widgetId, publication.revision, dwellBucket = bucket)
-        }.start()
+        val publication = PublicationRepository.loadCached(this)
+        if (publication == null) {
+            reportDwellLost("no_cached_publication", "no cached publication to attribute the dwell to")
+            return
+        }
+        val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this)
+        if (baseUrl == null) {
+            reportDwellLost("no_server", "no widget server URL is configured")
+            return
+        }
+        val token = SecureStore.token(this)
+        if (token == null) {
+            reportDwellLost("no_token", "no device token is stored")
+            return
+        }
+        DwellWorker.enqueue(this, publication.widgetId, publication.revision, bucket)
+    }
+
+    /**
+     * A dwell that cannot be reported says so. The three exits above used to be bare
+     * `?: return`s, while the tap path beside them was made loud in round 5 — so a lost
+     * measurement and a widget nobody opened stayed indistinguishable in the aggregate,
+     * which is the one question dwell exists to answer.
+     */
+    private fun reportDwellLost(code: String, message: String) {
+        Log.w("HermesDwell", "dwell not reported: $code - $message")
+        Config.recordActionOutcome(
+            this, "dwell", instanceId(), -1, code, message,
+            source = Config.SOURCE_IN_APP_BUTTON,
+        )
     }
 
     private fun requestUpdate() {
@@ -167,7 +243,7 @@ class PublicationActivity : Activity() {
                 this, "request_update", instanceId(), -1, blocker.code, blocker.message,
                 source = Config.SOURCE_IN_APP_BUTTON,
             )
-            Toast.makeText(this, blocker.message, Toast.LENGTH_LONG).show()
+            say(blocker.message)
             return
         }
         val url = baseUrl!!
@@ -184,8 +260,8 @@ class PublicationActivity : Activity() {
             val requestId = runCatching {
                 result.body?.takeIf { it.isNotBlank() }?.let { JSONObject(it).optString("requestId") }
             }.getOrNull()
-            // Logged as well as shown: a user who dismisses the toast still leaves a trail
-            // Diagnostics can display, with the server's own request id to quote.
+            // Logged as well as shown: a user who dismisses the message still leaves a
+            // trail Diagnostics can display, with the server's own request id to quote.
             Log.i(
                 "HermesTap",
                 "request_update -> ${resolved.code} status=${result.code}" +
@@ -197,7 +273,7 @@ class PublicationActivity : Activity() {
                 source = Config.SOURCE_IN_APP_BUTTON,
             )
             runOnUiThread {
-                Toast.makeText(this, resolved.message, Toast.LENGTH_LONG).show()
+                say(resolved.message)
             }
         }.start()
     }
@@ -216,7 +292,7 @@ class PublicationActivity : Activity() {
             val result = HermesApi.fetchHistory(baseUrl, Config.getWidgetId(this), token)
             runOnUiThread {
                 if (result.code !in 200..299 || result.body == null) {
-                    Toast.makeText(this, "History unavailable", Toast.LENGTH_SHORT).show()
+                    say("History unavailable")
                     return@runOnUiThread
                 }
                 val revisions = org.json.JSONObject(result.body).optJSONArray("revisions")
@@ -226,20 +302,36 @@ class PublicationActivity : Activity() {
                         append("r${item.optInt("revision")} · ${item.optString("title")}\n")
                     }
                 }
-                AlertDialog.Builder(this).setTitle("Previous states").setMessage(text.ifBlank { "No history" }).show()
+                // MD3 alert dialog: 28dp corners from the shape scale, a tonal surface, and
+                // text buttons rather than the platform's filled ones.
+                MaterialAlertDialogBuilder(this)
+                    .setTitle("Previous states")
+                    .setMessage(text.ifBlank { "No history" })
+                    .show()
             }
         }.start()
     }
 
     private fun showQuestionDialog(questionId: String, prompt: String) {
-        val input = android.widget.EditText(this).apply {
-            hint = "Your answer"
-            maxLines = 3
-            setPadding(dp(12), dp(8), dp(12), dp(8))
+        // The answer is typed into a real MD3 text field, not a bare EditText: the label
+        // sits in the outline, the focus cue is in primary, and the error slot exists if
+        // the answer ever turns out to need one.
+        val field = com.google.android.material.textfield.TextInputLayout(this).apply {
+            setHint("Your answer")
+            boxBackgroundMode =
+                com.google.android.material.textfield.TextInputLayout.BOX_BACKGROUND_OUTLINE
+            // The `medium` step of the shape scale, the same corner the fields on the
+            // pairing screens use, so a dialog's field is not a different shape.
+            val radius = dp(12).toFloat()
+            setBoxCornerRadii(radius, radius, radius, radius)
         }
-        AlertDialog.Builder(this)
+        val input = TextInputEditText(field.context).apply {
+            maxLines = 3
+        }
+        field.addView(input)
+        MaterialAlertDialogBuilder(this)
             .setTitle(prompt)
-            .setView(input)
+            .setView(field)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Send") { _, _ ->
                 val baseUrl = SecureStore.baseUrl(this) ?: Config.getBackendUrl(this) ?: return@setPositiveButton
@@ -263,7 +355,7 @@ class PublicationActivity : Activity() {
             sendAction(action, confirmed = false)
             return
         }
-        AlertDialog.Builder(this)
+        MaterialAlertDialogBuilder(this)
             .setTitle("Queue this action?")
             .setMessage("This only queues an intent for the agent; it does not execute the operation here.")
             .setNegativeButton("Cancel", null)
@@ -293,11 +385,9 @@ class PublicationActivity : Activity() {
                     .put("payload", JSONObject(action.payload).toString()))
             }
             runOnUiThread {
-                Toast.makeText(
-                    this,
+                say(
                     if (result.code in 200..299) "Action queued" else "Action saved; it will retry when connected",
-                    Toast.LENGTH_LONG,
-                ).show()
+                )
             }
         }.start()
     }
@@ -316,12 +406,10 @@ class PublicationActivity : Activity() {
     private fun textView(value: String): ScrollView = ScrollView(this).apply {
         addView(TextView(this@PublicationActivity).apply {
             text = value
-            // A token, not Color.WHITE: this view used to sit on a hard-coded near-black
-            // background, and would have been unreadable once the surface followed the
-            // device theme.
-            setTextColor(color(R.color.app_on_surface))
-            textSize = 18f
-            setLineSpacing(0f, 1.2f)
+            // body-lg, the M3 step, applied as a role rather than a raw size: the old code
+            // asked for 18sp, which is not on the type scale, and set the colour from a
+            // token by hand where the role already carries it.
+            setTextAppearance(R.style.TextBody)
             movementMethod = ScrollingMovementMethod()
             setTextIsSelectable(true)
         })
