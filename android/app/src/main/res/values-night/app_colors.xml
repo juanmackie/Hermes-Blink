@@ -61,7 +61,6 @@
     <color name="app_state_layer_filled">#C1ACF1</color>
     <color name="app_state_layer_tonal">#5F4897</color>
     <color name="app_state_layer_outlined">#27232F</color>
-    <color name="app_state_layer_field">#2B2930</color>
 
     <color name="paired_indicator">#7BD88F</color>
     <color name="unpaired_indicator">#CAC4D0</color>

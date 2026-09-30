@@ -76,7 +76,6 @@ object ActionCallbacks {
             val kind = parameters[WidgetParams.kindKey] ?: event
             val itemId = parameters[WidgetParams.itemIdKey].orEmpty()
             val actionClass = parameters[WidgetParams.actionClassKey] ?: "reversible"
-            val confirmOnDevice = parameters[WidgetParams.confirmOnDeviceKey] ?: false
             val url = SecureStore.baseUrl(context) ?: Config.getBackendUrl(context)
             val token = SecureStore.token(context)
             if (url == null || token == null) {
@@ -91,7 +90,7 @@ object ActionCallbacks {
                 val publication = com.you.hermeswidget.net.PublicationRepository.loadCached(context)
                 HermesApi.postAction(
                     url, widgetId, kind, itemId, actionClass,
-                    publication?.revision ?: 0, clientEventId, confirmOnDevice, token, payload,
+                    publication?.revision ?: 0, clientEventId, token, payload,
                 )
             } else {
                 val body = JSONObject()
@@ -127,7 +126,6 @@ object ActionCallbacks {
                         .put("actionClass", actionClass)
                         .put("revision", publication?.revision ?: 0)
                         .put("clientEventId", clientEventId)
-                        .put("confirmOnDevice", confirmOnDevice)
                         .put("payload", payload ?: "{}"))
                 }
             }
@@ -175,5 +173,4 @@ object WidgetParams {
     val kindKey = ActionParameters.Key<String>("kind")
     val itemIdKey = ActionParameters.Key<String>("itemId")
     val actionClassKey = ActionParameters.Key<String>("actionClass")
-    val confirmOnDeviceKey = ActionParameters.Key<Boolean>("confirmOnDevice")
 }

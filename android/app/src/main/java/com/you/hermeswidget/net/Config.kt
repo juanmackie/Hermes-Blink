@@ -14,7 +14,6 @@ object Config {
     private const val KEY_BACKEND_URL = "backend_url"
     private const val KEY_WIDGET_ID = "widget_id"
     private const val KEY_TOKEN = "token"
-    private const val KEY_LAYOUT_JSON = "layout_json"
     private const val KEY_PUBLICATION_JSON = "publication_json"
     private const val KEY_PUBLICATION_ETAG = "publication_etag"
     private const val KEY_ASSET_ETAG = "asset_etag"
@@ -91,15 +90,6 @@ object Config {
 
     fun getWidgetId(context: Context): String {
         return prefs(context).getString(KEY_WIDGET_ID, "hermes-brief") ?: "hermes-brief"
-    }
-
-    fun setCachedLayout(context: Context, json: String) {
-        prefs(context).edit().putString(KEY_LAYOUT_JSON, json).apply()
-    }
-
-    fun getCachedLayout(context: Context): String? {
-        val json = prefs(context).getString(KEY_LAYOUT_JSON, null)
-        return json?.takeIf { it.isNotEmpty() }
     }
 
     fun setCachedPublication(

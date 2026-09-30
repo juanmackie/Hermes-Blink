@@ -10,10 +10,11 @@ from __future__ import annotations
 import contextlib
 import logging
 from collections.abc import Callable
+from functools import wraps
 from pathlib import Path
 from typing import Any
 
-from . import schemas, tools
+from . import schemas, store, tools
 
 logger = logging.getLogger(__name__)
 
@@ -26,22 +27,15 @@ _SKILL_DESCRIPTION = (
 )
 
 _TOOLS: tuple[tuple[dict[str, Any], Callable[..., str]], ...] = (
-    (schemas.WIDGET_UPDATE, tools.widget_update),
-    (schemas.WIDGET_VALIDATE, tools.widget_validate),
     (schemas.WIDGET_LIST, tools.widget_list),
     (schemas.WIDGET_READ_EVENTS, tools.widget_read_events),
-    (schemas.WIDGET_MINT_PAIRING_CODE, tools.widget_mint_pairing_code),
-    (schemas.WIDGET_SETUP, tools.widget_setup),
     (schemas.WIDGET_PUBLISH, tools.widget_publish),
     (schemas.WIDGET_PREVIEW, tools.widget_preview),
     (schemas.WIDGET_READ_INTENTS, tools.widget_read_intents),
     (schemas.WIDGET_RESOLVE_INTENT, tools.widget_resolve_intent),
     (schemas.WIDGET_ASK, tools.widget_ask),
     (schemas.WIDGET_READ_QUESTIONS, tools.widget_read_questions),
-    (schemas.WIDGET_WATCH_CREATE, tools.widget_watch_create),
-    (schemas.WIDGET_WATCH_LIST, tools.widget_watch_list),
-    (schemas.WIDGET_WATCH_PAUSE, tools.widget_watch_pause),
-    (schemas.WIDGET_WATCH_TICK, tools.widget_watch_tick),
+    (schemas.WIDGET_WATCH, tools.widget_watch),
     (schemas.WIDGET_WAKE_TEST, tools.widget_wake_test),
     (schemas.WIDGET_SET_QUIET_HOURS, tools.widget_set_quiet_hours),
     (schemas.WIDGET_STATUS, tools.widget_status),
@@ -66,10 +60,10 @@ _PROACTIVE_GUIDANCE = (
     "a visual, and widget_read_intents/widget_resolve_intent for queued taps. High "
     "priority is only for genuinely time-sensitive content. Publishing stores a revision; "
     "it never proves the user saw it (publishing does not prove delivery or visibility). "
-    "If setup is missing, use widget_setup rather than "
-    "guessing private paths. When widget_status lists a waiting entry in updateRequests, the "
-    "user tapped Request update on the widget and wants something fresher: publish what you "
-    "know now rather than waiting for the next scheduled run."
+    "If host setup is missing, direct the operator to `hermes widget up`; never "
+    "guess private paths. Call widget_status with consume_update_requests=true; a non-empty "
+    "newlyConsumedUpdateRequests list means the user tapped Request update on the widget and "
+    "wants something fresher: publish what you know now rather than waiting for the next run."
 )
 
 
@@ -126,11 +120,20 @@ def _register_tools(ctx: Any) -> None:
                 name=name,
                 toolset=_TOOLSET,
                 schema=schema,
-                handler=handler,
+                handler=_database_scoped(handler),
                 description=schema.get("description", ""),
             )
         except Exception:  # noqa: BLE001 - one bad tool must not block the others
             logger.warning("hermes-widget: failed to register tool %s", name, exc_info=True)
+
+
+def _database_scoped(handler: Callable[..., str]) -> Callable[..., str]:
+    """Share one SQLite connection across nested store calls in an agent tool call."""
+    @wraps(handler)
+    def invoke(*args: Any, **kwargs: Any) -> str:
+        with store.db():
+            return handler(*args, **kwargs)
+    return invoke
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +156,8 @@ def _register_slash_command(ctx: Any) -> None:
 
 def _slash_command(raw_args: str = "") -> str:
     """Slash-command entrypoint; args are ignored, the handler reports status."""
-    return tools.widget_status()
+    with store.db():
+        return tools.widget_status()
 
 
 # ---------------------------------------------------------------------------

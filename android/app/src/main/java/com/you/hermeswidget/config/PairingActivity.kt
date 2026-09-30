@@ -110,11 +110,11 @@ class PairingActivity : AppCompatActivity() {
         countdown = object : CountDownTimer(CODE_TTL_MILLIS, 1000L) {
             override fun onTick(millisUntilFinished: Long) {
                 val seconds = millisUntilFinished / 1000
-                view.text = "Code expires in %d:%02d".format(seconds / 60, seconds % 60)
+                view.text = getString(R.string.pairing_code_expires_in, seconds / 60, seconds % 60)
             }
 
             override fun onFinish() {
-                view.text = "Code expired; mint a new one with hermes widget pair"
+                view.text = getString(R.string.pairing_code_expired)
             }
         }.start()
     }

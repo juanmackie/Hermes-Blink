@@ -197,7 +197,7 @@ class AppSurfaceTest {
         // onPrimary over primary, not a single grey shared by everything.
         for (token in listOf(
             "app_state_layer_filled", "app_state_layer_tonal",
-            "app_state_layer_outlined", "app_state_layer_field",
+            "app_state_layer_outlined",
         )) {
             assertTrue(
                 "$token must exist in the light scheme",
@@ -263,7 +263,7 @@ class AppSurfaceTest {
             val mode = colors(qualifier)
             for (token in listOf(
                 "app_state_layer_filled", "app_state_layer_tonal",
-                "app_state_layer_outlined", "app_state_layer_field",
+                "app_state_layer_outlined",
             )) {
                 assertTrue("$token missing in ${qualifier ?: "values"}", token in mode)
             }

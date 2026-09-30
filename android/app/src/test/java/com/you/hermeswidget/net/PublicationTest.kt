@@ -28,6 +28,18 @@ class PublicationTest {
     }
 
     @Test
+    fun publishedAtMillisAcceptsOffsetTimestamps() {
+        val publication = Publication.parse(
+            envelope(publishedAt = "2026-09-16T09:30:00+02:00")
+        )
+
+        assertEquals(
+            Instant.parse("2026-09-16T07:30:00Z").toEpochMilli(),
+            publication.publishedAtMillis(),
+        )
+    }
+
+    @Test
     fun parsesPriorityAndQueuedActionMetadata() {
         val publication = Publication.parse(
             envelope().let { root ->

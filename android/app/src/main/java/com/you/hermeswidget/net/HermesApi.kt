@@ -18,6 +18,7 @@ data class HttpResult(
 )
 
 object HermesApi {
+    private const val MAX_SMALL_RESPONSE_BYTES = 64 * 1024
     private const val MAX_PUBLICATION_BYTES = 512 * 1024
     private const val MAX_ASSET_BYTES = 5 * 1024 * 1024
     fun health(baseUrl: String): Pair<Int, String> {
@@ -27,26 +28,8 @@ object HermesApi {
         conn.connectTimeout = 5000
         conn.readTimeout = 5000
         val code = conn.responseCode
-        val body = if (code == 200) conn.inputStream.bufferedReader().use { it.readText() } else ""
+        val body = if (code == 200) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else ""
         return code to body
-    }
-
-    fun fetchWidget(baseUrl: String, widgetId: String, token: String?): Pair<Int, String?> {
-        val url = URL(baseUrl.trimEnd('/') + "/v1/widgets/$widgetId")
-        val conn = url.openConnection() as HttpURLConnection
-        conn.requestMethod = "GET"
-        conn.connectTimeout = 10000
-        conn.readTimeout = 10000
-        if (!token.isNullOrEmpty()) {
-            conn.setRequestProperty("Authorization", "Bearer $token")
-        }
-        return try {
-            val code = conn.responseCode
-            val body = if (code == 200) conn.inputStream.bufferedReader().use { it.readText() } else null
-            code to body
-        } catch (e: Exception) {
-            -1 to ("Error: ${e.message}")
-        }
     }
 
     fun mintPairingCode(baseUrl: String, agentToken: String): Pair<Int, String?> {
@@ -58,7 +41,7 @@ object HermesApi {
         conn.setRequestProperty("Authorization", "Bearer $agentToken")
         return try {
             val c = conn.responseCode
-            val b = if (c in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null
+            val b = if (c in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null
             c to b
         } catch (e: Exception) { -1 to ("Error: ${e.message}") }
     }
@@ -78,7 +61,7 @@ object HermesApi {
         conn.outputStream.write(body.toByteArray(StandardCharsets.UTF_8))
         return try {
             val c = conn.responseCode
-            val b = if (c in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null
+            val b = if (c in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null
             c to b
         } catch (e: Exception) {
             -1 to ("Error: ${e.message}")
@@ -97,7 +80,7 @@ object HermesApi {
             HttpResult(
                 code = code,
                 body = if (code in 200..299) {
-                    conn.inputStream.bufferedReader().use { it.readText() }
+                    conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) }
                 } else {
                     null
                 },
@@ -119,7 +102,7 @@ object HermesApi {
         if (!token.isNullOrEmpty()) conn.setRequestProperty("Authorization", "Bearer $token")
         return try {
             val code = conn.responseCode
-            val body = if (code == 200) conn.inputStream.bufferedReader().use { it.readText() } else null
+            val body = if (code == 200) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null
             code to body
         } catch (e: Exception) { -1 to ("Error: ${e.message}") }
     }
@@ -213,7 +196,7 @@ object HermesApi {
             HttpResult(
                 code = code,
                 body = if (code in 200..299) {
-                    conn.inputStream.bufferedReader().use { it.readText() }
+                    conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) }
                 } else {
                     null
                 },
@@ -233,7 +216,7 @@ object HermesApi {
         payload: String?,
         token: String?,
     ): Pair<Int, String?> {
-        val result = postEventResult(baseUrl, widgetId, eventName, payload, token, null, null, null, false)
+        val result = postEventResult(baseUrl, widgetId, eventName, payload, token)
         return result.code to result.body
     }
 
@@ -258,7 +241,7 @@ object HermesApi {
             val code = conn.responseCode
             HttpResult(
                 code = code,
-                body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null,
+                body = if (code in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null,
                 retryAfterSeconds = retryAfter(conn),
             )
         } catch (e: Exception) {
@@ -276,13 +259,36 @@ object HermesApi {
         actionClass: String,
         revision: Int,
         clientEventId: String,
-        confirmOnDevice: Boolean,
         token: String,
         payloadJson: String? = null,
     ): HttpResult = postEventResult(
         baseUrl, widgetId, eventName, null, token, itemId, actionClass,
-        revision, confirmOnDevice, clientEventId, payloadJson,
+        revision, clientEventId, payloadJson,
     )
+
+    fun confirmActionIntent(baseUrl: String, intentId: String, token: String): HttpResult {
+        val conn = open(
+            baseUrl,
+            "/v1/device/action-intents/${pathSegment(intentId)}/confirm",
+            token,
+            method = "POST",
+        )
+        return try {
+            conn.doOutput = true
+            conn.setRequestProperty("Content-Type", "application/json")
+            conn.outputStream.write("{}".toByteArray(StandardCharsets.UTF_8))
+            val code = conn.responseCode
+            HttpResult(
+                code = code,
+                body = if (code in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null,
+                retryAfterSeconds = retryAfter(conn),
+            )
+        } catch (e: Exception) {
+            HttpResult(-1, error = e.message ?: e.javaClass.simpleName)
+        } finally {
+            conn.disconnect()
+        }
+    }
 
     private fun postEventResult(
         baseUrl: String,
@@ -293,7 +299,6 @@ object HermesApi {
         itemId: String? = null,
         actionClass: String? = null,
         revision: Int? = null,
-        confirmOnDevice: Boolean = false,
         clientEventId: String? = null,
         actionPayload: String? = null,
     ): HttpResult {
@@ -308,12 +313,11 @@ object HermesApi {
             if (revision != null) body.put("revision", revision)
             if (clientEventId != null) body.put("clientEventId", clientEventId)
             if (!actionPayload.isNullOrBlank()) body.put("payload", JSONObject(actionPayload))
-            if (confirmOnDevice) body.put("confirmOnDevice", true)
             conn.outputStream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
             val code = conn.responseCode
             HttpResult(
                 code = code,
-                body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null,
+                body = if (code in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null,
                 retryAfterSeconds = retryAfter(conn),
             )
         } catch (e: Exception) {
@@ -345,7 +349,7 @@ object HermesApi {
             val code = conn.responseCode
             HttpResult(
                 code = code,
-                body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null,
+                body = if (code in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null,
                 retryAfterSeconds = retryAfter(conn),
             )
         } catch (e: Exception) {
@@ -382,7 +386,7 @@ object HermesApi {
             val code = conn.responseCode
             HttpResult(
                 code = code,
-                body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null,
+                body = if (code in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null,
                 retryAfterSeconds = retryAfter(conn),
             )
         } catch (e: Exception) {
@@ -396,7 +400,7 @@ object HermesApi {
         val conn = open(baseUrl, "/v1/widgets/${pathSegment(widgetId)}/history?limit=$limit", token)
         return try {
             val code = conn.responseCode
-            HttpResult(code = code, body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null)
+            HttpResult(code = code, body = if (code in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null)
         } catch (e: Exception) {
             HttpResult(-1, error = e.message ?: e.javaClass.simpleName)
         } finally {
@@ -431,7 +435,7 @@ object HermesApi {
             }
             conn.outputStream.write(body.toString().toByteArray(StandardCharsets.UTF_8))
             val code = conn.responseCode
-            HttpResult(code = code, body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null)
+            HttpResult(code = code, body = if (code in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null)
         } catch (e: Exception) {
             HttpResult(-1, error = e.message ?: e.javaClass.simpleName)
         } finally {
@@ -457,7 +461,7 @@ object HermesApi {
             val code = conn.responseCode
             HttpResult(
                 code = code,
-                body = if (code in 200..299) conn.inputStream.bufferedReader().use { it.readText() } else null,
+                body = if (code in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null,
                 retryAfterSeconds = retryAfter(conn),
             )
         } catch (e: Exception) {

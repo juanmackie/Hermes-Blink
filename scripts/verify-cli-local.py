@@ -3,7 +3,7 @@
 Covers the checklist items that need no phone, Tailscale, or Hermes install:
   * every CLI verb returns success and `doctor` reports protocol metadata
   * diagnostics redact the agent and device tokens
-  * `upgrade` and `rollback` keep paired devices and their tokens valid
+  * plugin-manager upgrade and rollback keep paired devices and their tokens valid
 
 Usage: python3 scripts/verify-cli-local.py <scratch-dir>
 Exit code 0 on success; raises AssertionError with details otherwise.
@@ -21,6 +21,7 @@ import sys
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 REPO = Path(__file__).resolve().parents[1]
 SCRATCH_ROOT = Path(sys.argv[1] if len(sys.argv) > 1 else tempfile.gettempdir())
@@ -55,8 +56,7 @@ def run(fn, ns) -> tuple[int, str]:
 
 
 # --- diagnostics: protocol metadata + redaction ---------------------------
-store.put_widget(WIDGET, {"version": 2, "widgetId": WIDGET, "title": "T",
-                          "root": {"type": "column", "children": [{"type": "text", "value": "hi"}]}})
+store.ensure_widget(WIDGET)
 agent_token = store.get_agent_token()
 code = store.mint_pairing_code()["code"]
 device_token = store.register_device(code, "pixel-cli")["token"]
@@ -68,7 +68,7 @@ except (IndexError, TypeError, ValueError) as exc:
     doctor = {}
     print(f"doctor JSON parse failed: {exc}")
 check("doctor_exit_0", rc == 0)
-check("doctor_protocol", doctor["protocol"] == {"transport_version": "v1", "layout_contract": "v2",
+check("doctor_protocol", doctor["protocol"] == {"transport_version": "v1",
                                                 "server_version": doctor["protocol"]["server_version"]},
       json.dumps(doctor["protocol"]))
 check("doctor_redacts_secrets", agent_token not in out and device_token not in out
@@ -83,14 +83,16 @@ verb_cases = [
     ("code", cli._code, SimpleNamespace()),
     ("devices", cli._devices, SimpleNamespace(revoke=None)),
     ("pair", cli._pair, SimpleNamespace(server_url="https://widget.example.ts.net:8788", label="t", json=True)),
-    ("publish", cli._publish, SimpleNamespace(widget_id=WIDGET, layout_json=None, layout_file=None, json=True)),
+    ("publish", cli._publish, SimpleNamespace(widget_id=WIDGET, publication_file=None,
+        title="CLI check", summary="CLI check", text="hello", svg=None, file_path=None,
+        actions=None, max_age_seconds=None, item_id=None, priority="normal", json=True)),
 ]
 for name, fn, ns in verb_cases:
     rc, _ = run(fn, ns)
     check(f"verb_{name}", rc == 0)
 
 rc, _ = run(cli._publish, SimpleNamespace(
-    widget_id=WIDGET, publication_file=None, layout_file=None, layout_json=None,
+    widget_id=WIDGET, publication_file=None,
     title="CLI priority", summary="CLI priority summary", text="hello", svg=None,
     file_path=None, priority="high", max_age_seconds=None, item_id=None, actions=None,
     json=True,
@@ -100,7 +102,11 @@ check("verb_publish_priority", rc == 0 and store.get_publication(WIDGET).get("pr
 # --- upgrade/rollback preserve pairing -----------------------------------
 device_id = store.device_for_token(device_token)["deviceId"]
 devices_before = len(store.list_devices())
-rc, _ = run(cli._upgrade, SimpleNamespace())
+with (
+    patch.object(cli.shutil, "which", return_value="hermes"),
+    patch.object(cli.subprocess, "run", return_value=SimpleNamespace(returncode=0)),
+):
+    rc, _ = run(cli._upgrade, SimpleNamespace())
 check("upgrade_exit_0", rc == 0)
 check("upgrade_keeps_device", store.device_for_token(device_token) is not None
       and len(store.list_devices()) == devices_before)
@@ -114,11 +120,10 @@ check("rollback_keeps_device", store.device_for_token(device_token) is not None
 
 # --- agent tools exist; exactly one skill document ------------------------
 tools_src = (REPO / "hermes-plugin" / "hermes-widget" / "tools.py").read_text(encoding="utf-8")
-expected_tools = ["widget_update", "widget_validate", "widget_list", "widget_read_events",
-                  "widget_mint_pairing_code", "widget_setup", "widget_publish", "widget_preview",
+expected_tools = ["widget_list", "widget_read_events",
+                  "widget_publish", "widget_preview",
                   "widget_read_intents", "widget_resolve_intent", "widget_ask",
-                  "widget_read_questions", "widget_watch_create", "widget_watch_list",
-                  "widget_watch_pause", "widget_watch_tick", "widget_wake_test",
+                  "widget_read_questions", "widget_watch", "widget_wake_test",
                   "widget_set_quiet_hours",
                   "widget_status"]
 missing = [t for t in expected_tools if f"def {t}" not in tools_src]
@@ -129,8 +134,8 @@ check("single_skill_doc", len(skills) == 1, ", ".join(str(p.relative_to(REPO)) f
 
 # --- offline preview + contract parity -------------------------------------
 preview_src = (REPO / "hermes-plugin" / "hermes-widget" / "preview.py").read_text(encoding="utf-8")
-check("preview_verb_present", "def preview_file" in preview_src and "def render_html" in preview_src,
-      "preview.py exposes render_html/preview_file")
+check("preview_verb_present", "def render_publication_previews" in preview_src,
+      "preview.py exposes publication previews")
 cli_src = (REPO / "hermes-plugin" / "hermes-widget" / "cli.py").read_text(encoding="utf-8")
 check("preview_registered", '"preview": _preview' in cli_src and "def _preview" in cli_src,
       "hermes widget preview is wired into the dispatcher")

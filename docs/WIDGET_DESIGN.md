@@ -18,7 +18,7 @@ Height selects the band; width applies the single-column guard.
 
 `widthDp < 245` is single column: no ticker, no question, no split row, one hero line.
 
-The host mirrors the same thresholds in `hermes-plugin/hermes-widget/validate.py`
+The host mirrors the same thresholds in `hermes-plugin/hermes-widget/bands.py`
 (`size_band`, `BAND_BODY_LINES`, `chars_per_line`) so a publisher warning names the band the
 user will actually see. The offline preview mirrors the same plan in `preview.py`
 (`BAND_PLAN`, `WIDGET_SURFACE`).
@@ -35,10 +35,10 @@ user will actually see. The offline preview mirrors the same plan in `preview.py
 | WC-1 | Device/app colour theming | `WidgetTheme.kt:24`, `res/values/colors.xml`, `values-night/`, `values-v31/` | `ContrastTest.the shipped resources are present and legible` |
 | WC-2 | Light **and** dark palettes | same, plus `dark_palette` → `widget_*_dark` tokens | `ContrastTest.the forced dark palette …` |
 | WC-3 | WCAG AA contrast | `Typo.kt` (`SECONDARY #5F5F66`, `SUCCESS #1E7D3C`, `DANGER #C5221A`) | `ContrastTest` (9 cases), `check-contract-parity.py` |
-| WD-1 | Preview includes user content, matches the composition | `res/layout/widget_preview.xml`, `layout-night/widget_preview.xml` | `check-contract-parity.py` (`preview-layout`) |
-| WD-4 | Preview accurate to size and theme | same files + `preview.py` `BAND_PLAN` | `check-contract-parity.py`, host preview tests |
-| WS-2 | System corner radius | `WidgetTheme.kt:93` `WidgetRadius`, `res/values/dimens.xml` | `check-contract-parity.py` (`corner-radius`), device pass list |
-| WS-3 | Loading state matching the shape | `res/layout/widget_loading.xml`, `initialLayout` | `check-contract-parity.py` (`loading-state`) |
+| WD-1 | Preview includes user content, matches the composition | `res/layout/widget_preview.xml`, `layout-night/widget_preview.xml` | `AppSurfaceTest`, device pass list |
+| WD-4 | Preview accurate to size and theme | same files + `preview.py` `BAND_PLAN` | `check-contract-parity.py`, preview unit checks |
+| WS-2 | System corner radius | `WidgetTheme.kt` `WidgetRadius`, `res/values/dimens.xml` | device pass list |
+| WS-3 | Loading state matching the shape | `res/layout/widget_loading.xml`, `initialLayout` | `AppSurfaceTest`, device pass list |
 | WT-3.1 | Widget updates after an action | `ActionCallbacks` `request_update` | host delivery tests |
 | WT-4 | Actions reachable without hunting | `HermesWidget.kt:300` `FooterRow` **outside** the `LazyColumn` | `check-contract-parity.py` (`widget-surface`), device pass list |
 | D15 | Band-driven image height | `Breakpoints.kt` `BandSpec.imageHeightDp`, `HermesWidget.kt:336` | `WidgetBreakpointsTest.image height is band driven …` |
@@ -63,7 +63,7 @@ the status line and the action never scroll away from it.
 
 ## Publisher budgets (host side)
 
-`widget_publish` / `widget_update` / `widget_validate` return advisory warnings keyed to the
+`widget_publish` returns advisory warnings keyed to the
 smallest band a device registered:
 
 | Warning | Meaning |
@@ -72,9 +72,6 @@ smallest band a device registered:
 | `BODY_MAY_SCROLL_M` / `_L` | The body is longer than the visible budget; the reader scrolls. |
 | `TITLE_MAY_CLIP` | More than ~2 lines of hero at that width (no ellipsis, so it clips). |
 | `SUMMARY_HIDDEN_IN_XS` | The summary is not shown in a 4×1. |
-| `LAYOUT_TOO_TALL_FOR_BAND` (v2 layouts) | The node count cannot render in that band. |
-| `LAYOUT_MAY_SCROLL_M` / `_L` (v2 layouts) | The longest string exceeds the band's body budget. |
-| `TEXT_MAY_CLIP_XS` / `_S` (v2 layouts) | More text nodes than the band has rows. |
 
 Line counts are an estimate (~34 characters per line at 245dp, `body` 14sp) and every
 message says so. `hermes-plugin/hermes-widget/skills/widget/SKILL.md` documents the ladder
@@ -86,7 +83,7 @@ Before shipping a widget change:
 
 1. `./gradlew --no-daemon --max-workers=1 assembleDebug lintDebug` — builds and resource checks.
 2. `./gradlew --no-daemon --max-workers=1 :app:testDebugUnitTest` — bands, caps, contrast, contract.
-3. `python3 scripts/check-contract-parity.py` — device tokens vs preview vs skill vs schema.
+3. `python3 scripts/check-contract-parity.py` — Android vs preview colors and size-band thresholds.
 4. `python3 -m unittest discover -s hermes-plugin/hermes-widget/tests -v` — publisher budgets and delivery.
 5. `hermes widget preview --widget-id hermes-brief --sizes 2x2,4x2,4x4 --out /tmp/preview` — the same
    composition the phone composes (header, hero, summary, body, pinned footer with the action).

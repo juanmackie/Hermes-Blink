@@ -1,7 +1,6 @@
 """Validation and bounded media preparation for widget publications.
 
-The publication API is intentionally separate from the v2 layout tree.  It accepts
-one text payload or one immutable visual asset and returns a small, JSON-safe
+The publication API accepts one text payload or one immutable visual asset and returns a small, JSON-safe
 description that :mod:`store` can atomically attach to a publication revision.
 """
 from __future__ import annotations
@@ -35,10 +34,6 @@ MAX_SVG_DIMENSION = 8_192
 MAX_SVG_ELEMENTS = 2_000
 MAX_SVG_DEPTH = 32
 MAX_TTL_SECONDS = 365 * 24 * 60 * 60
-# The v2 layout channel uses ttlSeconds only as a device-side "stale" banner; the
-# publication channel uses it as a server-side expiry. They are deliberately
-# different windows, so each gets an explicit name rather than one shared number.
-LAYOUT_MAX_TTL_SECONDS = 24 * 60 * 60
 POLL_INTERVAL_SECONDS = 15 * 60
 PRIORITIES = ("normal", "high")
 PRIORITY_HIGH_MAX_PER_HOUR = 6
@@ -54,10 +49,10 @@ PROVENANCE_LEVELS = ("verified", "from_price", "estimate")
 SENSITIVE_ACTION_CLASSES = frozenset({"destructive", "external", "irreversible"})
 EVENT_VOCABULARY = ("refresh", "dismiss", "review", "event", "answer", "request_update") + ACTION_KINDS
 EVENT_EMISSION_POINTS = {
-    "refresh": "publication tap fetches now; v2 button action kind=refresh",
-    "dismiss": "v2 button action kind=dismiss",
+    "refresh": "publication tap fetches now",
+    "dismiss": "publication tap dismisses the current update",
     "review": "opening the publication zoom view",
-    "event": "v2 button action kind=event with a caller-supplied name in payload",
+    "event": "publication action with a caller-supplied name in payload",
     "approve": "queue a validated, allowlisted approval intent",
     "snooze": "queue a validated, allowlisted snooze intent",
     "open": "queue a validated, allowlisted open intent",
@@ -261,7 +256,6 @@ def capabilities() -> dict[str, Any]:
         "summaryMaxBytes": MAX_SUMMARY_BYTES,
         "maxTtlSeconds": MAX_TTL_SECONDS,
         "publicationMaxTtlSeconds": MAX_TTL_SECONDS,
-        "layoutMaxTtlSeconds": LAYOUT_MAX_TTL_SECONDS,
         "maxAgeSeconds": MAX_TTL_SECONDS,
         "pollIntervalSeconds": POLL_INTERVAL_SECONDS,
         "priority": {
@@ -269,7 +263,7 @@ def capabilities() -> dict[str, Any]:
             "highMaxPerHour": PRIORITY_HIGH_MAX_PER_HOUR,
             "highMaxPerDay": PRIORITY_HIGH_MAX_PER_DAY,
             "overLimit": "degrade_to_normal_and_record",
-            "quietHours": "per-widget UTC HH:MM setting",
+            "quietHours": "per-widget HH:MM setting in an IANA timezone (defaults to UTC)",
         },
         "push": {
             "transport": "UnifiedPush",
@@ -445,23 +439,11 @@ def prepare_region(
     if len(supplied) != 1:
         raise PublicationInputError(f"{slot} region must provide exactly one of text, svg, or file_path")
     kind, value = supplied[0]
-    if kind == "text":
-        text_value = _bounded_text(value, f"{slot}.text", MAX_TEXT_BYTES, required=True)
-        return PreparedRegion(slot, title, summary, kind, text_value, None, expiry, max_age, priority, item_id, action_values, pinned, rotate, provenance, resolve_on, tuple(rotation))
-    if kind == "svg":
-        if not isinstance(value, str):
-            raise PublicationInputError(f"{slot}.svg must be inline SVG text")
-        raw = value.encode("utf-8")
-        width, height = validate_svg(raw)
-        return PreparedRegion(slot, title, summary, kind, None, PreparedAsset("image/svg+xml", raw, width, height, hashlib.sha256(raw).hexdigest()), expiry, max_age, priority, item_id, action_values, pinned, rotate, provenance, resolve_on, tuple(rotation))
-    if not isinstance(value, (str, os.PathLike)):
-        raise PublicationInputError(f"{slot}.file_path must be a local filesystem path")
-    path_text = os.fspath(value)
-    if not path_text.strip() or "\x00" in path_text or re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", path_text):
-        raise PublicationInputError(f"{slot}.file_path must be a local filesystem path")
-    data = _read_bounded_file(Path(path_text).expanduser())
-    media_type, width, height = validate_raster(data, Path(path_text).suffix)
-    return PreparedRegion(slot, title, summary, kind, None, PreparedAsset(media_type, data, width, height, hashlib.sha256(data).hexdigest()), expiry, max_age, priority, item_id, action_values, pinned, rotate, provenance, resolve_on, tuple(rotation))
+    text_value, asset = _prepare_content_source(kind, value, field_prefix=slot)
+    return PreparedRegion(
+        slot, title, summary, kind, text_value, asset, expiry, max_age, priority, item_id,
+        action_values, pinned, rotate, provenance, resolve_on, tuple(rotation),
+    )
 
 
 def prepare_publication(
@@ -513,52 +495,14 @@ def prepare_publication(
     if len(supplied) != 1:
         raise PublicationInputError("provide exactly one of text, svg, or file_path")
     kind, value = supplied[0]
-
+    text_value, asset = _prepare_content_source(kind, value)
     expiry = _normalize_expiry(expires_at, ttl_seconds, now or datetime.now(timezone.utc))
-    if kind == "text":
-        text_value = _bounded_text(value, "text", MAX_TEXT_BYTES, required=True)
-        return PreparedPublication(
-            title_value, summary_value, "text", text_value, None, expiry, max_age,
-            priority_value, item_id_value, action_values, provenance, dark_palette, variant_values,
-        )
-
-    if kind == "svg":
-        if not isinstance(value, str):
-            raise PublicationInputError("svg must be inline SVG text")
-        raw = value.encode("utf-8")
-        width, height = validate_svg(raw)
-        return PreparedPublication(
-            title_value,
-            summary_value,
-            "image",
-            None,
-            PreparedAsset("image/svg+xml", raw, width, height, hashlib.sha256(raw).hexdigest()),
-            expiry,
-            max_age,
-            priority_value,
-            item_id_value,
-            action_values,
-            provenance,
-            dark_palette,
-            variant_values,
-        )
-
-    if not isinstance(value, (str, os.PathLike)):
-        raise PublicationInputError("file_path must be a local filesystem path")
-    path_text = os.fspath(value)
-    if not path_text.strip() or "\x00" in path_text:
-        raise PublicationInputError("file_path must be a local filesystem path")
-    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", path_text):
-        raise PublicationInputError("file_path must be local; URLs are not accepted")
-    path = Path(path_text).expanduser()
-    data = _read_bounded_file(path)
-    media_type, width, height = validate_raster(data, path.suffix)
     return PreparedPublication(
         title_value,
         summary_value,
-        "image",
-        None,
-        PreparedAsset(media_type, data, width, height, hashlib.sha256(data).hexdigest()),
+        "text" if kind == "text" else "image",
+        text_value,
+        asset,
         expiry,
         max_age,
         priority_value,
@@ -587,8 +531,6 @@ def validate_svg(raw: bytes) -> tuple[int, int]:
         raise PublicationInputError("SVG DOCTYPE and XML entity declarations are forbidden")
     if re.search(r"xmlns\s*:\s*[^=]", text, re.IGNORECASE):
         raise PublicationInputError("SVG namespace prefixes are not supported")
-    if _UNSAFE_VALUE_RE.search(text):
-        raise PublicationInputError("SVG contains a script or external-resource URI")
     if SafeET is None:
         raise PublicationInputError(
             "SVG publication requires the defusedxml security package"
@@ -701,6 +643,46 @@ def _bounded_text(value: Any, name: str, limit: int, *, required: bool, single_l
     if size > limit:
         raise PublicationTooLarge(f"{name} exceeds the {limit}-byte limit ({size} bytes)")
     return text
+
+
+def _prepare_content_source(
+    source_kind: str,
+    value: Any,
+    *,
+    field_prefix: str = "",
+) -> tuple[str | None, PreparedAsset | None]:
+    """Validate one text, SVG, or local raster source for either publication API."""
+    def field(name: str) -> str:
+        return f"{field_prefix}.{name}" if field_prefix else name
+
+    if source_kind == "text":
+        return _bounded_text(value, field("text"), MAX_TEXT_BYTES, required=True), None
+
+    if source_kind == "svg":
+        if not isinstance(value, str):
+            raise PublicationInputError(f"{field('svg')} must be inline SVG text")
+        raw = value.encode("utf-8")
+        width, height = validate_svg(raw)
+        return None, PreparedAsset(
+            "image/svg+xml", raw, width, height, hashlib.sha256(raw).hexdigest()
+        )
+
+    path_field = field("file_path")
+    if not isinstance(value, (str, os.PathLike)):
+        raise PublicationInputError(f"{path_field} must be a local filesystem path")
+    path_text = os.fspath(value)
+    if not path_text.strip() or "\x00" in path_text:
+        raise PublicationInputError(f"{path_field} must be a local filesystem path")
+    if re.match(r"^[A-Za-z][A-Za-z0-9+.-]*://", path_text):
+        if field_prefix:
+            raise PublicationInputError(f"{path_field} must be a local filesystem path")
+        raise PublicationInputError("file_path must be local; URLs are not accepted")
+    path = Path(path_text).expanduser()
+    data = _read_bounded_file(path)
+    media_type, width, height = validate_raster(data, path.suffix)
+    return None, PreparedAsset(
+        media_type, data, width, height, hashlib.sha256(data).hexdigest()
+    )
 
 
 def _normalize_expiry(

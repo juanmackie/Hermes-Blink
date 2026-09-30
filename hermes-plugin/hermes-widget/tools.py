@@ -1,14 +1,11 @@
 """Agent-facing tool handlers for the hermes-widget plugin.
 
-Handlers return JSON strings rather than raising: a malformed layout or a hit
-rate limit must be a normal, model-visible result so one bad push cannot abort
-an otherwise healthy agent turn. All persistence goes through store.*.
+Handlers return JSON strings rather than raising. Errors remain model-visible so
+one bad request cannot abort an otherwise healthy agent turn. All persistence
+goes through store.*.
 """
 from __future__ import annotations
 
-import base64
-import contextlib
-import io
 import json
 import logging
 from typing import Any
@@ -33,80 +30,12 @@ def _error(code: str, detail: str) -> str:
 
 
 def _store_error(exc: store.StoreError) -> str:
-    # Every StoreError subclass carries a stable .code (invalid_layout,
-    # rate_limited, ...) that the Android client and the model both expect.
+    # Every StoreError subclass carries a stable .code for the client and model.
     return _error(exc.code, str(exc))
 
 
-def _coerce_layout(raw: Any) -> dict[str, Any] | str:
-    """Accept the object or a JSON string of it. Returns a message string when unusable."""
-    if isinstance(raw, str):
-        # The model sometimes serializes the object; accept either shape.
-        try:
-            raw = json.loads(raw)
-        except (TypeError, ValueError) as exc:
-            return f"layout is not valid JSON: {exc}"
-    if raw is None:
-        return "layout is required"
-    if not isinstance(raw, dict):
-        return "layout must be a JSON object"
-    return raw
-
-
-def widget_update(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    """Validate and store a complete v2 layout envelope."""
-    args = args or {}
-    widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
-    if not isinstance(widget_id, str):
-        return _error("invalid_layout", "widget_id must be a string")
-
-    layout = _coerce_layout(args.get("layout"))
-    if isinstance(layout, str):
-        return _error("invalid_layout", layout)
-
-    try:
-        result = store.put_widget(widget_id, layout)
-    except store.RateLimitError as exc:
-        return _store_error(exc)
-    except store.LayoutError as exc:
-        return _store_error(exc)
-    except store.StoreError as exc:
-        return _store_error(exc)
-
-    return _dumps(
-        {
-            **result,
-            "delivery": "not_published_to_devices",
-            "visibility": "not_claimed",
-            "next": (
-                "This is a legacy layout stored for API compatibility; connected devices "
-                "fetch publications. Use widget_publish for phone-visible content, and "
-                "widget_read_events for taps."
-            ),
-        }
-    )
-
-
-def widget_validate(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    """Dry-run a layout: validate, count, warn. Never stores and never rate-limits."""
-    args = args or {}
-    widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
-    if not isinstance(widget_id, str):
-        return _error("invalid_layout", "widget_id must be a string")
-
-    layout = _coerce_layout(args.get("layout"))
-    if isinstance(layout, str):  # _coerce_layout returns an error message string
-        return _error("invalid_layout", layout)
-
-    try:
-        report = store.inspect_widget(widget_id, layout)
-    except store.StoreError as exc:
-        return _store_error(exc)
-    return _dumps(report)
-
-
 def widget_list(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    """Return the ids of every widget that currently has a stored layout."""
+    """Return configured and published widget ids."""
     try:
         widgets = store.list_widgets()
     except store.StoreError as exc:
@@ -136,61 +65,6 @@ def widget_read_events(args: dict[str, Any] | None = None, **_kwargs: Any) -> st
     except store.StoreError as exc:
         return _store_error(exc)
     return _dumps({"events": events})
-
-
-def widget_mint_pairing_code(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    """Mint a short-lived pairing code for manual entry on the phone.
-
-    The Android app has no QR or link handler, so this never returns a QR payload
-    or a same-phone link. An optional [server_url] is validated as a private HTTPS
-    URL and echoed for manual entry; it never changes the code.
-    """
-    args = args or {}
-    label = args.get("device_label") or "unknown"
-    if not isinstance(label, str):
-        return _error("invalid_device_label", "device_label must be a string")
-
-    ttl = store.PAIRING_TTL_MINUTES
-    raw_ttl = args.get("ttl_minutes")
-    if raw_ttl is not None:
-        if isinstance(raw_ttl, bool) or not isinstance(raw_ttl, int):
-            return _error("invalid_ttl", "ttl_minutes must be an integer")
-        ttl = raw_ttl
-
-    server_url = args.get("server_url")
-    if server_url is not None and not isinstance(server_url, str):
-        return _error("invalid_server_url", "server_url must be a string")
-
-    try:
-        minted = store.mint_pairing_code(ttl_minutes=ttl)
-    except store.StoreError as exc:
-        return _store_error(exc)
-
-    payload: dict[str, Any] = {
-        **minted,
-        "deviceLabel": label,
-        "expiresInMinutes": ttl,
-        "next": (
-            f"On the device ({label}) open the Hermes widget, choose Pair, "
-            f"and enter {minted.get('code', '')} before it expires."
-        ),
-    }
-    if server_url:
-        try:
-            from . import cli as _cli  # type: ignore
-        except ImportError:  # pragma: no cover - direct import from tests/scripts
-            import cli as _cli  # type: ignore
-        usable = _cli._valid_server_url(server_url)
-        if usable is None:
-            return _error(
-                "invalid_server_url",
-                "server_url must be a private HTTPS URL the phone can reach",
-            )
-        payload["serverUrl"] = usable
-        payload["pairingLine"] = f"{usable}  code={minted.get('code', '')}"
-    return _dumps(payload)
-
-
 def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     """Publish one validated text/SVG/raster revision without claiming delivery."""
     args = args or {}
@@ -262,50 +136,6 @@ def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             ),
         }
     )
-
-
-def widget_setup(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    """Agent tool wrapper for deterministic setup (mirrors hermes widget up).
-
-    Does NOT force HERMES_WIDGET_FORCE_ENV: an unsupported host must come back as the
-    structured needs_user_action payload cli._up already produces, not be talked past a
-    guard by the tool that is supposed to be reporting the truth.
-    """
-    args = args or {}
-    try:
-        from . import cli as _cli  # type: ignore
-    except ImportError:
-        import cli as _cli  # type: ignore
-    host = args.get("host")
-    raw_port = args.get("port")
-    try:
-        port = int(raw_port) if raw_port is not None else None
-    except (TypeError, ValueError):
-        port = None
-    resolved_host = host if isinstance(host, str) and host else None
-    resolved_port = port
-
-    class _A:
-        widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
-        schedule = args.get("schedule") or "every 6h"
-        # Omitted host/port preserve the saved binding; never clobber it here.
-        host = resolved_host
-        port = resolved_port
-        server_url = args.get("server_url")
-        json = True
-    buf = io.StringIO()
-    with contextlib.redirect_stdout(buf):
-        _cli._up(_A())
-    try:
-        data = json.loads(buf.getvalue())
-        return _dumps(data)
-    except Exception:
-        output = buf.getvalue()
-        if output:
-            return output
-        return _dumps({"ok": False, "error": "setup_failed"})
-
-
 def _preview_publication(args: dict[str, Any]) -> tuple[dict[str, Any], str]:
     """Prepare a current or proposed publication without writing a revision."""
     widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
@@ -317,58 +147,11 @@ def _preview_publication(args: dict[str, Any]) -> tuple[dict[str, Any], str]:
         if publication is None:
             raise store.PublicationError(f"no publication for widget {widget_id!r}")
         return publication, widget_id
-    if not isinstance(proposed, dict):
-        raise store.PublicationError("publication must be a JSON object")
-    content = proposed.get("content")
-    if isinstance(content, dict) and (content.get("filePath") or content.get("file_path")) and not any(
-        key in proposed for key in ("text", "svg", "file_path", "filePath")
-    ):
-        proposed = {**proposed, "filePath": content.get("filePath", content.get("file_path"))}
-        proposed.pop("content", None)
-    if isinstance(proposed.get("content"), dict) and not any(
-        key in proposed for key in ("text", "svg", "file_path", "filePath")
-    ):
-        return {**proposed, "widgetId": widget_id}, widget_id
-    prepared = store.prepare_publication(
-        title=proposed.get("title"),
-        summary=proposed.get("summary"),
-        text=proposed.get("text"),
-        svg=proposed.get("svg"),
-        file_path=proposed.get("file_path", proposed.get("filePath")),
-        expires_at=proposed.get("expires_at", proposed.get("expiresAt")),
-        ttl_seconds=proposed.get("ttl_seconds", proposed.get("ttlSeconds")),
-        max_age_seconds=proposed.get("max_age_seconds", proposed.get("maxAgeSeconds")),
-        priority=proposed.get("priority", "normal"),
-        item_id=proposed.get("item_id", proposed.get("itemId")),
-        actions=proposed.get("actions"),
-    )
-    if prepared.kind == "text":
-        content: dict[str, Any] = {
-            "type": "text", "mediaType": "text/plain; charset=utf-8", "text": prepared.text,
-        }
-    else:
-        assert prepared.asset is not None
-        content = {
-            "type": "image", "mediaType": prepared.asset.media_type,
-            "width": prepared.asset.width, "height": prepared.asset.height,
-            "bytes": len(prepared.asset.data), "sha256": prepared.asset.sha256,
-            "data": base64.b64encode(prepared.asset.data).decode("ascii"),
-        }
-    return {
-        "version": 1,
-        "widgetId": widget_id,
-        "publicationId": "preview",
-        "revision": 0,
-        "kind": prepared.kind,
-        "title": prepared.title,
-        "summary": prepared.summary,
-        "publishedAt": store._now(),
-        "expiresAt": prepared.expires_at,
-        "priority": prepared.priority,
-        "itemId": prepared.item_id,
-        "actions": list(prepared.actions),
-        "content": content,
-    }, widget_id
+    try:
+        from . import preview
+    except ImportError:  # pragma: no cover - direct import from tests/scripts
+        import preview  # type: ignore
+    return preview.build_preview_publication(proposed, widget_id), widget_id
 
 
 def widget_preview(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
@@ -435,12 +218,16 @@ def widget_resolve_intent(args: dict[str, Any] | None = None, **_kwargs: Any) ->
     outcome = args.get("outcome")
     if not isinstance(intent_id, str) or not isinstance(outcome, str):
         return _error("invalid_action_intent", "intent_id and outcome are required")
+    if "confirmed" in args:
+        return _error(
+            "device_confirmation_required",
+            "confirmation must come from the paired device, not the agent",
+        )
     try:
         result = store.resolve_intent(
             intent_id,
             outcome,
             result=args.get("result"),
-            confirmed=args.get("confirmed", False),
         )
     except store.StoreError as exc:
         return _store_error(exc)
@@ -472,7 +259,7 @@ def widget_read_questions(args: dict[str, Any] | None = None, **_kwargs: Any) ->
         return _store_error(exc)
 
 
-def widget_watch_create(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+def _watch_create(args: dict[str, Any]) -> str:
     args = args or {}
     try:
         result = watches.create_watch(
@@ -490,16 +277,14 @@ def widget_watch_create(args: dict[str, Any] | None = None, **_kwargs: Any) -> s
     return _dumps({"ok": True, "watch": result})
 
 
-def widget_watch_list(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    args = args or {}
+def _watch_list(args: dict[str, Any]) -> str:
     try:
         return _dumps({"watches": watches.list_watches(args.get("widget_id"), enabled=args.get("enabled"))})
     except watches.store.StoreError as exc:
         return _store_error(exc)
 
 
-def widget_watch_pause(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    args = args or {}
+def _watch_pause(args: dict[str, Any]) -> str:
     watch_id = args.get("watch_id")
     if not isinstance(watch_id, str) or not watch_id:
         return _error("invalid_watch", "watch_id is required")
@@ -509,12 +294,29 @@ def widget_watch_pause(args: dict[str, Any] | None = None, **_kwargs: Any) -> st
     return _dumps({"ok": True, "watch": result})
 
 
-def widget_watch_tick(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
-    args = args or {}
+def _watch_tick(args: dict[str, Any]) -> str:
     try:
         return _dumps({"ok": True, "results": watches.tick_watches(sources=args.get("sources"))})
     except watches.store.StoreError as exc:
         return _store_error(exc)
+
+
+def widget_watch(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    """Dispatch the compact watch tool to one bounded operation."""
+    args = args or {}
+    handlers = {
+        "create": _watch_create,
+        "list": _watch_list,
+        "pause": _watch_pause,
+        "tick": _watch_tick,
+    }
+    operation = args.get("operation")
+    if not isinstance(operation, str):
+        return _error("invalid_watch_operation", "operation must be create, list, pause, or tick")
+    handler = handlers.get(operation)
+    if handler is None:
+        return _error("invalid_watch_operation", "operation must be create, list, pause, or tick")
+    return handler(args)
 
 
 def widget_wake_test(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
@@ -547,7 +349,21 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     try:
         widgets = store.list_widgets()
         devices = store.list_devices()
-        publication = store.publication_status(widget_id)
+        consume_updates = args.get("consume_update_requests", False)
+        if not isinstance(consume_updates, bool):
+            return _error("invalid_consume_update_requests", "consume_update_requests must be boolean")
+        summary = args.get("summary", True)
+        if not isinstance(summary, bool):
+            return _error("invalid_summary", "summary must be boolean")
+        limit = args.get("limit", 10 if summary else 50)
+        if isinstance(limit, bool) or not isinstance(limit, int):
+            return _error("invalid_limit", "limit must be an integer")
+        publication = store.publication_status(
+            widget_id,
+            consume_update_requests_now=consume_updates,
+            limit=limit,
+            summary=summary,
+        )
     except store.StoreError as exc:
         return _store_error(exc)
 
@@ -565,6 +381,9 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             delivery_state = "render_submitted"
         elif any(item.get("state") == "downloaded" for item in publication.get("delivery", [])):
             delivery_state = "downloaded"
+    result_limits = publication.get("resultLimits", {})
+    result_limits.setdefault("totals", {})["deviceDetails"] = len(devices)
+    result_limits.setdefault("truncated", {})["deviceDetails"] = len(devices) > limit
     return _dumps(
         {
             "ok": True,
@@ -586,7 +405,7 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
                     "appBuildSha": d.get("appBuildSha"),
                     "osSdk": d.get("osSdk"),
                 }
-                for d in devices
+                for d in devices[:limit]
             ],
             "publication": publication.get("publication"),
             "publicationState": publication.get("state"),
@@ -597,6 +416,7 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             "wake": publication.get("wake", {"devices": [], "registeredCount": 0}),
             "attention": publication.get("attention", {}),
             "updateRequests": publication.get("updateRequests", []),
+            "newlyConsumedUpdateRequests": publication.get("newlyConsumedUpdateRequests", []),
             # Refused device requests: the answer when a tap produced no row.
             "rejections": publication.get("rejections", {}),
             "delivery": publication.get("delivery", []),
@@ -607,6 +427,7 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             "questions": publication.get("questions", []),
             "pollIntervalSeconds": publication.get("pollIntervalSeconds"),
             "capabilities": publication.get("capabilities"),
+            "resultLimits": result_limits,
             "dataDir": str(store.data_dir()),
         }
     )

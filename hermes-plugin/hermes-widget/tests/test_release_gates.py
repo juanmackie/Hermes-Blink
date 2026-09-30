@@ -19,6 +19,7 @@ import os
 import pathlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -79,7 +80,7 @@ def doc_text(commit: str, version: str = "0.4.3", code: int = 7, size: str = SIZ
 
 def run(repo: pathlib.Path, which: str, *args: str) -> tuple[int, str]:
     result = subprocess.run(
-        ["python3", str(repo / SCRIPTS[which]), *args],
+        [sys.executable, str(repo / SCRIPTS[which]), *args],
         cwd=repo, capture_output=True, text=True, check=False,
         env={**os.environ, "HERMES_WIDGET_DIR": str(repo / "_wd")},
     )
@@ -98,7 +99,7 @@ class BuildProvenanceGate(unittest.TestCase):
 
     def _run(self, repo: pathlib.Path, *args: str) -> tuple[int, str]:
         result = subprocess.run(
-            ["python3", str(self.SCRIPT), "--repo", str(repo), *args],
+            [sys.executable, str(self.SCRIPT), "--repo", str(repo), *args],
             cwd=repo, capture_output=True, text=True,
         )
         return result.returncode, result.stdout + result.stderr
@@ -315,7 +316,7 @@ class VersionBumpWindow(unittest.TestCase):
 
     def _run(self, repo: pathlib.Path, *args: str) -> tuple[int, str]:
         result = subprocess.run(
-            ["python3", str(self.SCRIPT), "--repo", str(repo), *args],
+            [sys.executable, str(self.SCRIPT), "--repo", str(repo), *args],
             cwd=repo, capture_output=True, text=True,
         )
         return result.returncode, result.stdout + result.stderr
@@ -427,7 +428,7 @@ class ReleaseGateHarness(unittest.TestCase):
         args = ["git", "clone", "-q", "--branch", "main"]
         if depth is not None:
             args += ["--depth", str(depth)]
-        args += [f"file://{root / 'remote.git'}", str(target)]
+        args += [(root / "remote.git").resolve().as_uri(), str(target)]
         subprocess.run(args, check=True, capture_output=True)
         # A clone inherits no identity, and `git commit` then fails — silently, because
         # the helper that commits does not check its exit code. Set it here so a commit in
@@ -589,8 +590,3 @@ class ReleaseGateHarness(unittest.TestCase):
             "the pre-rewrite commit must still be resolvable, or the test is not testing this",
         )
         return new_tip
-
-# Budget verification reference — ensures plugin_tests contains BAND_BODY_LINES / BAND_CHROME_LINES
-# so the behavioral audit contradiction gate (audit_widget_quality.py) does not fire.
-BAND_BODY_LINES = 1
-BAND_CHROME_LINES = 1

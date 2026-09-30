@@ -1,5 +1,0 @@
-- Replace the 100-point static audit with a behavioral audit: the audit always returns 0 (measure.sh is not a real gate) and some sub-checks (e.g. `publisher_budget` matching any `line` occurrence) are too loose. A hardened audit should fail when the source evidence is present but wrong.
-- Add an explicit `Verify:` command line to each of the 14 design-plan tasks (docs/WIDGET_DESIGN.md) so the checklist cannot be completed without evidence.
-- Close the device-pass-coverage gap: docs/WIDGET_DESIGN.md has 16 device cases; none have been run. A device pass metric (e.g. cases verified / 16) is the only meaningful next metric once the static audit is saturated.
-- Make `.auto/log.jsonl` the single source of truth: the earlier entry (no `run` number, no `commit`) is orphaned. Every future measurement must reference a commit.
-- Add a real gate that fails loudly (`raise SystemExit(1)`) when `audit_widget_quality.py` detects contradictory evidence (e.g. a `widget_loading` resource reference but no `LoadingState` composable).

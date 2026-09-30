@@ -51,7 +51,6 @@ secrets/
 credentials/
 release-*.tar.gz
 release-*.zip
-checksums.txt
 # plugin test scratch
 *.preview.html
 .pi/
@@ -60,6 +59,6 @@ hermes-plugin/hermes-widget/_testdata/
 hermes-plugin/hermes-widget/_tmp_accept/
 hermes-plugin/hermes-widget/**/__pycache__/
 hermes-plugin/hermes-widget/tests/_testdata/
-backend/data/*.db
 # Local nested checkout; do not include it in the public repository.
 Hermes Blink/
+.pi-web/

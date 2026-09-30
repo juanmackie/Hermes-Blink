@@ -17,6 +17,8 @@ import logging
 import os
 import shutil
 import subprocess
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +32,8 @@ logger = logging.getLogger(__name__)
 DEFAULT_SCHEDULE = "every 6h"
 ROUTINE_NAME = "hermes-widget-refresh"
 SKILL_NAME = "hermes-widget"
+_REFRESH_LOCK = threading.Lock()
+_REFRESH_PROCESS: subprocess.Popen[Any] | None = None
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8788
 
@@ -51,15 +55,7 @@ def _atomic_text(path: Path, text: str, mode: int = 0o600) -> Path:
 
 
 def _hermes_home() -> Path:
-    try:
-        # Optional Hermes-host module; absent in tests, scripts, and the Android build.
-        get_hermes_home = importlib.import_module("hermes_constants").get_hermes_home
-        return Path(get_hermes_home())
-    except Exception:
-        configured_home = os.environ.get("HERMES_HOME")
-        if configured_home:
-            return Path(configured_home)
-        return Path.home() / ".hermes"
+    return store._hermes_home()
 
 
 def skill_target_path() -> Path:
@@ -83,6 +79,19 @@ def install_skill_file() -> Path:
     return target
 
 
+def remove_skill_file() -> bool:
+    """Remove only the exact bundled skill copy installed by this plugin."""
+    target = skill_target_path()
+    if not target.exists():
+        return False
+    if not target.is_file() or target.read_text(encoding="utf-8") != BUNDLED_SKILL.read_text(encoding="utf-8"):
+        raise RuntimeError(f"preserving modified skill file: {target}")
+    target.unlink()
+    with contextlib.suppress(OSError):
+        target.parent.rmdir()
+    return True
+
+
 def install_startup_hook() -> Path:
     """Install one idempotent gateway:startup hook for the widget server."""
     if not BUNDLED_HOOK.is_file():
@@ -96,6 +105,33 @@ def install_startup_hook() -> Path:
     _atomic_text(target / "HOOK.yaml", manifest)
     _atomic_text(target / "handler.py", BUNDLED_HOOK.read_text(encoding="utf-8"))
     return target
+
+
+def remove_startup_hook() -> bool:
+    """Remove the startup hook only while its installed files still match this plugin."""
+    target = _hermes_home() / "hooks" / HOOK_NAME
+    if not target.exists():
+        return False
+    manifest = (
+        "name: hermes-widget-startup\n"
+        "description: Start the personal Hermes widget server once on gateway startup.\n"
+        "events: [gateway:startup]\n"
+    )
+    expected = {
+        "HOOK.yaml": manifest,
+        "handler.py": BUNDLED_HOOK.read_text(encoding="utf-8"),
+    }
+    for name, content in expected.items():
+        path = target / name
+        if not path.is_file() or path.read_text(encoding="utf-8") != content:
+            raise RuntimeError(f"preserving modified startup hook file: {path}")
+    extras = [path for path in target.iterdir() if path.name not in expected]
+    if extras:
+        raise RuntimeError(f"preserving startup hook directory with additional files: {target}")
+    for name in expected:
+        (target / name).unlink()
+    target.rmdir()
+    return True
 
 
 class ServerConfigError(RuntimeError):
@@ -184,10 +220,10 @@ def routine_prompt(widget_id: str = store.DEFAULT_WIDGET_ID) -> str:
         "load it a second time unless the host reports that it is missing. Then decide whether "
         "the context already contains a genuinely useful change for the user right now: "
         "recent sessions, memory, or a connected calendar, email, or task source. "
-        "First call widget_watch_tick with any bounded source snapshot so standing watches "
-        "can publish their own state changes. Check widget_status for a waiting entry in "
-        "updateRequests: that means the user tapped Request update on the widget and asked for "
-        "something fresher, so publish what you already know now instead of treating the run as "
+        "First call widget_watch with operation=tick and any bounded source snapshot so standing watches "
+        "can publish their own state changes. Then call widget_status with "
+        "consume_update_requests=true. A non-empty newlyConsumedUpdateRequests list means the "
+        "user tapped Request update on the widget and asked for something fresher, so publish what you already know now instead of treating the run as "
         "an ambient refresh and doing nothing. This is an ambient surface: publish only when the user would want to see the "
         "change at a glance; otherwise do nothing when nothing useful changed and do not ask a question. "
         "If a publication exists and delivery/freshness is uncertain, check widget_status "
@@ -216,20 +252,49 @@ def _cron_jobs() -> Any:
 
 def trigger_refresh() -> dict[str, Any]:
     """Ask the existing widget routine to run now; the agent chooses the content."""
+    global _REFRESH_PROCESS
     binary = os.environ.get("HERMES_BIN") or shutil.which("hermes")
     if not binary:
         return {"triggered": False, "error": "hermes executable is not available"}
+    with _REFRESH_LOCK:
+        if _REFRESH_PROCESS is not None and _REFRESH_PROCESS.poll() is None:
+            return {"triggered": True, "duplicate": True, "pid": _REFRESH_PROCESS.pid, "job": ROUTINE_NAME}
+        try:
+            started_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+            process = subprocess.Popen(
+                [str(binary), "cron", "run", ROUTINE_NAME],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=(os.name != "nt"),
+            )
+            _REFRESH_PROCESS = process
+            # Reap the child after it exits without blocking the HTTP request that
+            # initiated the background refresh.
+            threading.Thread(
+                target=_reap_refresh, args=(process, started_at),
+                name="hermes-widget-refresh-reaper", daemon=True,
+            ).start()
+            return {"triggered": True, "pid": process.pid, "job": ROUTINE_NAME}
+        except OSError as exc:
+            return {"triggered": False, "error": str(exc)}
+
+
+def _reap_refresh(process: subprocess.Popen[Any], started_at: str) -> None:
+    global _REFRESH_PROCESS
     try:
-        process = subprocess.Popen(
-            [str(binary), "cron", "run", ROUTINE_NAME],
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=(os.name != "nt"),
-        )
-        return {"triggered": True, "pid": process.pid, "job": ROUTINE_NAME}
-    except OSError as exc:
-        return {"triggered": False, "error": str(exc)}
+        return_code = process.wait()
+    finally:
+        with _REFRESH_LOCK:
+            if _REFRESH_PROCESS is process:
+                _REFRESH_PROCESS = None
+        # Only queue work that arrived during this run. This avoids repeatedly
+        # launching the same run when it exits without consuming its request.
+        try:
+            if return_code == 0 and store.has_unconsumed_update_requests(created_after=started_at):
+                trigger_refresh()
+        except Exception:
+            logger.warning("could not schedule queued widget update request", exc_info=True)
 
 
 def find_routine(name: str = ROUTINE_NAME) -> dict[str, Any] | None:

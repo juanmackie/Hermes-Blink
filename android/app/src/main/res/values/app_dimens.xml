@@ -27,7 +27,6 @@
     <dimen name="shape_button">@dimen/shape_full</dimen>
     <dimen name="shape_container">@dimen/shape_lg</dimen>
     <dimen name="shape_field">@dimen/shape_md</dimen>
-    <dimen name="shape_badge">@dimen/shape_sm</dimen>
 
     <dimen name="hairline">1dp</dimen>
 

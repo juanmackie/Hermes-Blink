@@ -1,4 +1,4 @@
-// Backend URL validation allows Tailscale IP/host URLs over HTTPS (see docs/TAILSCALE_HTTPS.md)
+// Backend URL validation allows Tailscale IP/host URLs over HTTPS (see docs/SETUP.md)
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -92,40 +92,14 @@ android {
         applicationId = "com.you.hermeswidget"
         minSdk = 26
         targetSdk = 35
-        // Bumped per release: 10 = 2026-09-27 round 13 — the request action is a Box
-        // sibling of the scroll column, and the action counter moved to the callback
-        // (round 12 was 9: the action pinned in the header). Round 11: 8 = the action (composition
-        // history, rename-tolerant fire detection, one-paste diagnostics). Round 10: 7 = — the composition is
-        // laid out for the launcher's reported cell geometry rather than the responsive
-        // sample, which is what put the action outside a 270dp 4x2. Round 8 also fixed the
-        // attention route, the unparseable workflow and the dead access log.
-        // explicit scroll-region height so the pinned action cannot be clipped off the
-        // bottom, plus the three-link action trail. CI fails the build when a source
-        // change lands with the same versionCode (scripts/check-version-bump.py).
-        // 11, not 10: code 10 is spent. The review device holds an APK stamped
-        // 0.4.6 / code 10 with COMMIT_SHA 635b0e824c7e-dirty, built from a tree where this
-        // bump had been applied but not committed, so that binary is not the committed
-        // main. Android installs over it silently and app_build_code cannot tell them
-        // apart. See docs/APK_RELEASE.md and scripts/check-build-provenance.py.
-        // 12, not 11: 11 is recorded in the release ledger and the review device has been
-        // sent one, so reusing it would be the divergence check-build-provenance refuses.
-        // 13, not 12: 12 is 0.4.8, the release ledger's newest row, so reusing it is the
-        // same divergence. This one is the Material 3 round: a real Theme.Material3 theme
-        // (so every colour role, the corner scale, the state layers and the ripple come
-        // from one place), MaterialButton / TopAppBar / TextInputLayout / MaterialCardView
-        // / MaterialDivider / Snackbar on the screens, and the com.google.android.material
-        // dependency that makes them real. A new dependency is a new APK, and an APK that
-        // cannot be told apart from the last one is exactly the problem this field exists
-        // to prevent.
+        // Increment for a release tag that ships app changes. Release history and
+        // compatibility details live in CHANGELOG.md; CI checks the tag window.
         versionCode = 13
         versionName = "0.4.9"
     }
     buildFeatures {
         compose = true
-        // BuildConfig carries the commit this APK was built from. Field round 5: four
-        // different APKs shared versionCode 2, so `app_build_code = 2` could not answer
-        // "which build is on this phone?" — the very question build reporting was added
-        // for. The SHA does answer it, and it is exact.
+        // BuildConfig carries the source commit for installed-build diagnostics.
         buildConfig = true
     }
     compileOptions {
@@ -137,8 +111,6 @@ android {
     }
     sourceSets {
         getByName("test") {
-            // Shared fixtures (single source of truth for layout v2) — see fixtures/
-            resources.srcDir(File(rootProject.projectDir, "../fixtures"))
             // AppSurfaceTest reads src/main/res and the activity sources straight off disk
             // (a layout or a theme is not a runtime class, so there is nothing to
             // classload), which means Gradle saw no input change and reported the test
@@ -164,6 +136,12 @@ android {
         getByName("release") {
             // v2: release builds forbid cleartext; debug keeps http:// for local dev
             isDebuggable = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
             if (hasCompleteSigningValues) {
                 signingConfig = signingConfigs.getByName("personal")
             }
@@ -196,7 +174,7 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")  // AppTheme's parent chain; see themes.xml
     implementation("androidx.glance:glance-appwidget:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
-    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+    implementation("androidx.security:security-crypto:1.1.0")
     implementation("com.caverock:androidsvg-aar:1.4")
     // User-selected distributor (ntfy, NextPush, embedded FCM, ...); no Google
     // service is required by the app itself.

@@ -5,9 +5,8 @@
       surface and the companion app read as one product. Android 12+ repoints these at the
       device's tonal scheme in values-v31/colors.xml.
 
-      These are the *chrome* the publisher's content sits on. The publisher-facing palette
-      (Typo.kt and layout.schema.json) is a separate, closed contract and is deliberately
-      not touched here; ContrastTest checks that its SECONDARY still clears 4.5:1 on these
+      These are the *chrome* the publisher's content sits on. ContrastTest checks that its
+      SECONDARY ink still clears 4.5:1 on these
       surfaces.
     -->
     <color name="widget_surface">#FEF7FF</color>
@@ -33,5 +32,4 @@
     <color name="widget_secondary_dark">#CAC4D0</color>
     <color name="widget_accent_dark">#D0BCFF</color>
     <color name="widget_on_accent_dark">#381E72</color>
-    <color name="widget_hairline_dark">#49454F</color>
 </resources>

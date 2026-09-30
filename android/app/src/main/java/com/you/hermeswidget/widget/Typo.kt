@@ -9,9 +9,7 @@ import androidx.glance.text.TextStyle
 import androidx.glance.unit.ColorProvider
 
 /**
- * Design tokens for the v2 layout contract — the single source of truth for what the
- * `style`, `color`, `alignment`, `spacing`, `padding` and `thickness` fields mean once
- * they reach the device.
+ * Design tokens for publication text on the home-screen widget.
  *
  * `skills/widget/SKILL.md` documents this same table and
  * `scripts/check-contract-parity.py` fails when the two drift. Nothing else may invent a
@@ -45,7 +43,7 @@ object Typo {
     data class Spec(val sizeSp: Int, val weight: String, val colorHex: String)
 
     /**
-     * The whole scale. The keys are exactly the v2 `style` enum for `text`.
+     * The whole scale used by publication text.
      * Glance only ships FontWeight Normal/Medium/Bold, so `weight` is one of those three
      * and the scale keeps to two active weights (see the design skill).
      */
@@ -98,8 +96,7 @@ object Typo {
     )
 
     /**
-     * The same closed scale with a theme-resolved ink. The v2 contract's hexes are
-     * publisher-facing constants, so a themed surface picks its own ColorProvider here
+     * A themed surface picks its own ColorProvider here
      * rather than inventing a second scale.
      */
     fun textStyle(style: String?, color: ColorProvider): TextStyle = TextStyle(
@@ -114,8 +111,7 @@ object Typo {
 }
 
 /**
- * 3- or 6-digit `#RGB` / `#RRGGBB` only — the same rule as `accentColor` in
- * layout.schema.json. 8-digit alpha hex, named colors and junk are ignored rather than
+ * 3- or 6-digit `#RGB` / `#RRGGBB` only. 8-digit alpha hex, named colors and junk are ignored rather than
  * crashing, so a stricter server can never blank a user's widget.
  */
 object HexColor {
@@ -143,22 +139,4 @@ object HexColor {
 
     private fun fromRgb(red: Int, green: Int, blue: Int): Color =
         Color(0xFF000000L or (red.toLong() shl 16) or (green.toLong() shl 8) or blue.toLong())
-}
-
-/**
- * Layout defaults the renderer falls back to when a node omits `spacing` / `padding`.
- * Values follow the v2 spacing rhythm (4 / 8 / 12 dp).
- */
-object LayoutDefaults {
-    const val CONTAINER_SPACING = 8
-    const val ROOT_PADDING = 12
-    const val HAIRLINE_THICKNESS = 1
-    const val BADGE_CORNER = 8
-    const val BADGE_PADDING_H = 8
-    const val BADGE_PADDING_V = 3
-    const val BUTTON_CORNER = 8
-    const val BUTTON_PADDING_H = 12
-    const val BUTTON_PADDING_V = 8
-    const val PROGRESS_HEIGHT = 6
-    const val CARD_PADDING = 8
 }

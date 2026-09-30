@@ -25,21 +25,6 @@ from pathlib import Path
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 TEST_DATA = PLUGIN_DIR / "_testdata"
 
-VALID_LAYOUT = {
-    "version": 2,
-    "widgetId": "hermes-brief",
-    "title": "Today",
-    "root": {
-        "type": "column",
-        "children": [
-            {"type": "text", "value": "Good morning", "style": "title"},
-            {"type": "stat", "label": "Open loops", "value": "3"},
-            {"type": "button", "label": "Refresh", "action": {"kind": "refresh"}},
-        ],
-    },
-}
-
-
 def _load_plugin():
     """Load the plugin the way Hermes' PluginManager does (as a package)."""
     if "hermes_plugins" not in sys.modules:
@@ -118,6 +103,57 @@ class WidgetPluginEndToEnd(unittest.TestCase):
         self.assertEqual(status, 404)
         self.assertEqual(body["error"], "not_found")
 
+    def test_removed_v2_layout_route_is_404(self):
+        status, body = self.request("GET", "/v1/widgets/hermes-brief")
+        self.assertEqual(status, 404)
+        self.assertEqual(body["error"], "not_found")
+        status, body = self.request("PUT", "/v1/widgets/hermes-brief", {})
+        self.assertEqual(status, 404)
+        self.assertEqual(body["error"], "not_found")
+
+    def test_sensitive_intent_confirmation_requires_owning_device_token(self):
+        status, minted = self.request("POST", "/v1/pairing-codes", {}, self.agent_token)
+        self.assertEqual(status, 200, minted)
+        status, paired = self.request("POST", "/v1/pair", {"code": minted["code"]})
+        self.assertEqual(status, 200, paired)
+        device_token = paired["token"]
+        self.store.put_publication(
+            "confirm-route", title="Confirm", summary="S", text="Review",
+            actions=[{
+                "kind": "approve", "itemId": "task-1", "actionClass": "destructive",
+                "confirmOnDevice": True,
+            }],
+        )
+        status, queued = self.request(
+            "POST", "/v1/widgets/confirm-route/events",
+            {"event": "approve", "itemId": "task-1", "actionClass": "destructive", "revision": 1},
+            device_token,
+        )
+        self.assertEqual(status, 200, queued)
+        intent_id = queued["intent"]["intentId"]
+        status, rejected = self.request(
+            "POST", f"/v1/device/action-intents/{intent_id}/confirm", {}, self.agent_token,
+        )
+        self.assertEqual(status, 403, rejected)
+        status, rejected = self.request(
+            "POST", "/v1/intents",
+            {"intentId": intent_id, "outcome": "applied", "confirmed": True},
+            self.agent_token,
+        )
+        self.assertEqual(status, 400, rejected)
+        status, confirmed = self.request(
+            "POST", f"/v1/device/action-intents/{intent_id}/confirm", {}, device_token,
+        )
+        self.assertEqual(status, 200, confirmed)
+        self.assertEqual(confirmed["intent"]["status"], "queued")
+        status, applied = self.request(
+            "POST", "/v1/intents",
+            {"intentId": intent_id, "outcome": "applied", "result": "approved"},
+            self.agent_token,
+        )
+        self.assertEqual(status, 200, applied)
+        self.assertEqual(applied["intent"]["status"], "applied")
+
     def test_full_lifecycle(self):
         # 1. agent mints a pairing code over HTTP
         status, minted = self.request("POST", "/v1/pairing-codes", {}, self.agent_token)
@@ -131,15 +167,22 @@ class WidgetPluginEndToEnd(unittest.TestCase):
         self.assertTrue(device_token.startswith("dvc_"))
         self.assertNotIn(device_token, json.dumps(self.store.list_devices()))
 
-        # 3. agent pushes a layout through the tool (same path the model uses)
-        pushed = json.loads(self.tools.widget_update({"widget_id": "hermes-brief", "layout": VALID_LAYOUT}))
-        self.assertTrue(pushed.get("ok"), pushed)
+        # 3. agent publishes user-visible content through the current tool.
+        published = json.loads(self.tools.widget_publish({
+            "widget_id": "hermes-brief",
+            "title": "Today",
+            "summary": "Good morning",
+            "text": "Good morning",
+        }))
+        self.assertTrue(published.get("ok"), published)
 
-        # 4. device fetches it over HTTP
-        status, layout = self.request("GET", "/v1/widgets/hermes-brief", token=device_token)
-        self.assertEqual(status, 200, layout)
-        self.assertEqual(layout["widgetId"], "hermes-brief")
-        self.assertEqual(layout["root"]["type"], "column")
+        # 4. device fetches the current publication over HTTP.
+        status, publication = self.request(
+            "GET", "/v1/widgets/hermes-brief/publication", token=device_token
+        )
+        self.assertEqual(status, 200, publication)
+        self.assertEqual(publication["widgetId"], "hermes-brief")
+        self.assertEqual(publication["content"]["text"], "Good morning")
 
         # 5. device posts an interaction event
         status, event = self.request(
@@ -156,7 +199,7 @@ class WidgetPluginEndToEnd(unittest.TestCase):
         self.assertTrue(any(e["event"] == "refresh" for e in read["events"]), read)
 
     def test_auth_boundaries(self):
-        # v2: tokenless requests to protected routes fail (even on loopback).
+        # Protected publication routes require authentication, even on loopback.
         # Only /v1/health and /v1/pair are public; everything else needs a bearer.
         status, body = self.request("GET", "/v1/widgets")
         self.assertEqual(status, 401)
@@ -165,10 +208,6 @@ class WidgetPluginEndToEnd(unittest.TestCase):
         status, body = self.request("GET", "/v1/widgets", token="not-a-real-token")
         self.assertEqual(status, 401)
         self.assertEqual(body["error"], "unauthorized")
-        status, _ = self.request(
-            "PUT", "/v1/widgets/hermes-brief", VALID_LAYOUT, token="not-a-real-token"
-        )
-        self.assertEqual(status, 401)
         # Authenticated operator path still works.
         status, body = self.request("GET", "/v1/widgets", token=self.agent_token)
         self.assertEqual(status, 200)
@@ -178,19 +217,6 @@ class WidgetPluginEndToEnd(unittest.TestCase):
         status, _ = self.request("POST", "/v1/pairing-codes", {}, token=None)
         self.assertEqual(status, 401)
 
-    def test_invalid_layout_is_rejected(self):
-        bad = {"version": 2, "widgetId": "hermes-brief", "root": {"type": "image", "url": "http://x/y.png"}}
-        status, body = self.request("PUT", "/v1/widgets/hermes-brief", bad, self.agent_token)
-        self.assertEqual(status, 400, body)
-        self.assertEqual(body["error"], "invalid_layout")
-
-    def test_oversized_payload_is_413(self):
-        big = dict(VALID_LAYOUT)
-        big["root"] = {"type": "text", "value": "x" * 70000}
-        status, body = self.request("PUT", "/v1/widgets/hermes-brief", big, self.agent_token)
-        self.assertIn(status, (400, 413), body)
-
-
     def test_keepalive_survives_an_error_with_a_body(self):
         # Regression: Android reuses connections. An error response to a
         # request that carried a body must not leave those bytes to be parsed
@@ -198,9 +224,9 @@ class WidgetPluginEndToEnd(unittest.TestCase):
         conn = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
         try:
             conn.request(
-                "PUT",
-                "/v1/widgets/hermes-brief",
-                body=json.dumps(VALID_LAYOUT),
+                "GET",
+                "/v1/widgets",
+                body=json.dumps({"ignored": True}),
                 headers={
                     "Content-Type": "application/json",
                     "Authorization": "Bearer not-a-real-token",

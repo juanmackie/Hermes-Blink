@@ -9,6 +9,7 @@ status API.
 from __future__ import annotations
 
 import json
+import ipaddress
 import logging
 import socket
 import urllib.error
@@ -26,6 +27,15 @@ READ_TIMEOUT_SECONDS = 8
 
 class PushError(RuntimeError):
     """A wake could not be delivered; the publication remains valid."""
+
+
+class EndpointGone(PushError):
+    """The distributor says this endpoint no longer exists."""
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req: Any, fp: Any, code: int, msg: str, headers: Any, newurl: str) -> None:
+        return None
 
 
 def validate_endpoint(endpoint: Any) -> str:
@@ -51,6 +61,21 @@ def wake(endpoint: str, *, opener: Any | None = None) -> None:
     included in the request body or headers.
     """
     endpoint = validate_endpoint(endpoint)
+    parsed = urllib.parse.urlsplit(endpoint)
+    try:
+        addresses = {
+            ipaddress.ip_address(result[4][0].split("%", 1)[0])
+            for result in socket.getaddrinfo(
+                parsed.hostname, parsed.port or 443, type=socket.SOCK_STREAM
+            )
+        }
+    except (OSError, ValueError) as exc:
+        raise PushError("push endpoint host could not be resolved") from exc
+    if not addresses or any(
+        address.is_private or address.is_loopback or address.is_link_local
+        for address in addresses
+    ):
+        raise PushError("push endpoint must resolve only to public addresses")
     body = json.dumps({"message": "fetch"}, separators=(",", ":")).encode("utf-8")
     request = urllib.request.Request(
         endpoint,
@@ -75,12 +100,15 @@ def wake(endpoint: str, *, opener: Any | None = None) -> None:
                 if close:
                     close()
         else:
-            with urllib.request.urlopen(request, timeout=READ_TIMEOUT_SECONDS) as response:
+            safe_opener = urllib.request.build_opener(_NoRedirect())
+            with safe_opener.open(request, timeout=READ_TIMEOUT_SECONDS) as response:
                 status = response.status
                 response.read(MAX_RESPONSE_BYTES)
     except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
         raise PushError("push endpoint was unreachable") from exc
     if status < 200 or status >= 300:
+        if status in {404, 410}:
+            raise EndpointGone(f"push endpoint returned HTTP {status}")
         raise PushError(f"push endpoint returned HTTP {status}")
 
 

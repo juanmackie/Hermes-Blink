@@ -28,8 +28,8 @@ from pathlib import Path
 
 PLUGIN_DIR = Path(__file__).resolve().parents[1]
 
-# A widget id of its own for the route tests. `check_push_rate` keeps one 30-per-hour
-# budget per widget id for the whole process, so publishing on the default id here starves
+# A widget id of its own for the route tests. `check_push_rate` keeps a database-backed
+# 30-per-hour budget per widget id, so publishing on the default id here starves
 # whichever suite runs after this one. This has bitten the suite twice, hence the note.
 ROUTES_WIDGET = "hermes-routes"
 
@@ -93,6 +93,7 @@ class DeliveryTruthfulness(unittest.TestCase):
         cls.store = importlib.import_module("hermes_plugins.hermes_widget.store")
         cls.publication = importlib.import_module("hermes_plugins.hermes_widget.publication")
         cls.tools = importlib.import_module("hermes_plugins.hermes_widget.tools")
+        cls.cli = importlib.import_module("hermes_plugins.hermes_widget.cli")
         cls.server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
         cls.server = cls.server_module.make_server("127.0.0.1", 0)
         cls.port = cls.server.server_address[1]
@@ -167,22 +168,6 @@ class DeliveryTruthfulness(unittest.TestCase):
         self.assertEqual(info["skippedRevisions"], [1])
         self.assertEqual(status["pollIntervalSeconds"], 900)
 
-    def test_legacy_layout_write_does_not_claim_device_publication(self):
-        result = self.store.put_widget(
-            "legacy-only",
-            {
-                "version": 2,
-                "widgetId": "legacy-only",
-                "updatedAt": "2026-09-16T07:30:00Z",
-                "root": {"type": "column", "children": [{"type": "text", "value": "legacy"}]},
-            },
-        )
-        self.assertEqual(result["scope"], "legacy_layout")
-        self.assertFalse(result["publicationCreated"])
-        self.assertEqual(result["layoutUpdatedAt"], "2026-09-16T07:30:00Z")
-        self.assertNotEqual(result["storedAt"], result["layoutUpdatedAt"])
-        self.assertEqual(result["warnings"][0]["code"], "legacy_layout_not_published")
-
     def test_status_surfaces_a_revision_history_gap(self):
         self.store.put_publication("hermes-brief", title="One", summary="first", text="a")
         self.store.put_publication("hermes-brief", title="Two", summary="second", text="b")
@@ -240,7 +225,6 @@ class DeliveryTruthfulness(unittest.TestCase):
         self.assertIn("d", caps["svg"]["allowedAttributes"])
         self.assertEqual(caps["svg"]["ignoredAttributes"], [])
         self.assertEqual(caps["render"]["fit"], "contain")
-        self.assertEqual(caps["layoutMaxTtlSeconds"], 86400)
         self.assertEqual(caps["publicationMaxTtlSeconds"], 31536000)
         self.assertIn("refresh", caps["events"]["vocabulary"])
 
@@ -252,21 +236,6 @@ class DeliveryTruthfulness(unittest.TestCase):
         last = caps["render"]["lastRendered"]
         self.assertEqual((last["width"], last["height"]), (966, 387))
         self.assertEqual(caps["render"]["recommendedAspectRatio"], round(966 / 387, 4))
-
-    def test_layout_endpoint_points_at_the_publication_store(self):
-        layout = {
-            "version": 2,
-            "widgetId": "hermes-brief",
-            "root": {"type": "column", "children": [{"type": "text", "value": "hi"}]},
-        }
-        self.store.put_widget("hermes-brief", layout)
-        self.store.put_publication("hermes-brief", title="T", summary="S", text="x")
-        status_code, body = self.request("GET", "/v1/widgets/hermes-brief", token=self.agent_token)
-        self.assertEqual(status_code, 200, body)
-        pointer = body.get("publication")
-        assert isinstance(pointer, dict)
-        self.assertEqual(pointer["revision"], 1)
-        self.assertEqual(pointer["state"], "published")
 
     def test_device_label_round_trip_and_rename_authorization(self):
         device = self.pair_device(label="Pixel 9 Pro")
@@ -286,30 +255,20 @@ class DeliveryTruthfulness(unittest.TestCase):
         status_code, _ = self.request("PATCH", "/v1/device", {"label": "  "}, token=device["token"])
         self.assertEqual(status_code, 400)
 
-    def test_mint_pairing_code_returns_a_copy_paste_line(self):
-        result = json.loads(
-            self.tools.widget_mint_pairing_code(
-                {"server_url": "https://widget.example.ts.net:8443"}
-            )
-        )
+    def test_pair_cli_returns_a_copy_paste_line(self):
+        buffer = io.StringIO()
+        with contextlib.redirect_stdout(buffer):
+            rc = self.cli._pair(types.SimpleNamespace(
+                server_url="https://widget.example.ts.net:8443", label="Kitchen tablet", json=True
+            ))
+        self.assertEqual(rc, 0)
+        result = json.loads(buffer.getvalue())
         self.assertEqual(result["serverUrl"], "https://widget.example.ts.net:8443")
         self.assertEqual(
             result["pairingLine"],
             f"https://widget.example.ts.net:8443  code={result['code']}",
         )
 
-    def test_layout_ttl_ceiling_matches_the_shared_constant(self):
-        ceiling = self.publication.LAYOUT_MAX_TTL_SECONDS
-        ok = {
-            "version": 2,
-            "widgetId": "ttl-widget",
-            "ttlSeconds": ceiling,
-            "root": {"type": "column", "children": [{"type": "text", "value": "hi"}]},
-        }
-        self.store.put_widget("ttl-widget", ok)
-        too_big = {**ok, "ttlSeconds": ceiling + 1}
-        with self.assertRaises(self.store.StoreError):
-            self.store.put_widget("ttl-widget", too_big)
 
 
 if __name__ == "__main__":
@@ -323,7 +282,7 @@ class ClientBuildReporting(unittest.TestCase):
     revision and a render receipt, and nothing that says which APK produced them.
 
     These tests publish under their own widget id on purpose: `check_push_rate` keeps a
-    process-wide 30-per-hour budget per widget, so adding more publishes to the default id
+    database-backed 30-per-hour budget per widget, so adding more publishes to the default id
     would break unrelated tests in this suite rather than this one.
     """
 
@@ -571,7 +530,7 @@ class TapObservability(unittest.TestCase):
     """Field round 5, P0: a press of "Request update" left no trace anywhere.
 
     The request path was proven correct and the transport was proven working, and yet a
-    tap produced zero rows — because a 401, a 403, a 400, a 429, a 500, a network abort
+    tap produced zero rows â€” because a 401, a 403, a 400, a 429, a 500, a network abort
     and a silent client-side return all looked identical: no row. These tests pin the
     three things that make them distinguishable: an access line, a persisted rejection,
     and the instance the tap came from.
@@ -629,24 +588,26 @@ class TapObservability(unittest.TestCase):
         body = {"event": event, **fields}
         return self.request("POST", f"/v1/widgets/{self.widget}/events", body, token)
 
-    def test_a_refused_tap_is_persisted_not_just_logged(self):
-        paired = self.pair_device()
+    def test_only_authenticated_device_rejections_are_persisted(self):
         # An agent token is a valid bearer but not a device token: 403, zero event rows.
         status, body = self.post_event(self.agent_token, "request_update")
         self.assertEqual(status, 403, body)
         self.assertEqual(body["error"], "device_required")
         events = self.store.get_events(widget_id=self.widget)
         self.assertEqual(events, [], "a refused tap must not become an event row")
+        self.assertEqual(self.store.list_rejected_events(self.widget), [])
 
+        paired = self.pair_device()
+        status, _ = self.post_event(paired["token"], "request_update", clientEventId="x" * 161)
+        self.assertEqual(status, 400)
         rejections = self.store.list_rejected_events(self.widget)
         self.assertEqual(len(rejections), 1)
         row = rejections[0]
-        self.assertEqual(row["status"], 403)
-        self.assertEqual(row["code"], "device_required")
+        self.assertEqual(row["status"], 400)
         self.assertEqual(row["event"], "request_update")
         self.assertEqual(row["method"], "POST")
         self.assertIn("/events", row["path"])
-        self.assertEqual(row["deviceId"], "agent")  # the agent principal, by design
+        self.assertEqual(row["deviceId"], paired["deviceId"])
         # No token and no payload content is retained.
         self.assertNotIn("Authorization", json.dumps(row))
 
@@ -654,23 +615,12 @@ class TapObservability(unittest.TestCase):
         paired = self.pair_device()
         self.post_event(self.agent_token, "request_update")
         self.post_event(None, "request_update")               # 401, not a device
-        self.post_event(paired["token"], "request_update", instanceId="38")
+        status, _ = self.post_event(paired["token"], "request_update", clientEventId="x" * 161)
+        self.assertEqual(status, 400)
         summary = self.store.publication_status(self.widget)["rejections"]
-        self.assertEqual(summary["byCode"].get("device_required"), 1)
-        self.assertEqual(summary["byCode"].get("unauthorized"), 1)
-        # An unauthenticated caller is recorded as such, not dropped for having no id.
-        anonymous = [row for row in summary["rejected"] if row["status"] == 401]
-        self.assertEqual(anonymous[0]["deviceId"], "anonymous")
-        self.assertGreaterEqual(summary["recentCount"], 2)
-        # The 403 is read after the body, so it knows the event; the 401 is refused before
-        # the body is parsed, so it honestly does not.
-        self.assertEqual(
-            [row["event"] for row in summary["rejected"] if row["status"] == 403],
-            ["request_update"],
-        )
-        self.assertIsNone(
-            [row["event"] for row in summary["rejected"] if row["status"] == 401][0]
-        )
+        self.assertEqual(summary["recentCount"], 1)
+        self.assertEqual(summary["byCode"].get("store_error"), 1)
+        self.assertTrue(all(row["deviceId"] != "anonymous" for row in summary["rejected"]))
         self.assertIsNotNone(summary["lastOccurredAt"])
 
     def test_a_successful_tap_records_the_instance_that_was_pressed(self):
@@ -760,7 +710,8 @@ class TapObservability(unittest.TestCase):
         # The production bound is 2000 rows; the pruning rule is the same at 40, and
         # inserting two thousand rows one connection at a time makes the suite slow.
         limit = 40
-        with unittest.mock.patch.object(self.store, "MAX_REJECTION_ROWS", limit):
+        delivery = importlib.import_module("hermes_plugins.hermes_widget.delivery")
+        with unittest.mock.patch.object(delivery, "MAX_REJECTION_ROWS", limit):
             for index in range(limit + 15):
                 self.store.record_rejected_event(
                     self.widget, paired["deviceId"], "request_update",
@@ -783,7 +734,7 @@ class AttentionRouteRoundTrip(unittest.TestCase):
     The route read `widgetId` for routing and then handed the *whole body* to
     `store.report_attention`, whose allow-list is aggregate counters only. Every report
     therefore raised "attention reports must not contain content or unknown fields" and
-    came back 400 — 22 rejections and counting, while the store tests passed because they
+    came back 400 â€” 22 rejections and counting, while the store tests passed because they
     called the store directly and never sent a realistic body.
 
     These tests go through the route with exactly what the app sends.
@@ -891,8 +842,8 @@ class AccessLogContexts(unittest.TestCase):
     false where the Hermes gateway has put its own handler on the root logger, which is the
     only context that matters.
 
-    Each test below asserts on *emission* — whether a line reached stderr, which the
-    startup hook redirects into <Hermes home>/widget/server.log — rather than on handler
+    Each test below asserts on *emission* â€” whether a line reached stderr, which the
+    startup hook redirects into <Hermes home>/widget/server.log â€” rather than on handler
     counts. The first draft of this file attached a handler to `hermes_widget` before
     calling `configure_access_log`, which made the guard unreachable and the test passed
     against the broken code: a test that cannot fail is the same disease as the bug.
@@ -1025,7 +976,7 @@ class RequestUpdatePathsAreDistinct(unittest.TestCase):
 
     Two things follow, and both are tested here. The two senders now declare themselves, so
     a support question is a query. And a press on the widget pill must leave *no* `review`
-    behind — that is the signature of the two paths, and the thing a press that went to the
+    behind â€” that is the signature of the two paths, and the thing a press that went to the
     parent action cannot fake.
     """
 

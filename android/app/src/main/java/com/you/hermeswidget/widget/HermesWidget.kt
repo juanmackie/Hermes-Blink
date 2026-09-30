@@ -59,7 +59,6 @@ private val renderAckScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
 private data class WidgetSnapshot(
     val publication: Publication?,
-    val legacyLayout: WidgetLayout?,
     val bitmap: android.graphics.Bitmap?,
     val paired: Boolean,
     val connectionState: ConnectionState,
@@ -157,7 +156,6 @@ class HermesWidget : GlanceAppWidget() {
                         ink = WidgetTheme.ink(context, dark),
                         secondary = WidgetTheme.secondary(context, dark),
                     )
-                    snapshot.legacyLayout != null -> WidgetSurface(snapshot.legacyLayout)
                     else -> EmptyState(
                         "No publication yet",
                         "Useful Hermes updates will appear here automatically.",
@@ -194,17 +192,12 @@ class HermesWidget : GlanceAppWidget() {
         val publication = if (paired) PublicationRepository.loadCached(appContext) else null
         return WidgetSnapshot(
             publication = publication,
-            legacyLayout = if (publication == null) loadLegacyLayout(appContext) else null,
             bitmap = publication?.let { PublicationImages.load(appContext, it) },
             paired = paired,
             connectionState = Config.getConnectionState(appContext),
         )
     }
 
-    private fun loadLegacyLayout(context: Context): WidgetLayout? {
-        val json = Config.getCachedLayout(context) ?: return null
-        return runCatching { LayoutParser.parse(json) }.getOrNull()
-    }
 }
 
 @Composable
@@ -567,9 +560,11 @@ private fun deliveryLabel(publication: Publication, state: ConnectionState): Str
             PublicationFreshness.STALE -> "Stale • updated $age ago"
             PublicationFreshness.EXPIRED -> "Expired"
         }
+    }
+}
 
 /** The loading-state surface referenced by the provider XML (`widget_loading`) and
- *  backed by the `drawable/*_loading_*` resources. It is the wireframe the launcher
+ *  backed by the loading drawable resources. It is the wireframe the launcher
  *  shows before the first publication arrives, so the surface shape does not jump.
  */
 @Composable
@@ -595,8 +590,6 @@ fun LoadingState(dark: Boolean = false) {
             contentDescription = "loading",
             modifier = GlanceModifier.fillMaxWidth().height(12.dp).padding(top = 4.dp),
         )
-    }
-}
     }
 }
 

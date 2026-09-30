@@ -11,6 +11,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import types
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -45,6 +46,9 @@ class FeatureProposals(unittest.TestCase):
         cls.store = importlib.import_module("hermes_plugins.hermes_widget.store")
         cls.tools = importlib.import_module("hermes_plugins.hermes_widget.tools")
         cls.preview = importlib.import_module("hermes_plugins.hermes_widget.preview")
+        cls.push = importlib.import_module("hermes_plugins.hermes_widget.push")
+        cls.push_state = importlib.import_module("hermes_plugins.hermes_widget.push_state")
+        cls.publications = importlib.import_module("hermes_plugins.hermes_widget.publications")
         cls.watches = importlib.import_module("hermes_plugins.hermes_widget.watches")
         cls.proactive = importlib.import_module("hermes_plugins.hermes_widget.proactive")
         cls.cli = importlib.import_module("hermes_plugins.hermes_widget.cli")
@@ -87,9 +91,9 @@ class FeatureProposals(unittest.TestCase):
     def test_cli_resolves_repository_fixture_from_any_cwd(self):
         with tempfile.TemporaryDirectory(prefix="hermes-cwd-") as temp:
             with patch("pathlib.Path.cwd", return_value=Path(temp)):
-                resolved = self.cli._resolve_input_file("fixtures/brief-v2.json", label="layout file")
+                resolved = self.cli._resolve_input_file("README.md", label="documentation file")
         self.assertTrue(resolved.is_file())
-        self.assertEqual(resolved.name, "brief-v2.json")
+        self.assertEqual(resolved.name, "README.md")
 
     def test_push_state_and_wake_test_are_visible_without_a_publication(self):
         state = self.store.set_device_push_state(
@@ -97,10 +101,7 @@ class FeatureProposals(unittest.TestCase):
         )
         self.assertEqual(state["state"], "failed")
         self.assertEqual(state["failureReason"], "AUTH_FAILED")
-        self.store.put_widget(
-            "feature",
-            {"version": 2, "widgetId": "feature", "root": {"type": "column", "children": [{"type": "text", "value": "x"}]}},
-        )
+        self.store.ensure_widget("feature")
         self.store.set_device_push_endpoint(self.device["deviceId"], "https://ntfy.example/up/wake")
         with patch.object(self.store._push, "wake") as wake:
             result = self.store.wake_test("feature")
@@ -120,6 +121,44 @@ class FeatureProposals(unittest.TestCase):
         self.assertEqual(result["regions"]["ticker"]["summary"], "countdown")
         self.assertEqual(result["ticker"]["summary"], "countdown")
         self.assertEqual(result["regions"]["ticker"]["maxAgeSeconds"], 60)
+        history = self.store.publication_history("regions")
+        self.assertEqual(len(history), 2, "ticker publication must create one revision")
+        hero_update = self.store.put_publication(
+            "regions", title="Hero v2", summary="Hero summary", text="updated hero"
+        )
+        self.assertEqual(hero_update["regions"]["ticker"]["summary"], "countdown")
+
+    def test_ticker_change_invalidates_conditional_publication_fetch(self):
+        self.store.put_publication("ticker-etag", title="Hero", summary="Main", text="body")
+
+        def fetch(etag=None):
+            connection = http.client.HTTPConnection("127.0.0.1", self.port, timeout=5)
+            headers = {"Authorization": f"Bearer {self.device['token']}"}
+            if etag:
+                headers["If-None-Match"] = etag
+            try:
+                connection.request("GET", "/v1/widgets/ticker-etag/publication", headers=headers)
+                response = connection.getresponse()
+                body = response.read()
+                return response.status, dict(response.getheaders()), body
+            finally:
+                connection.close()
+
+        first_status, first_headers, _ = fetch()
+        self.assertEqual(first_status, 200)
+        first_etag = first_headers["ETag"]
+
+        self.store.put_ticker(
+            "ticker-etag", title="Countdown", summary="Two minutes", text="02:00"
+        )
+        changed_status, changed_headers, changed_body = fetch(first_etag)
+        self.assertEqual(changed_status, 200)
+        self.assertNotEqual(changed_headers["ETag"], first_etag)
+        changed = json.loads(changed_body.decode("utf-8"))
+        self.assertEqual(changed["ticker"]["summary"], "Two minutes")
+
+        unchanged_status, _, _ = fetch(changed_headers["ETag"])
+        self.assertEqual(unchanged_status, 304)
 
     def test_publication_carries_provenance_dark_and_variants(self):
         result = self.store.put_publication(
@@ -131,9 +170,9 @@ class FeatureProposals(unittest.TestCase):
         self.assertTrue(result["darkPalette"])
         self.assertEqual(result["variants"]["2x2"]["text"], "compact")
         rendered = self.preview.render_publication_previews(result, sizes=["2x2"])
-        # Which text backend runs depends on whether CairoSVG is importable (CI installs
-        # requirements.txt; a minimal host does not). The contract is "a real text
-        # renderer", not a specific one — see the suppressed tests below for the
+        # Which text backend runs depends on whether CairoSVG is importable (the full-suite
+        # CI job installs the optional preview dependencies; a minimal host does not). The contract is "a real text
+        # renderer", not a specific one â€” see the suppressed tests below for the
         # deterministic path.
         self.assertIn(rendered[0]["renderer"], {"pillow-text", "cairosvg"})
 
@@ -150,6 +189,87 @@ class FeatureProposals(unittest.TestCase):
         host.trigger_refresh.assert_called_once_with()
         self.assertEqual(body["request"]["status"], "triggered")
         self.assertEqual(self.store.publication_status("poke")["updateRequests"][0]["status"], "triggered")
+
+    def test_request_update_is_single_flight_and_rate_limited_per_device(self):
+        first = self.store.request_update("single-flight", self.device["deviceId"], "first")
+        again = self.store.request_update("single-flight", self.device["deviceId"], "second")
+        self.assertTrue(first["_shouldTrigger"])
+        self.assertFalse(again["_shouldTrigger"])
+        self.assertEqual(again["requestId"], first["requestId"])
+
+        for index in range(self.store.UPDATE_REQUEST_MAX_PER_DEVICE - 1):
+            request = self.store.request_update(
+                "rate-limit", self.device["deviceId"], f"unique-{index}"
+            )
+            self.store.mark_update_request_triggered(request["requestId"])
+        with self.assertRaises(self.store.RateLimitError):
+            self.store.request_update(
+                "rate-limit", self.device["deviceId"], "one-too-many"
+            )
+
+    def test_status_consumes_only_triggered_update_requests_on_explicit_request(self):
+        self.store.put_publication("consume", title="A", summary="S", text="body")
+        request = self.store.request_update("consume", self.device["deviceId"], "consume-1")
+        self.store.mark_update_request_triggered(request["requestId"])
+        before = json.loads(self.tools.widget_status({"widget_id": "consume"}))
+        self.assertEqual(before["newlyConsumedUpdateRequests"], [])
+        self.assertEqual(before["updateRequests"][0]["status"], "triggered")
+
+        consumed = json.loads(self.tools.widget_status({
+            "widget_id": "consume", "consume_update_requests": True,
+        }))
+        self.assertEqual(consumed["newlyConsumedUpdateRequests"][0]["requestId"], request["requestId"])
+        self.assertEqual(consumed["updateRequests"][0]["status"], "consumed")
+
+    def test_status_limits_recent_records_and_reports_truncation(self):
+        for index in range(4):
+            self.store.put_publication(
+                "bounded-status", title=f"Revision {index}", summary="S", text=f"body {index}"
+            )
+        full = self.store.publication_status("bounded-status", limit=2)
+        self.assertEqual([row["revision"] for row in full["revisions"]], [4, 3])
+        self.assertEqual(full["resultLimits"]["totals"]["revisions"], 4)
+        self.assertTrue(full["resultLimits"]["truncated"]["revisions"])
+
+        compact = json.loads(self.tools.widget_status({
+            "widget_id": "bounded-status", "summary": True, "limit": 100,
+        }))
+        self.assertEqual(compact["resultLimits"]["limit"], 10)
+
+    def test_refresh_process_single_flight_reuses_running_cron(self):
+        release = threading.Event()
+        reaped = threading.Event()
+
+        class FakeProcess:
+            pid = 4242
+
+            def poll(self):
+                return None if not release.is_set() else 0
+
+            def wait(self):
+                release.wait()
+                reaped.set()
+                return 0
+
+        try:
+            with (
+                patch.dict(os.environ, {"HERMES_BIN": "hermes-test"}),
+                patch.object(self.proactive.subprocess, "Popen", return_value=FakeProcess()) as popen,
+                patch.object(self.proactive.store, "has_unconsumed_update_requests", return_value=False),
+            ):
+                first = self.proactive.trigger_refresh()
+                second = self.proactive.trigger_refresh()
+                self.assertTrue(first["triggered"])
+                self.assertTrue(second["duplicate"])
+                self.assertEqual(second["pid"], 4242)
+                popen.assert_called_once()
+        finally:
+            release.set()
+            self.assertTrue(reaped.wait(timeout=2))
+            deadline = time.monotonic() + 2
+            while self.proactive._REFRESH_PROCESS is not None and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertIsNone(self.proactive._REFRESH_PROCESS)
 
     def test_bounded_question_is_answered_through_authenticated_path(self):
         self.store.put_publication("questions", title="Q", summary="S", text="body")
@@ -190,6 +310,151 @@ class FeatureProposals(unittest.TestCase):
         self.assertEqual(cleared[0]["state"], "cleared")
         self.assertFalse(self.watches.get_watch(watch["watchId"])["enabled"])
 
+    def test_quiet_hours_use_timezone_for_watches_and_settings(self):
+        from zoneinfo import ZoneInfo
+
+        timeutil = importlib.import_module("hermes_plugins.hermes_widget.timeutil")
+        now = datetime(2026, 9, 30, 10, 30, tzinfo=timezone.utc)
+        self.assertTrue(timeutil._in_quiet_window("20:00", "21:00", "Australia/Brisbane", now))
+        self.assertFalse(timeutil._in_quiet_window("20:00", "21:00", "UTC", now))
+        self.assertTrue(timeutil._in_quiet_window("20:00", "06:00", "Australia/Brisbane", now))
+        with self.assertRaises(self.store.StoreError):
+            self.store.set_widget_settings("quiet-invalid", {
+                "start": "20:00", "end": "21:00", "timezone": "Mars/Olympus",
+            })
+
+        configured = self.store.set_widget_settings("quiet-settings", {
+            "start": "20:00", "end": "21:00", "timezone": "Australia/Brisbane",
+        })
+        self.assertEqual(configured["quietHours"]["timezone"], "Australia/Brisbane")
+        local_now = datetime.now(timezone.utc).astimezone(ZoneInfo("Australia/Brisbane"))
+        priority_window = self.store.set_widget_settings("priority-timezone", {
+            "start": local_now.strftime("%H:%M"),
+            "end": (local_now + timedelta(minutes=3)).strftime("%H:%M"),
+            "timezone": "Australia/Brisbane",
+        })
+        self.assertEqual(priority_window["quietHours"]["timezone"], "Australia/Brisbane")
+        publication = self.store.put_publication(
+            "priority-timezone", title="Quiet", summary="Quiet", text="body", priority="high",
+        )
+        self.assertEqual(publication["priorityDegradedReason"], "quiet_hours")
+
+        check_at = datetime.now(timezone.utc) + timedelta(seconds=1)
+        local_minute = check_at.astimezone(ZoneInfo("Australia/Brisbane")).strftime("%H:%M")
+        local_end = (check_at.astimezone(ZoneInfo("Australia/Brisbane")) + timedelta(minutes=1)).strftime("%H:%M")
+        watch = self.watches.create_watch(
+            "watch-timezone", name="quiet test", condition={"type": "always"},
+            payload={"title": "Quiet", "summary": "Quiet", "text": "body"},
+            cadence_seconds=60,
+            quiet_hours={"start": local_minute, "end": local_end, "timezone": "Australia/Brisbane"},
+        )
+        self.assertEqual(watch["quietHours"]["timezone"], "Australia/Brisbane")
+        self.assertEqual(
+            self.watches.tick_watches(now=check_at),
+            [{"watchId": watch["watchId"], "state": "deferred", "reason": "quiet_hours"}],
+        )
+
+    def test_server_ticker_fires_date_watches_and_leaves_source_watches_to_agent(self):
+        server_module = importlib.import_module("hermes_plugins.hermes_widget.server")
+        now = datetime.now(timezone.utc) + timedelta(seconds=1)
+        date_watch = self.watches.create_watch(
+            "server-date-watch", name="deadline", condition={
+                "type": "date_reached", "at": (now - timedelta(seconds=1)).isoformat(),
+            },
+            payload={"title": "Deadline", "summary": "Reached", "text": "ready"},
+            cadence_seconds=3600,
+        )
+        source_watch = self.watches.create_watch(
+            "agent-source-watch", name="source", condition={
+                "type": "source_equals", "source": "ready", "equals": True,
+            },
+            payload={"title": "Source", "summary": "Ready", "text": "ready"},
+            cadence_seconds=3600,
+        )
+        results = self.watches.tick_watches(condition_types={"date_reached"}, now=now)
+        self.assertEqual([row["watchId"] for row in results], [date_watch["watchId"]])
+        self.assertEqual(self.watches.get_watch(date_watch["watchId"])["lastState"], True)
+        self.assertIsNone(self.watches.get_watch(source_watch["watchId"])["lastState"])
+
+        concurrent_watch = self.watches.create_watch(
+            "concurrent-date-watch", name="single fire", condition={
+                "type": "date_reached", "at": (now - timedelta(seconds=1)).isoformat(),
+            },
+            payload={"title": "Once", "summary": "Once", "text": "body"},
+            cadence_seconds=3600,
+        )
+        start = threading.Barrier(2)
+        concurrent_results = []
+
+        def tick_concurrently():
+            start.wait()
+            concurrent_results.append(
+                self.watches.tick_watches(condition_types={"date_reached"}, now=now)
+            )
+
+        with patch.object(self.store, "put_publication", wraps=self.store.put_publication) as publish:
+            workers = [threading.Thread(target=tick_concurrently) for _ in range(2)]
+            for worker in workers:
+                worker.start()
+            for worker in workers:
+                worker.join(timeout=5)
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(publish.call_count, 1)
+        self.assertEqual(
+            [item["watchId"] for result in concurrent_results for item in result],
+            [concurrent_watch["watchId"]],
+        )
+
+        stop_event = threading.Event()
+        with patch.object(server_module, "WATCH_TICK_INTERVAL_SECONDS", 0):
+            with patch.object(self.watches, "tick_watches", side_effect=lambda **_kwargs: stop_event.set() or [] ) as tick:
+                server_module._date_watch_loop(stop_event)
+        tick.assert_called_once_with(condition_types={"date_reached"})
+
+        class StoppedServer:
+            server_address = ("127.0.0.1", 8788)
+            closed = False
+
+            def serve_forever(self):
+                raise KeyboardInterrupt
+
+            def server_close(self):
+                self.closed = True
+
+        stopped_server = StoppedServer()
+        ticker_started = threading.Event()
+
+        def run_ticker(stop):
+            ticker_started.set()
+            stop.wait()
+
+        with patch.object(server_module.retention, "start_retention_job"):
+            with patch.object(server_module, "make_server", return_value=stopped_server):
+                with patch.object(server_module, "_date_watch_loop", side_effect=run_ticker):
+                    server_module.run_server("127.0.0.1", 8788, quiet=True)
+        self.assertTrue(ticker_started.is_set())
+        self.assertTrue(stopped_server.closed)
+
+    def test_watch_publish_failure_does_not_consume_transition_or_daily_budget(self):
+        watch = self.watches.create_watch(
+            "watch-retry", name="retry",
+            condition={"type": "source_equals", "source": "ready", "equals": True},
+            payload={"title": "Retry", "summary": "Ready", "text": "ready"},
+            cadence_seconds=60,
+        )
+        base = datetime.now(timezone.utc)
+        with patch.object(self.store, "put_publication", side_effect=self.store.PublicationError("offline")):
+            failed = self.watches.tick_watches(sources={"ready": True}, now=base)
+        self.assertEqual(failed[0]["state"], "error")
+        state = self.watches.get_watch(watch["watchId"])
+        self.assertIsNone(state["lastFiredAt"])
+        self.assertIsNone(state["lastState"])
+
+        retried = self.watches.tick_watches(
+            sources={"ready": True}, now=base + timedelta(seconds=61)
+        )
+        self.assertEqual(retried[0]["state"], "published")
+
     def test_priority_wake_is_content_free_and_receipted(self):
         self.store.set_device_push_endpoint(self.device["deviceId"], "https://ntfy.example/up/device")
         with patch.object(self.store._push, "wake") as wake:
@@ -209,14 +474,77 @@ class FeatureProposals(unittest.TestCase):
             "nudge_sent", "fetched", "downloaded", "render_submitted", "rendered"
         ])
 
+    def test_transient_priority_wake_failure_retries_with_backoff(self):
+        self.store.set_device_push_endpoint(self.device["deviceId"], "https://ntfy.example/up/device")
+        with patch.object(
+            self.store._push, "wake", side_effect=[self.store._push.PushError("offline"), None]
+        ) as wake:
+            publication = self.store.put_publication(
+                "wake-retry", title="Retry", summary="Retry", text="body", priority="high",
+            )
+            conn = self.store._connect()
+            try:
+                pending = conn.execute(
+                    "SELECT status, attempt_count, next_attempt_at FROM publication_nudges "
+                    "WHERE widget_id=? AND revision=? AND device_id=?",
+                    ("wake-retry", publication["revision"], self.device["deviceId"]),
+                ).fetchone()
+            finally:
+                conn.close()
+            self.assertEqual(pending["status"], "failed")
+            self.assertEqual(pending["attempt_count"], 1)
+            self.assertIsNotNone(pending["next_attempt_at"])
+            self.assertEqual(
+                self.store.retry_failed_nudges(now=datetime.now(timezone.utc) + timedelta(minutes=2)),
+                1,
+            )
+        self.assertEqual(wake.call_count, 2)
+        delivery = self.store.publication_status("wake-retry")["delivery"][0]
+        self.assertEqual(delivery["nudgeStatus"], "sent")
+        conn = self.store._connect()
+        try:
+            final = conn.execute(
+                "SELECT attempt_count, next_attempt_at, claim_until FROM publication_nudges "
+                "WHERE widget_id=? AND revision=? AND device_id=?",
+                ("wake-retry", publication["revision"], self.device["deviceId"]),
+            ).fetchone()
+        finally:
+            conn.close()
+        self.assertEqual(final["attempt_count"], 2)
+        self.assertIsNone(final["next_attempt_at"])
+        self.assertIsNone(final["claim_until"])
+
+    def test_push_wake_rejects_private_dns_results(self):
+        private_address = (2, 1, 6, "", ("127.0.0.1", 443))
+        with patch.object(self.push.socket, "getaddrinfo", return_value=[private_address]):
+            with self.assertRaises(self.push.PushError):
+                self.push.wake("https://push.example/device")
+
     def test_priority_over_limit_degrades_visibly(self):
-        with patch.object(self.store, "HIGH_PRIORITY_MAX_PER_HOUR", 1):
+        with patch.object(self.publications, "HIGH_PRIORITY_MAX_PER_HOUR", 1):
             first = self.store.put_publication("limit", title="1", summary="s", text="a", priority="high")
             second = self.store.put_publication("limit", title="2", summary="s", text="b", priority="high")
         self.assertEqual(first["priority"], "high")
         self.assertEqual(second["priority"], "normal")
         self.assertEqual(second["requestedPriority"], "high")
         self.assertEqual(second["priorityDegradedReason"], "high_priority_hour_limit")
+
+    def test_push_rate_limit_is_persisted_and_shared_by_database_connections(self):
+        with patch.object(self.push_state, "PUSH_MAX_PER_WINDOW", 2):
+            with patch.object(self.push_state, "_epoch_now", side_effect=[10_000, 10_001, 10_002]):
+                self.store.check_push_rate("persisted-rate")
+                self.store.check_push_rate("persisted-rate")
+                with self.assertRaises(self.store.RateLimitError):
+                    self.store.check_push_rate("persisted-rate")
+        conn = self.store._connect()
+        try:
+            rows = conn.execute(
+                "SELECT occurred_at FROM push_rate_limits WHERE widget_id = ? ORDER BY occurred_at",
+                ("persisted-rate",),
+            ).fetchall()
+        finally:
+            conn.close()
+        self.assertEqual([row["occurred_at"] for row in rows], [10_000, 10_001])
 
     def test_inventory_and_preview_endpoint(self):
         self.store.report_widget_instances(
@@ -298,9 +626,38 @@ class FeatureProposals(unittest.TestCase):
         self.assertEqual(first["intent"]["intentId"], second["intent"]["intentId"])
         self.assertTrue(second["duplicate"])
         intent_id = first["intent"]["intentId"]
-        resolved = self.store.resolve_intent(intent_id, "applied", result="validated", confirmed=True)
+        resolved = self.store.resolve_intent(intent_id, "applied", result="validated")
         self.assertEqual(resolved["status"], "applied")
         self.assertEqual(len(self.store.get_events(widget_id="actions")), 1)
+
+    def test_sensitive_action_requires_paired_device_confirmation(self):
+        self.store.put_publication(
+            "sensitive-actions", title="Sensitive", summary="S", text="confirm first",
+            actions=[{
+                "kind": "approve", "itemId": "pay-1", "actionClass": "destructive",
+                "confirmOnDevice": True,
+            }],
+        )
+        created = self.store.post_action_event(
+            "sensitive-actions", self.device["deviceId"], "approve",
+            {"itemId": "pay-1"}, revision=1,
+        )
+        intent_id = created["intent"]["intentId"]
+        self.assertEqual(created["intent"]["status"], "awaiting_confirmation")
+        with self.assertRaisesRegex(self.store.ActionIntentError, "actionClass does not match"):
+            self.store.post_action_event(
+                "sensitive-actions", self.device["deviceId"], "approve",
+                {"itemId": "pay-1"}, revision=1, action_class="reversible",
+            )
+        with self.assertRaisesRegex(self.store.ActionIntentError, "paired device"):
+            self.store.resolve_intent(intent_id, "applied")
+        with self.assertRaisesRegex(self.store.ActionIntentError, "different device"):
+            self.store.confirm_action_intent(intent_id, "other-device")
+        confirmed = self.store.confirm_action_intent(intent_id, self.device["deviceId"])
+        self.assertEqual(confirmed["status"], "queued")
+        self.assertTrue(confirmed["payload"]["deviceConfirmed"])
+        resolved = self.store.resolve_intent(intent_id, "applied", result="validated")
+        self.assertEqual(resolved["status"], "applied")
 
     def test_revoked_device_cannot_report_or_act(self):
         self.store.revoke_device(self.device["deviceId"])

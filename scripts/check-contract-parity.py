@@ -1,981 +1,192 @@
 #!/usr/bin/env python3
-"""Fail when the layout contract and the things that promise it drift apart.
+"""Check the live publication contract against the Android client.
 
-The v2 bug this exists to prevent: layout.schema.json declared `style`, `color`,
-`spacing`, `thickness`, `alignment`, `padding` and `weight`; validate.py accepted them;
-LayoutParser.kt parsed them; and Renderer.kt applied none of them, so a layout author
-silently got a bare black Text. Six copies of the same contract, no check that they agreed.
-
-One registry (layout.schema.json), everything else mirrors it, and this compares them:
-
-  * node types    - schema == validate.py == LayoutParser.kt == SKILL.md
-  * action kinds  - schema == validate.py == LayoutParser.kt
-  * text styles   - schema == validate.py == Typo.kt == SKILL.md
-  * node fields   - schema(type-specific) == the SKILL.md "only these fields render" table
-  * envelope      - every schema root property is either rendered or listed as metadata
-
-Exit 0 when everything agrees. Exit 1 with a per-check diff otherwise.
-
-    python scripts/check-contract-parity.py
+The former v2 layout checks have been removed with that protocol. These checks cover
+the contract that remains: publication limits, action and media allowlists, event
+sources, preview size bands, and the shared refresh interval.
 """
 from __future__ import annotations
 
-import json
+import ast
+import math
 import pathlib
 import re
 import sys
 
 REPO = pathlib.Path(__file__).resolve().parents[1]
 PLUGIN = REPO / "hermes-plugin" / "hermes-widget"
-SCHEMA_PATH = PLUGIN / "layout.schema.json"
-VALIDATE_PATH = PLUGIN / "validate.py"
-PARSER_PATH = REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget" / "widget" / "LayoutParser.kt"
-TYPO_PATH = REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget" / "widget" / "Typo.kt"
-SKILL_PATH = PLUGIN / "skills" / "widget" / "SKILL.md"
-SCHEMA_DOC_PATH = REPO / "docs" / "SCHEMA.md"
-WIDGET_KT = REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget" / "widget" / "HermesWidget.kt"
-PREVIEW_PY = PLUGIN / "preview.py"
-RES = REPO / "android" / "app" / "src" / "main" / "res"
-WIDGET_INFO = RES / "xml" / "hermes_widget_info.xml"
-PREVIEW_LAYOUT = RES / "layout" / "widget_preview.xml"
-PREVIEW_LAYOUT_NIGHT = RES / "layout-night" / "widget_preview.xml"
-LOADING_LAYOUT = RES / "layout" / "widget_loading.xml"
-STRINGS_XML = RES / "values" / "strings.xml"
-DIMENS_XML = RES / "values" / "dimens.xml"
+ANDROID = REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
 
-# Fields that live in the envelope, not on a node, and are not rendered per-node.
-ENVELOPE_METADATA = {"version", "widgetId", "itemId", "title", "ttlSeconds", "accentColor", "updatedAt", "root"}
-# Common node fields checked once as a group rather than inside the per-type table.
-NODE_BASE_FIELDS = {"type", "id", "itemId", "weight", "padding", "alignment"}
+sys.path.insert(0, str(PLUGIN))
+import bands  # noqa: E402
+import publication  # noqa: E402
+
+PUBLICATION_KT = (ANDROID / "net" / "Publication.kt").read_text(encoding="utf-8")
+API_KT = (ANDROID / "net" / "HermesApi.kt").read_text(encoding="utf-8")
+BREAKPOINTS_KT = (ANDROID / "widget" / "Breakpoints.kt").read_text(encoding="utf-8")
+WORKER_KT = (ANDROID / "work" / "RefreshWorker.kt").read_text(encoding="utf-8")
+REQUEST_EVENT_KT = (ANDROID / "net" / "RequestUpdateEvent.kt").read_text(encoding="utf-8")
+SERVER_PY = (PLUGIN / "server.py").read_text(encoding="utf-8")
 
 failures: list[str] = []
 
 
-def fail(check: str, detail: str) -> None:
-    failures.append(f"[{check}] {detail}")
+def check(name: str, expected: object, actual: object) -> None:
+    if expected != actual:
+        failures.append(f"{name}: expected {expected!r}, found {actual!r}")
 
 
-def source_of(path: pathlib.Path | str) -> str:
-    """File contents with comments stripped.
+def int_constant(source: str, name: str) -> int | None:
+    match = re.search(rf"\b{name}\s*=\s*([0-9][0-9_]*(?:\s*\*\s*[0-9][0-9_]*)*)", source)
+    if not match:
+        return None
+    return math.prod(int(part.strip().replace("_", "")) for part in match.group(1).split("*"))
 
-    A gate that greps for a forbidden token must not match the comment explaining *why*
-    the token is forbidden. That mistake shipped three times in this file, each time
-    turning a good comment into a false positive, so the stripping is centralised here.
-    """
-    text = pathlib.Path(path).read_text(encoding="utf-8")
-    text = re.sub(r"/\*.*?\*/", "", text, flags=re.S)   # C-style block (Kotlin, C)
-    text = re.sub(r"<!--.*?-->", "", text, flags=re.S)   # XML / Android resource
-    text = "\n".join(                                     # Python and shell line comments
-        line for line in text.splitlines() if not line.lstrip().startswith("#")
+
+def quoted_set(source: str, pattern: str, label: str) -> set[str] | None:
+    match = re.search(pattern, source, re.S)
+    if not match:
+        failures.append(f"{label}: contract declaration was not found")
+        return None
+    return set(re.findall(r'"([^"\n]+)"', match.group(1)))
+
+
+def python_set_literal(source: str, name: str) -> set[str] | None:
+    """Read a module-level tuple/set literal from server.py without importing it."""
+    try:
+        tree = ast.parse(source)
+    except SyntaxError as exc:
+        failures.append(f"server.py: could not parse source: {exc}")
+        return None
+    for node in tree.body:
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name for target in node.targets
+        ):
+            value = node.value
+            if isinstance(value, ast.Call) and isinstance(value.func, ast.Name) and value.func.id == "frozenset":
+                value = value.args[0] if value.args else None
+            if value is None:
+                break
+            try:
+                result = ast.literal_eval(value)
+            except (ValueError, TypeError):
+                break
+            if isinstance(result, (tuple, list, set, frozenset)):
+                return set(result)
+    failures.append(f"server.py: {name} must be a literal tuple/set")
+    return None
+
+
+def band_budgets(source: str) -> dict[str, int] | None:
+    enum = re.search(r"enum class WidgetBand\((.*?)\n\s*val showsSummary", source, re.S)
+    if not enum:
+        failures.append("Breakpoints.kt: WidgetBand enum was not found")
+        return None
+    return {
+        name.lower(): int(body)
+        for name, body in re.findall(r"\b(XS|S|M|L)\([^\n]*?,\s*(\d+),\s*(?:true|false)\s*\)", enum.group(1))
+    }
+
+
+def refresh_interval_seconds(source: str) -> int | None:
+    match = re.search(
+        r"PeriodicWorkRequestBuilder<RefreshWorker>\(\s*(\d+)\s*,\s*TimeUnit\.(SECONDS|MINUTES|HOURS)\s*\)",
+        source,
     )
-    return re.sub(r"//.*", "", text)
-
-
-def mentions(text: str, name: str) -> bool:
-    """A field documented as a `code` token or as a "quoted" JSON key."""
-    return f"`{name}`" in text or f'"{name}"' in text
-
-
-def section(text: str, heading: str) -> str:
-    """The body of `## heading` up to the next `## ` heading."""
-    match = re.search(rf"^## {re.escape(heading)}\s*$", text, re.M)
     if not match:
-        fail("skill-parse", f"SKILL.md has no '## {heading}' section")
-        return ""
-    rest = text[match.end():]
-    nxt = re.search(r"^## ", rest, re.M)
-    return rest[: nxt.start()] if nxt else rest
+        failures.append("RefreshWorker.kt: periodic refresh interval was not found")
+        return None
+    value = int(match.group(1))
+    return value * {"SECONDS": 1, "MINUTES": 60, "HOURS": 3600}[match.group(2)]
 
 
-def schema_node_types(schema: dict) -> set[str]:
-    return set(schema["definitions"]["node"]["properties"]["type"]["enum"])
+def compare_limits() -> None:
+    limits = {
+        "MAX_TITLE_BYTES": publication.MAX_TITLE_BYTES,
+        "MAX_SUMMARY_BYTES": publication.MAX_SUMMARY_BYTES,
+        "MAX_TEXT_BYTES": publication.MAX_TEXT_BYTES,
+        "MAX_RASTER_BYTES": publication.MAX_ASSET_BYTES,
+        "MAX_RASTER_PIXELS": publication.MAX_RASTER_PIXELS,
+        "MAX_RASTER_DIMENSION": publication.MAX_RASTER_DIMENSION,
+    }
+    for name, expected in limits.items():
+        actual = int_constant(PUBLICATION_KT, name)
+        if name == "MAX_RASTER_BYTES":
+            # HermesApi owns the transfer cap; Publication.kt separately validates metadata.
+            api_limit = int_constant(API_KT, "MAX_ASSET_BYTES")
+            check("Android HermesApi.MAX_ASSET_BYTES", expected, api_limit)
+        check(f"Android Publication.kt {name}", expected, actual)
+    check(
+        "Android publication JSON cap",
+        int_constant(API_KT, "MAX_PUBLICATION_BYTES"),
+        int_constant(PUBLICATION_KT, "MAX_PUBLICATION_JSON_BYTES"),
+    )
+    version = re.search(r"require\(version\s*==\s*(\d+)\)", PUBLICATION_KT)
+    check(
+        "Android publication version",
+        publication.PUBLICATION_VERSION,
+        int(version.group(1)) if version else None,
+    )
 
 
-def schema_type_fields(schema: dict) -> dict[str, set[str]]:
-    """Per node type, the fields declared in `nodeSpecifics`."""
-    out: dict[str, set[str]] = {}
-    for branch in schema["definitions"]["nodeSpecifics"]["oneOf"]:
-        const = branch["if"]["properties"]["type"]["const"]
-        fields = set(branch.get("then", {}).get("properties", {}))
-        out[const] = fields
-    return out
+def compare_action_and_media_contracts() -> None:
+    kinds = quoted_set(
+        PUBLICATION_KT,
+        r'require\(kind in setOf\((.*?)\)\s*\)\s*\{\s*"invalid publication action"',
+        "Android action kinds",
+    )
+    check("publication action kinds", set(publication.ACTION_KINDS), kinds)
+    classes = quoted_set(
+        PUBLICATION_KT,
+        r'require\(actionClass in setOf\((.*?)\)\s*\)\s*\{\s*"invalid publication action class"',
+        "Android action classes",
+    )
+    check("publication action classes", set(publication.ACTION_CLASSES), classes)
+    media = quoted_set(
+        PUBLICATION_KT,
+        r'require\(it in setOf\((.*?)\)\s*\)\s*\{\s*"unsupported image type"',
+        "Android media types",
+    )
+    check("publication media types", set(publication.SUPPORTED_MEDIA_TYPES) | {"image/svg+xml"}, media)
 
 
-def kotlin_set(path: pathlib.Path, name: str) -> set[str]:
-    text = path.read_text(encoding="utf-8")
-    match = re.search(rf"private val {name} = setOf\((.*?)\)", text, re.S)
-    if not match:
-        fail("kotlin-parse", f"{path.name}: no `{name}` setOf(...) found")
-        return set()
-    return set(re.findall(r'"([a-z_]+)"', match.group(1)))
+def compare_event_sources() -> None:
+    server_sources = python_set_literal(SERVER_PY, "EVENT_SOURCES")
+    android_sources = set(re.findall(
+        r"const val SOURCE_(?:WIDGET_ACTION|IN_APP_BUTTON)\s*=\s*\"([^\"]+)\"",
+        REQUEST_EVENT_KT,
+    ))
+    check("request event sources", server_sources, android_sources)
 
 
-def skill_node_types(text: str) -> set[str]:
-    body = section(text, "The v2 layout contract (transport stays /v1/)")
-    found: set[str] = set()
-    for line in body.splitlines():
-        if re.match(r"^(Containers|Content|Data|Interactive):", line):
-            found |= set(re.findall(r"`([a-z_]+)`", line))
-    return found
-
-
-def skill_fields(text: str) -> dict[str, set[str]]:
-    """The `| node | fields |` table under 'Only these fields render'."""
-    body = section(text, "Only these fields render")
-    out: dict[str, set[str]] = {}
-    for line in body.splitlines():
-        match = re.match(r"^\|\s*`([a-z_]+)`\s*\|\s*(.*?)\s*\|\s*$", line)
-        if not match:
-            continue
-        node, cells = match.group(1), match.group(2)
-        # Drop the parenthesised value lists: `alignment` (`start`/`center`/...) is one field.
-        cells = re.sub(r"\([^)]*\)", "", cells)
-        out[node] = set(re.findall(r"`([A-Za-z_][A-Za-z0-9_]*)`", cells))
-    return out
-
-
-def skill_text_styles(text: str) -> dict[str, tuple[int, str, str]]:
-    """The SKILL.md typography table as {name: (sizeSp, weight, colour)}."""
-    body = section(text, "Typography — four steps, pick at most three")
-    found: dict[str, tuple[int, str, str]] = {}
-    for line in body.splitlines():
-        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if len(cells) < 4:
-            continue
-        name = re.fullmatch(r"`([a-z_]+)`", cells[0])
-        size = re.fullmatch(r"(\d+)sp", cells[1])
-        colour = re.fullmatch(r"`(#[0-9A-Fa-f]{6})`", cells[3])
-        if name and size and colour:
-            found[name.group(1)] = (int(size.group(1)), cells[2], colour.group(1))
-    return found
-
-
-def typo_scale_keys(path: pathlib.Path) -> dict[str, tuple[int, str, str]]:
-    """Typo.kt's SCALE as {name: (sizeSp, weight, colorHex)}."""
-    text = path.read_text(encoding="utf-8")
-    match = re.search(r"val SCALE: Map<String, Spec> = mapOf\((.*?)\n    \)", text, re.S)
-    if not match:
-        fail("kotlin-parse", "Typo.kt: SCALE map not found")
-        return {}
-    out: dict[str, tuple[int, str, str]] = {}
-    for name, size, weight, colour in re.findall(
-        r'"([a-z_]+)" to Spec\((\d+), "([a-z]+)", ([A-Z_]+)\)', match.group(1)
-    ):
-        # The colour is a Typo constant; resolve it from the constants above the map.
-        const = re.search(rf'const val {colour} = "(#[0-9A-Fa-f]{{6}})"', text)
-        out[name] = (int(size), weight, const.group(1) if const else "?")
-    return out
-
-
-def kotlin_constants(path: pathlib.Path) -> dict[str, str]:
-    return dict(re.findall(r'const val ([A-Z_]+) = "(#[0-9A-Fa-f]{3,6})"', path.read_text(encoding="utf-8")))
+def compare_size_bands() -> None:
+    thresholds = {
+        "BAND_XS_MAX_HEIGHT_DP": "XS_MAX_HEIGHT_DP",
+        "BAND_S_MAX_HEIGHT_DP": "S_MAX_HEIGHT_DP",
+        "BAND_M_MAX_HEIGHT_DP": "M_MAX_HEIGHT_DP",
+        "SINGLE_COLUMN_MAX_WIDTH_DP": "SINGLE_COLUMN_MAX_WIDTH_DP",
+    }
+    for python_name, kotlin_name in thresholds.items():
+        check(
+            f"widget size threshold {python_name}",
+            getattr(bands, python_name),
+            int_constant(BREAKPOINTS_KT, kotlin_name),
+        )
+    kotlin_budgets = band_budgets(BREAKPOINTS_KT)
+    check("widget body line budgets", bands.BAND_BODY_LINES, kotlin_budgets)
 
 
 def main() -> int:
-    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
-    skill = SKILL_PATH.read_text(encoding="utf-8")
-    schema_doc = SCHEMA_DOC_PATH.read_text(encoding="utf-8")
-
-    sys.path.insert(0, str(PLUGIN))
-    import validate  # noqa: PLC0415 - after sys.path setup, and minimal deps by design
-
-    # --- node types -------------------------------------------------------
-    types_schema = schema_node_types(schema)
-    types_validate = set(validate.NODE_TYPES)
-    types_parser = kotlin_set(PARSER_PATH, "ALLOWED_TYPES")
-    types_skill = skill_node_types(skill)
-
-    for name, other in (
-        ("validate.py NODE_TYPES", types_validate),
-        ("LayoutParser.kt ALLOWED_TYPES", types_parser),
-        ("SKILL.md node list", types_skill),
-    ):
-        if other != types_schema:
-            fail("node-types", f"schema vs {name}: "
-                               f"only-in-schema={sorted(types_schema - other)} "
-                               f"only-in-{name}={sorted(other - types_schema)}")
-
-    # --- action kinds -----------------------------------------------------
-    kinds_schema = set(schema["definitions"]["action"]["properties"]["kind"]["enum"])
-    kinds_validate = set(validate.ACTION_KINDS)
-    kinds_parser = kotlin_set(PARSER_PATH, "ALLOWED_ACTION_KINDS")
-    if kinds_validate != kinds_schema:
-        fail("action-kinds", f"validate.py={sorted(kinds_validate)} schema={sorted(kinds_schema)}")
-    if kinds_parser != kinds_schema:
-        fail("action-kinds", f"LayoutParser.kt={sorted(kinds_parser)} schema={sorted(kinds_schema)}")
-
-    # --- text styles ------------------------------------------------------
-    styles_schema: set[str] = set()
-    for branch in schema["definitions"]["nodeSpecifics"]["oneOf"]:
-        if branch["if"]["properties"]["type"]["const"] == "text":
-            styles_schema = set(branch["then"]["properties"]["style"]["enum"])
-    # Names AND numbers: comparing name -> (size, weight, colour) against every mirror
-    # subsumes a separate name-set check, so this is the only text-style comparison needed.
-    scale_schema = schema["definitions"]["typography"]["properties"]
-    if set(scale_schema) != styles_schema:
-        fail("text-styles",
-             f"schema text.style enum {sorted(styles_schema)} != schema typography {sorted(scale_schema)}")
-    if set(validate._TEXT_STYLES) != styles_schema:
-        fail("text-styles",
-             f"validate.py _TEXT_STYLES={sorted(validate._TEXT_STYLES)} schema={sorted(styles_schema)}")
-    typo_scale = typo_scale_keys(TYPO_PATH)
-    skill_styles = skill_text_styles(skill)
-    for name in sorted(styles_schema):
-        want = scale_schema.get(name)
-        if want is None:
-            fail("typography", f"schema typography has no entry for {name!r}")
-            continue
-        expect = (want["sizeSp"], want["weight"], want["color"])
-        for mirror, got in (("Typo.kt", typo_scale.get(name)),
-                            ("SKILL.md", skill_styles.get(name))):
-            if got != expect:
-                fail("typography", f"{name}: schema {expect} but {mirror} {got}")
-
-    # --- per-type fields vs the documented list ---------------------------
-    fields_schema = schema_type_fields(schema)
-    fields_skill = skill_fields(skill)
-    for node_type in sorted(types_schema):
-        declared = fields_schema.get(node_type, set())
-        documented = fields_skill.get(node_type)
-        if documented is None:
-            fail("node-fields", f"{node_type}: no row in the SKILL.md field table")
-            continue
-        undocumented = declared - documented
-        invented = documented - declared
-        if undocumented:
-            fail("node-fields", f"{node_type}: schema declares {sorted(undocumented)} "
-                                 f"but SKILL.md does not document them")
-        if invented:
-            fail("node-fields", f"{node_type}: SKILL.md documents {sorted(invented)} "
-                                 f"which the schema does not declare")
-    for extra in sorted(set(fields_skill) - types_schema):
-        fail("node-fields", f"SKILL.md documents unknown node type {extra!r}")
-
-    # --- nodeBase fields must at least be documented somewhere ------------
-    for field in sorted(NODE_BASE_FIELDS - {"type"}):
-        if not mentions(skill, field):
-            fail("node-base-fields", f"SKILL.md never mentions the common field `{field}`")
-
-    # --- envelope ---------------------------------------------------------
-    envelope = set(schema["properties"])
-    unknown = envelope - ENVELOPE_METADATA
-    if unknown:
-        fail("envelope", f"schema declares envelope fields with no documented handling: {sorted(unknown)}")
-    for field in ("version", "widgetId", "ttlSeconds", "accentColor"):
-        if not mentions(skill, field):
-            fail("envelope", f"SKILL.md does not mention the envelope field `{field}`")
-
-    # --- palette and spacing constants ------------------------------------
-    typo_src = TYPO_PATH.read_text(encoding="utf-8")
-    palette = schema["definitions"]["palette"]["properties"]
-    consts = kotlin_constants(TYPO_PATH)
-    for name, const in (("primary", "PRIMARY"), ("secondary", "SECONDARY"),
-                        ("success", "SUCCESS"), ("danger", "DANGER"),
-                        ("hairline", "HAIRLINE")):
-        want = palette[name]["const"]
-        if consts.get(const) != want:
-            fail("palette", f"{name}: schema {want} but Typo.kt {const}={consts.get(const)}")
-    renderer = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-                "hermeswidget" / "widget" / "Renderer.kt").read_text(encoding="utf-8")
-    accent = re.search(r'DEFAULT_ACCENT = "(#[0-9A-Fa-f]{6})"', renderer)
-    if not accent or accent.group(1) != palette["accent"]["const"]:
-        fail("palette",
-             f"accent: schema {palette['accent']['const']} but Renderer.kt "
-             f"{accent.group(1) if accent else 'not found'}")
-    for field, const in (("containerSpacing", "CONTAINER_SPACING"),
-                         ("rootPadding", "ROOT_PADDING")):
-        want = schema["definitions"]["spacing"]["properties"][field]["const"]
-        found = re.search(rf"const val {const} = (\d+)", typo_src)
-        if not found or int(found.group(1)) != want:
-            fail("spacing",
-                 f"{field}: schema {want} but Typo.kt LayoutDefaults.{const}="
-                 f"{found.group(1) if found else 'not found'}")
-
-    # --- the widget surface itself (Tasks 3-10) ----------------------------
-    widget = WIDGET_KT.read_text(encoding="utf-8")
-    for retired, why in (
-        ("WIDGET_SCRIM", "the 65%-alpha scrim was replaced by theme tokens (WC-1)"),
-        ("cornerRadius(24.dp)", "the system corner radius is resolved instead (WS-2)"),
-        ("height(200.dp)", "image height is band driven (D15)"),
-        ("compact", "the single compact boolean was replaced by the band ladder (D2)"),
-    ):
-        if retired in widget:
-            fail("widget-surface", f"HermesWidget.kt still has {retired!r}: {why}")
-    if "SizeMode.Responsive" not in widget:
-        fail("widget-surface", "HermesWidget.kt must compose responsively (SizeMode.Responsive)")
-    if "LocalSize" not in widget:
-        fail("widget-surface", "HermesWidget.kt must read LocalSize for per-instance geometry")
-    if "LazyColumn" not in widget:
-        fail("widget-surface", "the publication body must stay scrollable (LazyColumn)")
-    # The status/action footer must be composed outside the LazyColumn: everything the
-    # LazyColumn holds between its braces may not mention the request action.
-    lazy_body = re.search(r"LazyColumn\((.*?)\n        \}", widget, re.S)
-    if lazy_body and "request_update" in lazy_body.group(1):
-        fail("widget-surface",
-             "the request action is inside the scroll region again; the footer must be pinned (WT-4)")
-
-    # --- preview tokens vs the device's color resources -------------------
-    preview_src = PREVIEW_PY.read_text(encoding="utf-8")
-    device_colors = {
-        "day": dict(re.findall(r'<color name="([a-z_]+)">(#[0-9A-Fa-f]{6})</color>',
-                               (RES / "values" / "colors.xml").read_text(encoding="utf-8"))),
-        "night": dict(re.findall(r'<color name="([a-z_]+)">(#[0-9A-Fa-f]{6})</color>',
-                                (RES / "values-night" / "colors.xml").read_text(encoding="utf-8"))),
-    }
-    token_block = re.search(r"WIDGET_SURFACE: dict\[str, dict\[str, str\]\] = \{(.*?)\n\}",
-                            preview_src, re.S)
-    if not token_block:
-        fail("preview-surface", "preview.py has no WIDGET_SURFACE token block")
-    else:
-        for mode, mapping in re.findall(r'"(day|night)": \{(.*?)\}', token_block.group(1), re.S):
-            pairs = re.findall(r'"([a-z_]+)": "(#[0-9A-Fa-f]{6})"', mapping)
-            if not pairs:
-                fail("preview-surface", f"preview.py WIDGET_SURFACE[{mode}] has no colours")
-            for name, value in pairs:
-                token = "widget_" + name
-                want = device_colors[mode].get(token)
-                if want is None:
-                    fail("preview-surface",
-                         f"preview.py {mode} token {token} has no device resource")
-                elif want.lower() != value.lower():
-                    fail("preview-surface",
-                         f"preview.py {mode} {token}={value} but colors.xml says {want}")
-
-    # --- the picker preview mirrors the shipped composition ----------------
-    for name, path in (("day", PREVIEW_LAYOUT), ("night", PREVIEW_LAYOUT_NIGHT)):
-        if not path.is_file():
-            fail("preview-layout", f"missing {path.relative_to(REPO)}")
-    if PREVIEW_LAYOUT.is_file() and PREVIEW_LAYOUT_NIGHT.is_file():
-        day_xml = PREVIEW_LAYOUT.read_text(encoding="utf-8")
-        night_xml = PREVIEW_LAYOUT_NIGHT.read_text(encoding="utf-8")
-        if day_xml != night_xml:
-            # Only colors may differ: the structure has to stay the same shape. Comments
-            # are stripped because each file explains itself in its own words.
-            def shape(xml: str) -> str:
-                return re.sub(r'@color/[a-z_]+', "@color/x", re.sub(r"<!--.*?-->", "", xml, flags=re.S))
-            if shape(day_xml) != shape(night_xml):
-                fail("preview-layout",
-                     "layout-night/widget_preview.xml is not structurally identical to the day one")
-        strings = {
-            m.group(1): m.group(2)
-            for m in re.finditer(r'<string name="([a-z_]+)">(.*?)</string>',
-                                 STRINGS_XML.read_text(encoding="utf-8"))
-        }
-        for key in ("widget_header_title", "widget_request_update"):
-            want = strings.get(key)
-            if want is None:
-                fail("preview-layout", f"strings.xml has no {key}")
-            elif f'android:text="{want}"' not in day_xml:
-                fail("preview-layout",
-                     f"the picker preview does not show {key} ({want!r}); it must mirror the widget")
-        for needed in ("ic_hermes_mark", "widget_status_dot", "widget_action_background",
-                       "widget_preview_background"):
-            if needed not in day_xml:
-                fail("preview-layout", f"the picker preview does not use {needed}")
-        radius_drawable = (RES / "drawable" / "widget_preview_background.xml").read_text(encoding="utf-8")
-        if "@dimen/widget_corner_radius" not in radius_drawable:
-            fail("preview-layout",
-                 "the preview background must round with @dimen/widget_corner_radius (WS-2)")
-        if re.search(r'android:radius="[0-9]+dp"', radius_drawable):
-            fail("preview-layout", "the preview background hard-codes a radius literal (WS-2)")
-
-    # --- loading state mirrors the shipped hierarchy -----------------------
-    info = WIDGET_INFO.read_text(encoding="utf-8")
-    if 'android:initialLayout="@layout/widget_loading"' not in info:
-        fail("loading-state", "initialLayout must be the shipped-shape wireframe (WS-3)")
-    elif LOADING_LAYOUT.is_file():
-        loading = LOADING_LAYOUT.read_text(encoding="utf-8")
-        for needed in ("widget_loading_bar", "widget_loading_button"):
-            if needed not in loading:
-                fail("loading-state", f"widget_loading.xml has no {needed} placeholder")
-    else:
-        fail("loading-state", "res/layout/widget_loading.xml is missing")
-    if "@layout/widget_preview" not in info:
-        fail("loading-state", "previewLayout must stay @layout/widget_preview (WD-1)")
-
-    # --- the companion surfaces must not regress to literals ----------------
-    app_res = REPO / "android" / "app" / "src" / "main" / "res"
-    screens = [
-        "layout/activity_main.xml",
-        "layout/activity_pairing.xml",
-        "layout/activity_settings.xml",
-        "layout/activity_diagnostics.xml",
-    ]
-    for screen in screens:
-        path = app_res / screen
-        if not path.is_file():
-            fail("app-surface", f"{screen} is missing")
-            continue
-        text = path.read_text(encoding="utf-8")
-        for literal in sorted(set(re.findall(r"#[0-9A-Fa-f]{6,8}\b", text))):
-            fail("app-surface",
-                 f"{screen} hard-codes {literal}; a light-only literal is what made the "
-                 "pairing screen unreadable in dark mode (docs/APP_SURFACE.md)")
-    for mode in ("values", "values-night"):
-        colors_file = app_res / mode / "app_colors.xml"
-        if not colors_file.is_file():
-            fail("app-surface", f"{mode}/app_colors.xml is missing")
-            continue
-        tokens = set(re.findall(r'<color name="(app_[a-z_]+)"', colors_file.read_text(encoding="utf-8")))
-        for required in ("app_surface", "app_surface_container", "app_surface_container_high",
-                         "app_on_surface", "app_on_surface_variant", "app_primary", "app_on_primary"):
-            if required not in tokens:
-                fail("app-surface", f"{mode}/app_colors.xml has no {required}")
-    body = source_of(REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-                     "hermeswidget" / "PublicationActivity.kt")
-    for literal in sorted(set(re.findall(r"Color\.(?:WHITE|BLACK)|Color\.rgb\(", body))):
-        fail("app-surface",
-             f"PublicationActivity.kt paints {literal}; the zoom view follows the device "
-             "theme now, so white text would be invisible in light mode")
-    if not (REPO / "docs" / "APP_SURFACE.md").is_file():
-        fail("app-surface", "docs/APP_SURFACE.md must record what was adopted and what was not")
-    # A button with no state layer gives no press feedback, and a tap then reads as a dead
-    # control. That is the whole of "the buttons do nothing".
-    for name in ("bg_button_filled", "bg_button_tonal", "bg_button_outlined"):
-        drawable = app_res / "drawable" / f"{name}.xml"
-        if not drawable.is_file():
-            fail("app-surface", f"{name}.xml is missing")
-            continue
-        if "<ripple" not in drawable.read_text(encoding="utf-8"):
-            fail("app-surface",
-                 f"{name}.xml has no <ripple>; a button with no press state gives no "
-                 "feedback and reads as broken")
-    for mode in ("values", "values-night"):
-        if "app_state_layer" not in (app_res / mode / "app_colors.xml").read_text(encoding="utf-8"):
-            fail("app-surface", f"{mode}/app_colors.xml has no app_state_layer")
-    # An action that can fail silently must not be able to.
-    pinning = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-               "hermeswidget" / "WidgetPinning.kt").read_text(encoding="utf-8")
-    diagnostics = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-                   "hermeswidget" / "DiagnosticsActivity.kt").read_text(encoding="utf-8")
-    if "offerNow" not in diagnostics or "offerNow" not in pinning:
-        fail("app-action-feedback",
-             "the Add widget button must call the manual offer path, which always reports")
-    diagnostics_code = source_of(REPO / "android" / "app" / "src" / "main" / "java" / "com" /
-                              "you" / "hermeswidget" / "DiagnosticsActivity.kt")
-    if "ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" in diagnostics_code:
-        fail("app-action-feedback",
-             "ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS opens nothing on modern Android; "
-             "use the settings list and say so")
-    settings = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-                "hermeswidget" / "SettingsActivity.kt").read_text(encoding="utf-8")
-    for needed in ("STATUS_POLL_MS = 2_000L", "onPause", "PairingStatus.read"):
-        if needed not in settings:
-            fail("app-action-feedback", f"SettingsActivity is missing {needed!r}")
-
-    # --- the palette must be the Material 3 baseline, not a lookalike -------------
-    # Values are the M3 baseline system tokens (m3.material.io/styles/color/static/
-    # baseline). A lookalike palette passes every contrast test and still is not the system
-    # the guidance points at, so the values themselves are pinned.
-    m3_baseline = {
-        "values/app_colors.xml": {
-            "app_surface": "#FEF7FF", "app_surface_container_lowest": "#FFFFFF",
-            "app_surface_container_low": "#F7F2FA", "app_surface_container": "#F3EDF7",
-            "app_surface_container_high": "#ECE6F0", "app_surface_container_highest": "#E6E0E9",
-            "app_on_surface": "#1D1B20", "app_on_surface_variant": "#49454F",
-            "app_primary": "#6750A4", "app_on_primary": "#FFFFFF",
-            "app_primary_container": "#EADDFF", "app_on_primary_container": "#4F378B",
-            "app_outline": "#79747E", "app_outline_variant": "#CAC4D0", "app_error": "#B3261E",
-        },
-        "values-night/app_colors.xml": {
-            "app_surface": "#141218", "app_surface_container_lowest": "#0F0D13",
-            "app_surface_container_low": "#1D1B20", "app_surface_container": "#211F26",
-            "app_surface_container_high": "#2B2930", "app_surface_container_highest": "#36343B",
-            "app_on_surface": "#E6E0E9", "app_on_surface_variant": "#CAC4D0",
-            "app_primary": "#D0BCFF", "app_on_primary": "#381E72",
-            "app_primary_container": "#4F378B", "app_on_primary_container": "#EADDFF",
-            "app_outline": "#938F99", "app_outline_variant": "#49454F", "app_error": "#F2B8B5",
-        },
-    }
-    for relative, expected in m3_baseline.items():
-        palette_path = app_res / relative
-        if not palette_path.is_file():
-            fail("m3-palette", f"{relative} is missing")
-            continue
-        found = {
-            match.group(1): match.group(2).upper()
-            for match in re.finditer(
-                r'<color name="([a-z_]+)">(#[0-9A-Fa-f]{6})</color>',
-                palette_path.read_text(encoding="utf-8"),
-            )
-        }
-        for token, value in expected.items():
-            if found.get(token) != value.upper():
-                fail("m3-palette",
-                     f"{relative}: {token} is {found.get(token)}, the Material 3 baseline value "
-                     f"is {value} (m3.material.io/styles/color/static/baseline)")
-    # Material You: on Android 12+ the scheme is derived, not the static baseline.
-    for relative in ("values-v31/app_colors.xml", "values-night-v31/app_colors.xml"):
-        dynamic_path = app_res / relative
-        if not dynamic_path.is_file():
-            fail("m3-palette",
-                 f"{relative} is missing: dynamic colour is the key part of Material You")
-            continue
-        if "@android:color/system_" not in dynamic_path.read_text(encoding="utf-8"):
-            fail("m3-palette", f"{relative} has no platform tonal aliases")
-    # Shape: the M3 corner radius scale, by name.
-    app_dimens = (app_res / "values" / "app_dimens.xml").read_text(encoding="utf-8")
-    for step, dp in (("xs", 4), ("sm", 8), ("md", 12), ("lg", 16), ("xl", 28)):
-        if f'name="shape_{step}">{dp}dp' not in app_dimens:
-            fail("m3-shape", f"the corner radius scale needs shape_{step} = {dp}dp")
-    # A state layer is the control's own ink at the M3 opacities, not one shared grey.
-    for token in ("app_state_layer_filled", "app_state_layer_tonal", "app_state_layer_outlined"):
-        for relative in ("values/app_colors.xml", "values-night/app_colors.xml"):
-            if token not in (app_res / relative).read_text(encoding="utf-8"):
-                fail("m3-state", f"{token} is missing from {relative}")
-    # Type roles carry the M3 line height on a mechanism minSdk 26 supports.
-    # Comment-stripped: a comment explaining why android:lineHeight is avoided must not
-    # read as using it.
-    themes_src = source_of(app_res / "values" / "themes.xml")
-    if "android:lineHeight" in themes_src:
-        fail("m3-type", "android:lineHeight is API 28+ and minSdk is 26; use lineSpacingExtra")
-    for style in ("TextTitle", "TextBody", "TextBodySmall", "TextLabel"):
-        match = re.search(rf'<style name="{style}".*?</style>', themes_src, re.S)
-        if not match or "lineSpacingExtra" not in match.group(0):
-            fail("m3-type", f"{style} carries no M3 line height")
-        elif "letterSpacing" not in match.group(0):
-            fail("m3-type", f"{style} carries no M3 tracking")
-
-    # --- the widget action must be reachable and observable ------------------
-    widget_kt = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-                 "hermeswidget" / "widget" / "HermesWidget.kt").read_text(encoding="utf-8")
-    breakpoints = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-                   "hermeswidget" / "widget" / "Breakpoints.kt").read_text(encoding="utf-8")
-    # Only the LazyColumn matters: a width weight inside the footer Row is fine, so the
-    # check is scoped to the scroll region's own modifier block, comments excluded.
-    widget_code = source_of(REPO / "android" / "app" / "src" / "main" / "java" / "com" /
-                           "you" / "hermeswidget" / "widget" / "HermesWidget.kt")
-    lazy = re.search(r"LazyColumn\((.*?)\n        \)", widget_code, re.S)
-    if lazy and "defaultWeight()" in lazy.group(1):
-        fail("widget-action",
-             "the scroll region must use an explicit height, not defaultWeight(): a "
-             "weight-constrained lazy list can be measured past the cell, which clips the "
-             "pinned action off the bottom (round 6)")
-    if "spec.scrollHeightDp" not in widget_kt:
-        fail("widget-action", "the LazyColumn must be bounded by BandSpec.scrollHeightDp")
-    if "scrollHeightDp" not in breakpoints or "chromeHeightDp" not in breakpoints:
-        fail("widget-action", "Breakpoints.kt must own the chrome/scroll arithmetic")
-    if "setLastComposition" not in widget_kt:
-        fail("widget-action",
-             "the composition must record whether it drew an action, or 'no button' and "
-             "'the tap went elsewhere' stay indistinguishable")
-    if "getActionReached" not in diagnostics or "renderComposition" not in diagnostics:
-        fail("widget-action",
-             "DiagnosticsActivity must render the action trail; a press that produces no "
-             "record must never again be unanswerable")
-    # Deliberately no requirement on the receiver: it never sees an action broadcast. The
-    # count is required in the callback instead, further down.
-
-    _SERVER_SRC = (PLUGIN / "server.py").read_text(encoding="utf-8")
-    _STORE_SRC = (PLUGIN / "store.py").read_text(encoding="utf-8")
-
-    # --- the geometry a composition is laid out for (round 8, P0) --------------
-    size_gate = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-                 "hermeswidget" / "widget" / "WidgetTheme.kt").read_text(encoding="utf-8")
-    if "INSTANCE_INVENTORY" not in size_gate or "RESPONSIVE_SAMPLE" not in size_gate:
-        fail("widget-geometry",
-             "SizeGate must prefer the instance's reported geometry over the responsive "
-             "sample: LocalSize is the sample Glance composed for, not the cell (round 8)")
-    widget_code_for_geometry = source_of(REPO / "android" / "app" / "src" / "main" / "java" /
-                                        "com" / "you" / "hermeswidget" / "widget" / "HermesWidget.kt")
-    if "specForInstance(context, appWidgetId" not in widget_code_for_geometry:
-        fail("widget-geometry",
-             "provideGlance must resolve the geometry through SizeGate.specForInstance")
-    if "idOf(id)" not in widget_kt:
-        fail("widget-geometry",
-             "provideGlance must resolve the instance id, or it cannot ask the launcher "
-             "how big this cell is")
-    for token in ("instanceDp", "composedHeightDp", "cellHeightDp"):
-        if token not in size_gate and token not in widget_kt:
-            fail("widget-geometry", f"the geometry trail is missing {token}")
-
-    # --- attention reports must survive the route (round 8, P1) ---------------
-    if "_ATTENTION_ROUTING_FIELDS" not in _SERVER_SRC:
-        fail("attention-route",
-             "the attention route must filter routing fields before calling the store; "
-             "passing the whole body rejected every report with a 400")
-    attention_tests = (PLUGIN / "tests" / "test_delivery.py").read_text(encoding="utf-8")
-    if "AttentionRouteRoundTrip" not in attention_tests:
-        fail("attention-route",
-             "no test sends a realistic attention body through the route; the store-level "
-             "tests cannot catch a route that rejects its own payload")
-
-    # --- CI must be able to run at all (round 8, P1) -------------------------
-    workflow = REPO / ".github" / "workflows" / "ci.yml"
-    if not workflow.is_file():
-        fail("ci-workflow", ".github/workflows/ci.yml is missing")
-    else:
-        if not (REPO / "scripts" / "check-workflow-yaml.py").is_file():
-            fail("ci-workflow", "scripts/check-workflow-yaml.py is missing")
-        for number, line in enumerate(workflow.read_text(encoding="utf-8").splitlines(), 1):
-            match = re.match(r"^\s*-\s+[A-Za-z_][\w-]*:\s*(.+)$", line)
-            if not match:
-                continue
-            value = match.group(1)
-            if value[:1] in "\"'" or value.rstrip().endswith(("|", ">", "-")):
-                continue
-            if ": " in value:
-                fail("ci-workflow",
-                     f"ci.yml:{number}: unquoted ': ' in {line.strip()!r} makes the value a "
-                     "mapping; the whole workflow stops parsing and GitHub schedules nothing")
-
-    # --- one press may mean exactly one thing (round 11) ------------------------
-    if "HEADER_WITH_ACTION_DP" not in source_of(
-        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
-        / "widget" / "Breakpoints.kt"
-    ):
-        fail("widget-action",
-             "the chrome arithmetic must know the header carries the action (round 11)")
-    # Two click targets, never nested. The widget root must not be a click target, and the
-    # action must be composed in the header, which a scroll region cannot push out of the
-    # cell. A press on the action reaching the surface instead is what the host saw as a
-    # lone `review` event with no `request_update` (round 11).
-    #
-    # Both checks fail when they cannot find the region they are about, rather than
-    # skipping: a gate that quietly stops looking is the disease this file keeps meeting.
-    surface_start = widget_code.find("private fun PublicationSurface(")
-    header_start = widget_code.find("private fun HeaderRow(")
-    footer_start = widget_code.find("private fun FooterRow(")
-    if surface_start < 0 or header_start < 0 or footer_start < 0:
-        fail("widget-action",
-             f"could not find PublicationSurface/HeaderRow/FooterRow in HermesWidget.kt "
-             f"(offsets {surface_start}/{header_start}/{footer_start}); this check is "
-             f"stale and must be updated rather than skipped")
-    else:
-        # Only the root Column's own modifier chain, not the whole function span: the
-        # hero legitimately carries the drill-down and is defined inside that span.
-        root_at = widget_code.find("Column(", surface_start, header_start)
-        root_end = widget_code.find(") {", root_at) if root_at >= 0 else -1
-        if root_at < 0 or root_end < 0:
-            fail("widget-action",
-                 "could not find the root Column of PublicationSurface; this check is stale "
-                 "and must be updated rather than skipped")
-        surface_head = widget_code[root_at:root_end] if root_at >= 0 and root_end > root_at else ""
-        if "clickable(" in surface_head:
-            fail("widget-action",
-                 "the widget root must not be a click target while the action lives inside "
-                 "it: a press on the action then reaches the surface and silently opens the "
-                 "app (round 11)")
-        # Round 12: the action is composed as the last child of the root Box, after the
-        # column that holds the LazyColumn, so a RemoteViews collection view cannot cover
-        # it no matter how it measures. Inside the column (round 11) or below the scroll
-        # region (round 8) are both shapes that have lost the button on a real device.
-        # Where the content column starts and ends, in the *raw* file: comment stripping
-        # removes multi-line KDoc blocks, so raw and stripped offsets are not comparable.
-        # The content of the region is then read line by line, ignoring comment lines, so a
-        # comment that merely names the action cannot fail this check.
-        raw_lines = widget_kt.splitlines()
-        surface_line = next(
-            (i for i, l in enumerate(raw_lines) if "private fun PublicationSurface(" in l), -1
-        )
-        column_line = next(
-            (i for i, l in enumerate(raw_lines) if "Column(" in l and i > surface_line), -1
-        )
-        marker_line = next(
-            (i for i, l in enumerate(raw_lines) if "} // end content column" in l), -1
-        )
-        action_line = next(
-            (i for i, l in enumerate(raw_lines) if "RequestActionRow(dark)" in l), -1
-        )
-        if surface_line < 0 or column_line < 0 or action_line < 0:
-            fail("widget-action",
-                 f"expected a content Column and an action row inside PublicationSurface "
-                 f"(surface {surface_line}, column {column_line}, action {action_line}); "
-                 f"this check is stale and must be updated, not skipped")
-        elif action_line < column_line:
-            fail("widget-action",
-                 "the request action must be declared after the content column, so it is the "
-                 "topmost view and the first to receive a press (round 12)")
-        elif marker_line < 0:
-            fail("widget-action",
-                 "the content column lost its `// end content column` marker, so this check "
-                 "can no longer tell what is inside the column; update the check rather than "
-                 "letting it fall back to a weaker region")
-        else:
-            # The row that overlays the action must not itself be clickable: it is a
-            # sibling, not a nested target, and a clickable one would cover the hero.
-            row_line = next(
-                (i for i, l in enumerate(raw_lines) if "private fun RequestActionRow(" in l), -1
-            )
-            row_end = next(
-                (i for i, l in enumerate(raw_lines)
-                 if i > row_line and l.startswith("private fun ")), len(raw_lines)
-            )
-            if row_line < 0:
-                fail("widget-action", "RequestActionRow is missing; update this check")
-            else:
-                # Only the Row's own modifier chain: from `Row(` up to the first child,
-                # so the button's own clickable further down is not counted.
-                row_text = "\n".join(raw_lines[row_line:row_end])
-                row_at = row_text.find("Row(")
-                first_child = min(
-                    (i for i in (row_text.find("Spacer("), row_text.find("Text("))
-                     if i >= 0),
-                    default=len(row_text),
-                )
-                head = row_text[row_at:first_child] if row_at >= 0 else ""
-                if "clickable(" in head:
-                    fail("widget-action",
-                         "the row that overlays the action must not itself be clickable: it "
-                         "would be a third nested target and would cover the hero (round 12)")
-            for line in raw_lines[column_line:marker_line]:
-                at = line.find("requestUpdateAction()")
-                if at < 0:
-                    continue
-                before = line[:at]
-                if "//" in before or before.strip().startswith("*"):
-                    continue  # a comment that names the action
-                fail("widget-action",
-                     "the request action must not be composed inside the column that holds "
-                     "the LazyColumn: a RemoteViews collection view can measure past the "
-                     "height it is given and cover whatever sits below it (round 12)")
-        header_block = widget_code[header_start:footer_start]
-        if "showsRequestAction" not in header_block or "48.dp" not in header_block:
-            fail("widget-action",
-                 "the header must reserve the strip the action overlays, or the hero sits "
-                 "underneath it (round 12)")
-
-    # --- the two request_update senders must be distinguishable (round 13) ------
-    # Not merely the word: the field has to be copied from the envelope into the stored
-    # payload, or it never reaches the database and the two paths stay indistinguishable.
-    if not re.search(r'"instanceId",\s*"source"\)\s*:', _SERVER_SRC) and \
-            not re.search(r'"source",\s*"instanceId"\)\s*:', _SERVER_SRC):
-        fail("request-update-source",
-             "the event route must copy `source` from the envelope into the stored payload, "
-             "or a widget-pill press and an in-app press are indistinguishable afterwards "
-             "(round 13)")
-    if "EVENT_SOURCES" not in _SERVER_SRC:
-        fail("request-update-source",
-             "`source` must be a closed vocabulary; it is metadata, not a place for content")
-    identity = source_of(
-        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
-        / "net" / "RequestUpdateEvent.kt"
-    )
-    for token in ("SOURCE_WIDGET_ACTION", "SOURCE_IN_APP_BUTTON", "fun widgetBody", "fun inAppBody"):
-        if token not in identity:
-            fail("request-update-source", f"RequestUpdateEvent is missing {token}")
-    for sender, token in (
-        ("ActionCallbacks.kt", "SOURCE_WIDGET_ACTION"),
-        ("PublicationActivity.kt", "inAppBody"),
-    ):
-        text = source_of(
-            REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
-            / "widget" / sender if sender.endswith("Callbacks.kt")
-            else REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you"
-            / "hermeswidget" / sender
-        )
-        if token not in text:
-            fail("request-update-source",
-                 f"{sender} must send its own source ({token}); the two paths were "
-                 f"indistinguishable and the 14:07 event proved nothing about the pill")
-
-    # --- the client-side action trail must survive a Glance rename (round 11) ----
-    receiver_src = source_of(
-        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
-        / "widget" / "HermesWidgetReceiver.kt"
-    )
-    callbacks_src = source_of(
-        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
-        / "widget" / "ActionCallbacks.kt"
-    )
-    # Round 13: the counter lived in the widget receiver, which never sees a Glance action
-    # broadcast — Glance routes it to its own merged ActionCallbackBroadcastReceiver — so it
-    # could never increment and its zero was read as evidence. It must be counted in the
-    # callback, and it must stay out of the receiver.
-    if "recordActionFired" in receiver_src or "ActionCallbackBroadcastReceiver:" in receiver_src:
-        fail("widget-action",
-             "HermesWidgetReceiver must not count widget actions: Glance delivers them to "
-             "its own merged ActionCallbackBroadcastReceiver, so a counter there can never "
-             "move and its zero is not evidence of anything (round 13)")
-    if "recordActionReached" not in callbacks_src:
-        fail("widget-action",
-             "the action counter must be recorded in ActionCallbacks.EventAction, the only "
-             "place that observes the dispatch from inside this app (round 13)")
-    # Both the call and the catch that would trigger it: either alone is decorative.
-    if "recordCallbackException" not in callbacks_src or "catch (error: Throwable)" not in callbacks_src:
-        fail("widget-action",
-             "a callback that throws must be caught and recorded; a handler that dies "
-             "silently is indistinguishable from a press that never arrived (round 13)")
-    if "getActionFires" in source_of(
-        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
-        / "DiagnosticsActivity.kt"
-    ):
-        fail("widget-action",
-             "Diagnostics must read the counter that can move (getActionReached), not the "
-             "one that could not (getActionFires)")
-    config_kt = source_of(
-        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
-        / "net" / "Config.kt"
-    )
-    for needed in ("fun recordComposition", "fun compositionHistory",
-                   "COMPOSITION_HISTORY_LIMIT"):
-        if needed not in config_kt:
-            fail("widget-action",
-                 f"Config.{needed} is missing: the client trail must record every "
-                 "composition, not only the last, or two presses cannot be compared")
-    diagnostics_kt = source_of(
-        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
-        / "DiagnosticsActivity.kt"
-    )
-    if "widgetTrailReport" not in diagnostics_kt or "copy_widget_trail" not in source_of(
-        REPO / "android" / "app" / "src" / "main" / "res" / "layout" / "activity_diagnostics.xml"
-    ):
-        fail("widget-action",
-             "Diagnostics must offer the whole trail in one paste; asking for a screenshot "
-             "of a phone is how two rounds were lost to transcription (round 11)")
-
-    # --- the access log must actually emit (round 8, P2) -----------------------
-    if "def configure_access_log" not in _SERVER_SRC:
-        fail("access-log",
-             "the server logger has no handler or level, so the access log is dropped at "
-             "the default WARNING threshold")
-    if "configure_access_log()" not in _SERVER_SRC:
-        fail("access-log", "make_server must configure the access log")
-    # The round-9 defect: guarding on the *root* logger's handlers. That is true in a bare
-    # test process and false wherever the host has configured logging, which is the only
-    # place the log matters — so the line was green in tests and dead in production.
-    if "not logging.getLogger().handlers" in source_of(PLUGIN / "server.py"):
-        fail("access-log",
-             "the access log must not depend on whether the *root* logger has handlers: "
-             "the host configures logging, so that guard disabled the line in production "
-             "while every test passed (round 9)")
-    if "propagate = False" not in _SERVER_SRC:
-        fail("access-log",
-             "our own handler must stop propagation, or a verbose host prints every line twice")
-    if "HERMES_WIDGET_LOG" not in _SERVER_SRC:
-        fail("access-log", "an access log on a busy server needs a documented opt-out")
-
-    # --- tap observability: the trail exists on both sides and is documented ---
-    for token, blob, name in (
-        ("record_rejected_event", _SERVER_SRC, "server.py"),
-        ("rejection_summary", _STORE_SRC, "store.py"),
-        ('"rejections"', _STORE_SRC, "store.py"),
-        ("instanceId", _SERVER_SRC, "server.py"),
-    ):
-        if token not in blob:
-            fail("tap-observability", f"{name} has no {token}")
-    for doc_name, doc_text in (("docs/SCHEMA.md", schema_doc),):
-        if "event_rejections" not in doc_text:
-            fail("tap-observability", f"{doc_name} does not document event_rejections")
-    api_kt = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-              "hermeswidget" / "PublicationActivity.kt").read_text(encoding="utf-8")
-    if "Outcome" not in api_kt or "recordActionOutcome" not in api_kt:
-        fail("tap-observability",
-             "the in-app tap must report a real outcome instead of one generic toast")
-    callbacks_path = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-                      "hermeswidget" / "widget" / "ActionCallbacks.kt")
-    callbacks = callbacks_path.read_text(encoding="utf-8")
-    if "instanceId" not in callbacks or "recordActionOutcome" not in callbacks:
-        fail("tap-observability",
-             "the widget's own action must send instanceId and record the outcome")
-    # The credential exits are the ones that matter: a missing URL or token used to
-    # `?: return` silently, which is exactly the round-5 failure mode.
-    credential_exits = re.findall(
-        r"SecureStore\.(?:baseUrl|token)\(context\) \?: Config\.getBackendUrl\(context\) \?: return",
-        callbacks,
-    )
-    if credential_exits:
-        fail("tap-observability", "the tap path still returns silently on a missing credential")
-    for script, token in (("check-version-bump.py", "versionCode"),
-                          ("release-evidence.py", "release-evidence")):
-        if not (REPO / "scripts" / script).is_file():
-            fail("release-gate", f"scripts/{script} is missing")
-    if not (REPO / "docs" / "APK_RELEASE.md").is_file() or "Release evidence" not in (
-        REPO / "docs" / "APK_RELEASE.md"
-    ).read_text(encoding="utf-8"):
-        fail("release-gate", "docs/APK_RELEASE.md has no generated release-evidence table")
-
-    # --- client build reporting: docs, headers and the store agree ---------
-    api = (REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" /
-           "hermeswidget" / "net" / "HermesApi.kt").read_text(encoding="utf-8")
-    store_src = (PLUGIN / "store.py").read_text(encoding="utf-8")
-    server_src = (PLUGIN / "server.py").read_text(encoding="utf-8")
-    for header in ("X-Hermes-App-Version", "X-Hermes-App-Build", "X-Hermes-Os-Sdk",
-                   "X-Hermes-App-Sha"):
-        for name, blob in (("HermesApi.kt", api), ("server.py", server_src),
-                           ("docs/SCHEMA.md", schema_doc)):
-            if header not in blob:
-                fail("client-build", f"{name} never mentions {header}")
-    for token in ("device_client_info", "publication_render_builds",
-                  "record_device_client", "record_render_build"):
-        if token not in store_src:
-            fail("client-build", f"store.py has no {token}")
-    if "renderedBy" not in store_src:
-        fail("client-build", "publication_status must name the build that rendered a revision")
-    if "ClientBuildReporting" not in (PLUGIN / "tests" / "test_delivery.py").read_text(encoding="utf-8"):
-        fail("client-build", "no host test covers client build reporting")
-
-    # --- "asked" and "received" are different facts (round 15) ------------------
-    # Field evidence: the widget said the publication had expired while this app
-    # reported "Last fetch 26s ago". Both were true — the server had answered 304 to a
-    # poll, and nothing new had arrived in hours. A 304 is an *ask*, not a fetch.
-    worker_kt = source_of(
-        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
-        / "work" / "RefreshWorker.kt"
-    )
-    fetch_recorded = re.search(
-        r'if \(result\.outcome == RefreshOutcome\.UPDATED\) \{\s*'
-        r'Config\.setDiagnosticTime\(applicationContext, "fetch"\)',
-        worker_kt,
-    )
-    if not fetch_recorded:
-        fail("fetch-vs-check",
-             "a fetch may only be recorded for RefreshOutcome.UPDATED; NOT_MODIFIED is the "
-             "server saying 'unchanged' and must be recorded as a check instead")
-    check_recorded = re.search(
-        r'RefreshOutcome\.UPDATED \|\|\s*\n\s*result\.outcome == RefreshOutcome\.NOT_MODIFIED'
-        r'[\s\S]{0,120}?"checked"',
-        worker_kt,
-    )
-    if not check_recorded:
-        fail("fetch-vs-check",
-             "a 304 must still be recorded, as a check: the phone asked and the server "
-             "answered")
-    config_kt = source_of(
-        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
-        / "net" / "Config.kt"
-    )
-    if "last_checked_at" not in config_kt or "last_publication_check" not in config_kt:
-        fail("fetch-vs-check",
-             "the connection check and the publication check are different timestamps and "
-             "need different keys; merging them is how the two screens contradicted")
-    widget_src = source_of(
-        REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "hermeswidget"
-        / "widget" / "HermesWidget.kt"
-    )
-    if "Open the app to refresh the connection" in widget_src:
-        fail("fetch-vs-check",
-             "the expired state must not tell the user to refresh from the app: the app "
-             "cannot publish, the host can, and the old wording sent them nowhere")
-
-    # --- the radius fallback lives in resources, not in Kotlin -------------
-    if not DIMENS_XML.is_file() or "widget_corner_radius" not in DIMENS_XML.read_text(encoding="utf-8"):
-        fail("corner-radius", "values/dimens.xml must hold the widget_corner_radius fallback (WS-2)")
-
-    # --- docs/SCHEMA.md must not promise removed things -------------------
-    # Naming a removed field is fine as long as the line says it is gone; what this
-    # forbids is a doc that reads as if the field exists.
-    for dead in ("visibleIf",):
-        for line in (line for line in schema_doc.splitlines() if dead in line):
-            if not re.search(r"removed|never|not implemented|no longer|gone", line, re.I):
-                fail("schema-doc",
-                     f"docs/SCHEMA.md mentions `{dead}` without saying it is gone: {line.strip()!r}")
-
+    compare_limits()
+    compare_action_and_media_contracts()
+    compare_event_sources()
+    compare_size_bands()
+    check("widget refresh interval seconds", publication.POLL_INTERVAL_SECONDS, refresh_interval_seconds(WORKER_KT))
     if failures:
-        print(f"contract parity FAILED ({len(failures)} check(s)):\n")
-        for line in failures:
-            print(f"  {line}")
-        print("\nOne registry (layout.schema.json); update the mirrors it names.")
+        for failure in failures:
+            print(f"FAIL {failure}", file=sys.stderr)
         return 1
-
-    print(
-        "contract parity OK: "
-        f"{len(types_schema)} node types, {len(kinds_schema)} action kinds, "
-        f"{len(styles_schema)} text styles, "
-        f"{sum(len(v) for v in fields_schema.values())} per-type fields, "
-        f"{len(envelope)} envelope fields, "
-        "widget surface (bands, pinned footer, theme tokens, preview, loading state)"
-    )
+    print("Contract parity: publication limits, actions, media, event sources, size bands, refresh interval PASS")
     return 0
 
 

@@ -3,7 +3,7 @@
 These cover the public-deployment bugs directly: an omitted flag must never
 overwrite a saved binding, a malformed saved config must fail loudly, a binding
 change must report a pending restart instead of claiming the new bind is live,
-and `setup`/`up`/`pair` must never invent a phone URL.
+and `up`/`pair` must never invent a phone URL.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ import io
 import json
 import os
 import socket
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -153,6 +154,137 @@ class BindingConfig(unittest.TestCase):
         saved = self.read_saved()
         self.assertEqual((saved["host"], saved["port"]), ("127.0.0.1", 8788))
 
+    def test_watch_tool_dispatches_supported_operations(self):
+        for operation, handler_name in (
+            ("create", "_watch_create"),
+            ("list", "_watch_list"),
+            ("pause", "_watch_pause"),
+            ("tick", "_watch_tick"),
+        ):
+            with self.subTest(operation=operation), patch.object(
+                self.tools, handler_name, return_value="handled"
+            ) as handler:
+                self.assertEqual(self.tools.widget_watch({"operation": operation}), "handled")
+                handler.assert_called_once_with({"operation": operation})
+
+    def test_watch_tool_rejects_unknown_operation(self):
+        result = json.loads(self.tools.widget_watch({"operation": "delete"}))
+        self.assertEqual(result["error"], "invalid_watch_operation")
+
+    def test_agent_cannot_assert_device_confirmation(self):
+        result = json.loads(self.tools.widget_resolve_intent({
+            "intent_id": "intent-example", "outcome": "applied", "confirmed": True,
+        }))
+        self.assertEqual(result["error"], "device_confirmation_required")
+
+    def test_upgrade_uses_hermes_plugin_manager_after_backup(self):
+        buffer = io.StringIO()
+        with (
+            patch.object(self.cli.shutil, "which", return_value="hermes"),
+            patch.object(self.cli.store, "backup_db", return_value=Path("widget.db.bak.test")),
+            patch.object(self.cli.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run,
+            patch.object(self.cli.store, "list_widgets", return_value=["hermes-brief"]),
+            redirect_stdout(buffer),
+        ):
+            rc = self.cli._upgrade(SimpleNamespace())
+        self.assertEqual(rc, 0)
+        run.assert_called_once_with(
+            ["hermes", "plugins", "update", "hermes-widget"], check=False, timeout=600,
+        )
+        payload = json.loads(buffer.getvalue())
+        self.assertTrue(payload["plugin_updated"])
+        self.assertTrue(payload["restart_required"])
+        self.assertEqual(payload["backup"], "widget.db.bak.test")
+
+    def test_uninstall_requires_confirmation_before_deleting_data(self):
+        buffer = io.StringIO()
+        with patch.object(self.cli.sys, "stdin", io.StringIO("")), redirect_stdout(buffer):
+            rc = self.cli._uninstall(SimpleNamespace(keep_data=False, yes=False))
+        self.assertEqual(rc, 1)
+        self.assertIn("rerun with --yes", buffer.getvalue())
+
+    def test_uninstall_stops_integrations_and_removes_only_widget_data(self):
+        data = Path(self.temp.name) / "widget-data"
+        assets = data / "assets"
+        assets.mkdir(parents=True)
+        for name in ("widget.db", "widget.db-wal", "agent_token", "widget.db.bak.test"):
+            (data / name).write_text("test", encoding="utf-8")
+        (assets / ("asset_" + "a" * 24)).write_bytes(b"asset")
+        (assets / "user-note.txt").write_text("keep", encoding="utf-8")
+        config = self.home / "widget" / "server.json"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text("{}", encoding="utf-8")
+        service = self.home / ".config" / "systemd" / "user" / "hermes-widget.service"
+        service.parent.mkdir(parents=True, exist_ok=True)
+        service.write_text("unit", encoding="utf-8")
+        output = io.StringIO()
+        with (
+            patch.object(self.cli.Path, "home", return_value=self.home),
+            patch.object(self.cli.shutil, "which", return_value="systemctl"),
+            patch.object(self.cli.subprocess, "run", return_value=SimpleNamespace(returncode=0)) as run,
+            patch.object(self.cli.store, "data_dir", return_value=data),
+            patch.object(self.cli, "_port_listening", return_value=False),
+            patch.object(self.proactive, "remove_routine", return_value=True),
+            patch.object(self.proactive, "remove_startup_hook", return_value=True),
+            patch.object(self.proactive, "remove_skill_file", return_value=True),
+            redirect_stdout(output),
+        ):
+            rc = self.cli._uninstall(SimpleNamespace(keep_data=False, yes=True))
+        self.assertEqual(rc, 0, output.getvalue())
+        self.assertFalse(service.exists())
+        self.assertFalse(config.exists())
+        self.assertFalse((data / "widget.db").exists())
+        self.assertFalse((assets / ("asset_" + "a" * 24)).exists())
+        self.assertTrue((assets / "user-note.txt").exists())
+        self.assertEqual(run.call_args_list[0].args[0], [
+            "systemctl", "--user", "disable", "--now", "hermes-widget.service",
+        ])
+
+    def test_plugin_exposes_one_watch_schema(self):
+        plugin = _load_plugin()
+        watch_schemas = [schema for schema, _ in plugin._TOOLS if schema["name"].startswith("widget_watch")]
+        self.assertEqual([schema["name"] for schema in watch_schemas], ["widget_watch"])
+        self.assertEqual(
+            watch_schemas[0]["parameters"]["properties"]["operation"]["enum"],
+            ["create", "list", "pause", "tick"],
+        )
+
+    def test_schema_v3_migrates_quiet_timezones_to_utc(self):
+        _load_plugin()
+        schema = importlib.import_module("hermes_plugins.hermes_widget.schema")
+        with tempfile.TemporaryDirectory(prefix="hermes-schema-v3-") as temp:
+            conn = sqlite3.connect(Path(temp) / "widget.db")
+            conn.row_factory = sqlite3.Row
+            conn.execute(
+                "CREATE TABLE widget_settings (widget_id TEXT PRIMARY KEY, quiet_start TEXT, "
+                "quiet_end TEXT, updated_at TEXT NOT NULL)"
+            )
+            conn.execute(
+                "INSERT INTO widget_settings VALUES ('legacy', '22:00', '07:00', 'old')"
+            )
+            conn.execute(
+                "CREATE TABLE widget_watches (watch_id TEXT PRIMARY KEY, quiet_start TEXT, quiet_end TEXT, "
+                "enabled INTEGER NOT NULL DEFAULT 1, next_check_at TEXT)"
+            )
+            conn.execute(
+                "INSERT INTO widget_watches (watch_id, quiet_start, quiet_end) "
+                "VALUES ('legacy-watch', '22:00', '07:00')"
+            )
+            conn.execute("PRAGMA user_version=3")
+            schema.ensure_schema(conn)
+            settings_timezone = conn.execute(
+                "SELECT quiet_timezone FROM widget_settings WHERE widget_id='legacy'"
+            ).fetchone()[0]
+            watch_timezone = conn.execute(
+                "SELECT quiet_timezone FROM widget_watches WHERE watch_id='legacy-watch'"
+            ).fetchone()[0]
+            claim_until = conn.execute(
+                "SELECT claim_until FROM widget_watches WHERE watch_id='legacy-watch'"
+            ).fetchone()[0]
+            self.assertEqual((settings_timezone, watch_timezone, claim_until), ("UTC", "UTC", None))
+            self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], schema.SCHEMA_VERSION)
+            conn.close()
+
     def test_binding_update_preserves_saved_binary_and_home(self):
         persisted = "/persistent/hermes-home"
         self.write_saved(hermesBin="/opt/custom/hermes", home=persisted, host=WILDCARD_V4, port=8788)
@@ -173,20 +305,6 @@ class BindingConfig(unittest.TestCase):
         target.write_text('["not", "an", "object"]', encoding="utf-8")
         with self.assertRaises(self.proactive.ServerConfigError):
             self.proactive.resolve_server_binding()
-
-    # -- agent tool --------------------------------------------------------
-    def test_agent_tool_setup_preserves_saved_binding(self):
-        self.write_saved(hermesBin="/opt/hermes", home=str(self.home), host=WILDCARD_V4, port=8123)
-        with (
-            patch.object(self.proactive, "install_skill_file", return_value=self.home / "skill"),
-            patch.object(self.proactive, "install_startup_hook", return_value=self.home / "hook"),
-            patch.object(self.proactive, "install_routine", side_effect=RuntimeError("no cron")),
-            patch.object(self.cli, "_ensure_systemd_service", return_value=(True, None)),
-        ):
-            result = json.loads(self.tools.widget_setup({}))
-        self.assertIn("steps", result)
-        saved = self.read_saved()
-        self.assertEqual((saved["host"], saved["port"]), (WILDCARD_V4, 8123))
 
     # -- restart reporting -------------------------------------------------
     def test_up_saves_change_and_reports_restart_required(self):
@@ -239,16 +357,14 @@ class BindingConfig(unittest.TestCase):
         payload = json.loads(buffer.getvalue())
         self.assertEqual(payload["host"], WILDCARD_V4)
         self.assertEqual(payload["port"], 8788)
-        self.assertEqual(payload["configuredHost"], WILDCARD_V4)
-        self.assertEqual(payload["configured_host"], WILDCARD_V4)
-        self.assertEqual(payload["configuredPort"], 8788)
-        self.assertEqual(payload["configured_port"], 8788)
-        self.assertEqual(payload["probeHost"], "127.0.0.1")
         self.assertEqual(payload["probe_host"], "127.0.0.1")
-        self.assertEqual(payload["probePort"], 8788)
         self.assertEqual(payload["probe_port"], 8788)
-        self.assertTrue(payload["restartRequired"])
         self.assertTrue(payload["restart_required"])
+        for duplicate in (
+            "configuredHost", "configuredPort", "configured_host", "configured_port",
+            "probeHost", "probePort", "restartRequired",
+        ):
+            self.assertNotIn(duplicate, payload)
 
         buffer = io.StringIO()
         with redirect_stdout(buffer):
@@ -284,46 +400,6 @@ class BindingConfig(unittest.TestCase):
         payload = json.loads(buffer.getvalue())
         self.assertEqual(payload["serverUrl"], "https://widget.example.ts.net:8788")
         self.assertTrue(payload["code"])
-
-    def test_setup_text_never_infers_an_http_phone_url(self):
-        buffer = io.StringIO()
-        with (
-            patch.object(self.proactive, "install_skill_file", return_value=self.home / "skill"),
-            patch.object(self.proactive, "install_startup_hook", return_value=self.home / "hook"),
-            patch.object(self.cli, "_ensure_systemd_service", return_value=(True, None)),
-            redirect_stdout(buffer),
-        ):
-            rc = self.cli._setup(SimpleNamespace(
-                host=None, port=None, server_url=None, widget_id="hermes-brief",
-                routine=False, schedule="every 6h",
-            ))
-        self.assertEqual(rc, 0)
-        text = buffer.getvalue()
-        self.assertNotIn("http://", text)
-        self.assertNotIn("QR payload", text)
-        self.assertNotIn("Same-phone", text)
-        self.assertIn("private HTTPS", text)
-        self.assertIn("Pairing code:", text)
-
-    def test_mint_pairing_code_is_manual_only(self):
-        plain = json.loads(self.tools.widget_mint_pairing_code({}))
-        self.assertNotIn("qrPayload", plain)
-        self.assertNotIn("samePhoneLink", plain)
-
-        bad = json.loads(
-            self.tools.widget_mint_pairing_code({"server_url": "http://127.0.0.1:8788"})
-        )
-        self.assertEqual(bad.get("error"), "invalid_server_url")
-
-        good = json.loads(
-            self.tools.widget_mint_pairing_code(
-                {"server_url": "https://widget.example.ts.net:8788"}
-            )
-        )
-        self.assertEqual(good["serverUrl"], "https://widget.example.ts.net:8788")
-        self.assertNotIn("qrPayload", good)
-        self.assertNotIn("samePhoneLink", good)
-
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -371,22 +371,32 @@ class PublicationActivity : AppCompatActivity() {
         Thread {
             val result = HermesApi.postAction(
                 baseUrl, publication.widgetId, action.kind, action.itemId, action.actionClass,
-                publication.revision, clientEventId, confirmed, token,
+                publication.revision, clientEventId, token,
                 JSONObject(action.payload).toString(),
             )
-            if (result.code !in 200..299) {
+            val intentId = if (result.code in 200..299 && confirmed) {
+                runCatching {
+                    JSONObject(result.body.orEmpty()).getJSONObject("intent").getString("intentId")
+                }.getOrNull()
+            } else null
+            val confirmationResult = intentId?.let {
+                HermesApi.confirmActionIntent(baseUrl, it, token)
+            }
+            val confirmationSucceeded = confirmationResult?.code?.let { it in 200..299 } == true
+            val delivered = result.code in 200..299 && (!confirmed || confirmationSucceeded)
+            if (!delivered) {
                 Config.enqueuePendingAction(this, JSONObject()
                     .put("event", action.kind)
                     .put("itemId", action.itemId)
                     .put("actionClass", action.actionClass)
                     .put("revision", publication.revision)
                     .put("clientEventId", clientEventId)
-                    .put("confirmOnDevice", confirmed)
+                    .put("confirmAfterQueue", confirmed)
                     .put("payload", JSONObject(action.payload).toString()))
             }
             runOnUiThread {
                 say(
-                    if (result.code in 200..299) "Action queued" else "Action saved; it will retry when connected",
+                    if (delivered) "Action queued" else "Action saved; it will retry when connected",
                 )
             }
         }.start()

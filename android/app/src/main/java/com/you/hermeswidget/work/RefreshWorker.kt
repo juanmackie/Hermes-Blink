@@ -22,7 +22,6 @@ import com.you.hermeswidget.net.PublicationRepository
 import com.you.hermeswidget.net.RefreshOutcome
 import com.you.hermeswidget.net.SecureStore
 import com.you.hermeswidget.widget.HermesWidget
-import com.you.hermeswidget.widget.LayoutParser
 import com.you.hermeswidget.widget.WakeAlarmReceiver
 import com.you.hermeswidget.widget.WidgetDimensions
 import com.you.hermeswidget.widget.WidgetInstanceReporter
@@ -58,7 +57,6 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
             )
         }
 
-        if (result.outcome == RefreshOutcome.EMPTY) refreshLegacyLayout()
         HermesWidget().updateAll(applicationContext)
 
         // Asked the server: true whether it sent something new or said "unchanged".
@@ -101,10 +99,19 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
                 action.optString("actionClass", "reversible"),
                 revision,
                 clientEventId,
-                action.optBoolean("confirmOnDevice", false),
                 token,
                 action.optString("payload", "{}"),
             )
+            if (result.code in 200..299 && action.optBoolean("confirmAfterQueue", false)) {
+                val intentId = runCatching {
+                    org.json.JSONObject(result.body.orEmpty())
+                        .getJSONObject("intent").getString("intentId")
+                }.getOrNull()
+                val confirmed = intentId?.let {
+                    HermesApi.confirmActionIntent(baseUrl, it, token).code in 200..299
+                } ?: false
+                if (!confirmed) continue
+            }
             if (result.code in 200..299 || (result.code in 400..499 && result.code !in listOf(408, 429))) {
                 // A rejected stale/unknown intent must not poison the bounded outbox;
                 // transient network, auth, and rate-limit failures remain retryable.
@@ -115,16 +122,6 @@ class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorke
 
     private suspend fun reportInventory() {
         WidgetInstanceReporter.reportBlocking(applicationContext)
-    }
-
-    private suspend fun refreshLegacyLayout() {
-        val baseUrl = SecureStore.baseUrl(applicationContext) ?: Config.getBackendUrl(applicationContext)
-        val token = SecureStore.token(applicationContext)
-        if (baseUrl.isNullOrBlank() || token.isNullOrBlank()) return
-        val (code, body) = HermesApi.fetchWidget(baseUrl, Config.getWidgetId(applicationContext), token)
-        if (code != 200 || body == null) return
-        runCatching { LayoutParser.parse(body) }
-            .onSuccess { Config.setCachedLayout(applicationContext, body) }
     }
 
     companion object {

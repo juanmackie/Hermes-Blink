@@ -1,73 +1,9 @@
-"""OpenAI-style tool schemas exposed by the hermes-widget plugin.
-
-The agent sees these descriptions verbatim, so they carry the parts of the v1
-layout contract the model must respect (node/size caps and the https-only rule)
-rather than relying on the bundled skill being loaded.
-"""
-
-_LAYOUT_PROPERTY = {
-    "type": "object",
-    "description": (
-        "Full v2 layout envelope: {version: 2, widgetId, root, title?, ttlSeconds?, "
-        "accentColor?, updatedAt?}. A JSON string containing the same object is also "
-        "accepted. version must be 2; there is no v1 migration."
-    ),
-}
-
-WIDGET_UPDATE = {
-    "name": "widget_update",
-    "description": (
-        "Push a complete v2 widget layout envelope to the user's home-screen "
-        "widget. Keep it under 100 nodes and 64 KB. Nodes: column,row,box,list,"
-        "text,divider,spacer,badge,calendar(agenda),stat,progress,button,"
-        "list_item. Actions: event|refresh|dismiss|review only. For ordinary visual "
-        "updates prefer widget_publish; this tool is the legacy structured layout path."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "widget_id": {
-                "type": "string",
-                "description": (
-                    "Widget to replace, e.g. 'hermes-brief'. Defaults to the "
-                    "standard brief widget when omitted."
-                ),
-            },
-            "layout": _LAYOUT_PROPERTY,
-        },
-        "required": ["widget_id", "layout"],
-    },
-}
-
-WIDGET_VALIDATE = {
-    "name": "widget_validate",
-    "description": (
-        "Dry-run a v2 layout without publishing it. Returns the node count, byte "
-        "size, the text styles used, and any design warnings, or the same error "
-        "widget_update would return. Use this while iterating: a rejected push "
-        "wastes a rate-limit slot, and a bad accepted one replaces a working widget. "
-        "Warnings do not block a push."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "widget_id": {
-                "type": "string",
-                "description": (
-                    "Widget the layout is intended for, e.g. 'hermes-brief'. Defaults "
-                    "to the standard brief widget when omitted."
-                ),
-            },
-            "layout": _LAYOUT_PROPERTY,
-        },
-        "required": ["layout"],
-    },
-}
+"""OpenAI-style tool schemas exposed by the hermes-widget plugin."""
 
 WIDGET_LIST = {
     "name": "widget_list",
     "description": (
-        "List the widget ids that currently have a stored publication or legacy layout. "
+        "List the widget ids that currently have a publication or are configured. "
         "Use this before pushing to discover whether a widget already exists."
     ),
     "parameters": {
@@ -104,31 +40,6 @@ WIDGET_READ_EVENTS = {
         "required": [],
     },
 }
-
-WIDGET_SETUP = {
-    "name": "widget_setup",
-    "description": (
-        "Deterministic, resumable, idempotent setup for the Hermes widget host: "
-        "detects the current Hermes host and persistent home, installs the "
-        "plugin/skill/gateway startup hook, prepares the widget, enables the recurring "
-        "proactive refresh, and reports "
-        "capability-based progress with state needs_user_action|starting|"
-        "awaiting_pairing|ready|degraded. Use the bootstrap command for a full "
-        "container recreation installation."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "widget_id": {"type": "string", "description": "Widget id, default hermes-brief."},
-            "schedule": {"type": "string", "description": "Cron schedule, default every 6h."},
-            "host": {"type": "string", "description": "Interface to bind; omitted preserves the saved binding."},
-            "port": {"type": "integer", "description": "Port to bind; omitted preserves the saved binding."},
-            "server_url": {"type": "string", "description": "Private HTTPS URL the phone will use (reported as a hint only)."},
-        },
-        "required": [],
-    },
-}
-
 WIDGET_PUBLISH = {
     "name": "widget_publish",
     "description": (
@@ -289,7 +200,7 @@ WIDGET_RESOLVE_INTENT = {
     "description": (
         "Record the terminal outcome of a widget intent after the agent has handled it. "
         "This records a decision; it never executes the queued operation. Sensitive "
-        "classes require confirmed=true."
+        "actions must first be confirmed through the paired device."
     ),
     "parameters": {
         "type": "object",
@@ -297,7 +208,6 @@ WIDGET_RESOLVE_INTENT = {
             "intent_id": {"type": "string", "maxLength": 160},
             "outcome": {"type": "string", "enum": ["applied", "declined", "held", "expired"]},
             "result": {"type": "string", "maxLength": 2000},
-            "confirmed": {"type": "boolean"},
         },
         "required": ["intent_id", "outcome"],
     },
@@ -332,58 +242,36 @@ WIDGET_READ_QUESTIONS = {
     },
 }
 
-WIDGET_WATCH_CREATE = {
-    "name": "widget_watch_create",
-    "description": "Create a bounded host-evaluated watch that publishes only on a condition transition and respects cadence, quiet hours, and max-per-day limits.",
+WIDGET_WATCH = {
+    "name": "widget_watch",
+    "description": "Manage standing widget watches: create, list, pause or resume, and evaluate due watches with a bounded source snapshot.",
     "parameters": {
         "type": "object",
         "properties": {
+            "operation": {"type": "string", "enum": ["create", "list", "pause", "tick"]},
             "widget_id": {"type": "string"},
             "name": {"type": "string", "maxLength": 120},
             "condition": {"type": "object"},
             "payload": {"type": "object"},
             "cadence_seconds": {"type": "integer", "minimum": 60, "maximum": 2592000},
-            "quiet_hours": {"type": ["object", "null"]},
+            "quiet_hours": {
+                "type": ["object", "null"],
+                "properties": {
+                    "start": {"type": "string", "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"},
+                    "end": {"type": "string", "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"},
+                    "timezone": {"type": "string", "description": "IANA timezone name (defaults to UTC)."},
+                },
+                "required": ["start", "end"],
+                "additionalProperties": False,
+            },
             "max_per_day": {"type": "integer", "minimum": 1, "maximum": 50},
             "expires_at": {"type": ["string", "null"]},
-        },
-        "required": ["widget_id", "name", "condition", "payload"],
-    },
-}
-
-WIDGET_WATCH_LIST = {
-    "name": "widget_watch_list",
-    "description": "List standing widget watches and their enabled/last-fired state.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "widget_id": {"type": "string"},
             "enabled": {"type": "boolean"},
-        },
-        "required": [],
-    },
-}
-
-WIDGET_WATCH_PAUSE = {
-    "name": "widget_watch_pause",
-    "description": "Pause or resume a standing widget watch without deleting its history.",
-    "parameters": {
-        "type": "object",
-        "properties": {
             "watch_id": {"type": "string"},
             "paused": {"type": "boolean", "default": True},
+            "sources": {"type": "object"},
         },
-        "required": ["watch_id"],
-    },
-}
-
-WIDGET_WATCH_TICK = {
-    "name": "widget_watch_tick",
-    "description": "Evaluate due watches on the host with a bounded source snapshot; publishes only on state change and records the watch that fired.",
-    "parameters": {
-        "type": "object",
-        "properties": {"sources": {"type": "object"}},
-        "required": [],
+        "required": ["operation"],
     },
 }
 
@@ -402,7 +290,7 @@ WIDGET_WAKE_TEST = {
 
 WIDGET_SET_QUIET_HOURS = {
     "name": "widget_set_quiet_hours",
-    "description": "Set or clear a widget's UTC quiet-hours window; high-priority wakes degrade visibly to normal during it.",
+    "description": "Set or clear a widget's quiet-hours window in an IANA timezone; high-priority wakes degrade visibly to normal during it.",
     "parameters": {
         "type": "object",
         "properties": {
@@ -412,6 +300,7 @@ WIDGET_SET_QUIET_HOURS = {
                 "properties": {
                     "start": {"type": "string", "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"},
                     "end": {"type": "string", "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$"},
+                    "timezone": {"type": "string", "description": "IANA timezone name (defaults to UTC)."},
                 },
                 "required": ["start", "end"],
                 "additionalProperties": False,
@@ -438,39 +327,19 @@ WIDGET_STATUS = {
                 "type": "string",
                 "description": "Widget to inspect; defaults to hermes-brief.",
             },
-        },
-        "required": [],
-    },
-}
-
-WIDGET_MINT_PAIRING_CODE = {
-    "name": "widget_mint_pairing_code",
-    "description": (
-        "Create a short-lived single-use pairing code and show the user the code and its "
-        "expiry. The Android app has no QR or link handler: pairing is manual. An optional "
-        "server_url must be a private HTTPS URL the phone can reach and is echoed for manual "
-        "entry."
-    ),
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "device_label": {
-                "type": "string",
-                "description": "Human label for the device, e.g. 'Pixel 9'. Defaults to 'unknown'.",
+            "consume_update_requests": {
+                "type": "boolean",
+                "description": "Mark triggered requests as consumed and return only the newly consumed requests.",
             },
-            "ttl_minutes": {
+            "summary": {
+                "type": "boolean",
+                "description": "Return a compact recent window (default true); set false for a larger bounded window.",
+            },
+            "limit": {
                 "type": "integer",
                 "minimum": 1,
-                "maximum": 120,
-                "description": "Minutes the code stays valid. Defaults to 10.",
-            },
-            "server_url": {
-                "type": "string",
-                "description": (
-                    "The private URL the phone will reach, e.g. an HTTPS Tailscale Serve "
-                    "URL. Include it only when pairing by QR scan; "
-                    "omitting it returns just the typed code."
-                ),
+                "maximum": 100,
+                "description": "Maximum number of records per status list, capped at 10 in summary mode.",
             },
         },
         "required": [],

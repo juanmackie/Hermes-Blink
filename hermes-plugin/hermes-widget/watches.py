@@ -1,6 +1,6 @@
 """Bounded host-evaluated widget watches.
 
-A watch is a small, durable condition → publication rule.  It deliberately does
+A watch is a small, durable condition â†’ publication rule.  It deliberately does
 not fetch arbitrary external sources: the agent/cron supplies a bounded source
 snapshot, while date, revision, and always conditions need no network.  Every
 fire is rate-limited, attributed, and recorded as a normal publication revision.
@@ -15,8 +15,10 @@ from typing import Any
 
 try:
     from . import store
+    from .timeutil import _in_quiet_window, _validate_timezone
 except ImportError:  # pragma: no cover - direct import from tests/scripts
     import store  # type: ignore
+    from timeutil import _in_quiet_window, _validate_timezone  # type: ignore
 
 MAX_WATCHES = 100
 MAX_CADENCE_SECONDS = 30 * 24 * 3600
@@ -32,19 +34,6 @@ def _iso(dt: datetime) -> str:
     return dt.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _parse_time(value: str) -> Any:
-    return datetime.strptime(value, "%H:%M").time()
-
-
-def _in_quiet(start: str | None, end: str | None, now: datetime) -> bool:
-    if not start or not end or not _TIME_RE.match(start) or not _TIME_RE.match(end):
-        return False
-    s, e, value = _parse_time(start), _parse_time(end), now.timetz().replace(tzinfo=None)
-    if s == e:
-        return False
-    return (s <= value < e) if s < e else (value >= s or value < e)
-
-
 def _row(row: Any) -> dict[str, Any]:
     try:
         condition = json.loads(row["condition_json"])
@@ -58,7 +47,10 @@ def _row(row: Any) -> dict[str, Any]:
         "condition": condition,
         "payload": payload,
         "cadenceSeconds": row["cadence_seconds"],
-        "quietHours": {"start": row["quiet_start"], "end": row["quiet_end"]}
+        "quietHours": {
+            "start": row["quiet_start"], "end": row["quiet_end"],
+            "timezone": row["quiet_timezone"] or "UTC",
+        }
         if row["quiet_start"] and row["quiet_end"] else None,
         "maxPerDay": row["max_per_day"],
         "enabled": bool(row["enabled"]),
@@ -142,6 +134,9 @@ def create_watch(
         if not isinstance(quiet_hours, dict) or not _TIME_RE.match(str(quiet_hours.get("start", ""))) or not _TIME_RE.match(str(quiet_hours.get("end", ""))):
             raise store.StoreError("quiet_hours requires start/end HH:MM")
         start, end = str(quiet_hours["start"]), str(quiet_hours["end"])
+        quiet_timezone = _validate_timezone(quiet_hours.get("timezone"))
+    else:
+        quiet_timezone = "UTC"
     if expires_at is not None:
         if not isinstance(expires_at, str):
             raise store.StoreError("expires_at must be an ISO-8601 string")
@@ -160,9 +155,9 @@ def create_watch(
             if int(count) >= MAX_WATCHES:
                 raise store.StoreError(f"a widget may have at most {MAX_WATCHES} watches")
             conn.execute(
-                "INSERT INTO widget_watches (watch_id, widget_id, name, condition_json, payload_json, cadence_seconds, quiet_start, quiet_end, max_per_day, enabled, last_state, last_fired_at, next_check_at, created_at, updated_at, expires_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?, ?)",
-                (watch_id, widget_id, name.strip(), json.dumps(condition_value, separators=(",", ":")), json.dumps(payload_value, separators=(",", ":")), cadence_seconds, start, end, max_per_day, _iso(now), _iso(now), _iso(now), expires_at),
+                "INSERT INTO widget_watches (watch_id, widget_id, name, condition_json, payload_json, cadence_seconds, quiet_start, quiet_end, quiet_timezone, max_per_day, enabled, last_state, last_fired_at, next_check_at, created_at, updated_at, expires_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, NULL, ?, ?, ?, ?)",
+                (watch_id, widget_id, name.strip(), json.dumps(condition_value, separators=(",", ":")), json.dumps(payload_value, separators=(",", ":")), cadence_seconds, start, end, quiet_timezone, max_per_day, _iso(now), _iso(now), _iso(now), expires_at),
             )
             conn.commit()
         finally:
@@ -221,12 +216,39 @@ def remove_watch(watch_id: str) -> bool:
             conn.close()
 
 
-def _evaluate(condition: dict[str, Any], sources: dict[str, Any], widget_id: str) -> bool:
+def _claim_watch(watch_id: str, current: datetime) -> bool:
+    """Atomically claim a due transition across the agent and server processes."""
+    now = _iso(current)
+    claim_until = _iso(current + timedelta(minutes=5))
+    with store._LOCK:
+        conn = store._connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            cursor = conn.execute(
+                "UPDATE widget_watches SET claim_until = ? WHERE watch_id = ? AND enabled = 1 "
+                "AND (claim_until IS NULL OR claim_until <= ?) "
+                "AND (last_state IS NULL OR last_state = 0) "
+                "AND (next_check_at IS NULL OR next_check_at <= ?) "
+                "AND (expires_at IS NULL OR expires_at > ?)",
+                (claim_until, watch_id, now, now, now),
+            )
+            conn.commit()
+            return cursor.rowcount == 1
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+
+def _evaluate(
+    condition: dict[str, Any], sources: dict[str, Any], widget_id: str, now: datetime
+) -> bool:
     kind = condition["type"]
     if kind == "always":
         return True
     if kind == "date_reached":
-        return datetime.now(timezone.utc) >= datetime.fromisoformat(condition["at"].replace("Z", "+00:00"))
+        return now >= datetime.fromisoformat(condition["at"].replace("Z", "+00:00"))
     if kind == "source_equals":
         return sources.get(condition["source"]) == condition.get("equals")
     if kind == "revision_gte":
@@ -237,20 +259,31 @@ def _evaluate(condition: dict[str, Any], sources: dict[str, Any], widget_id: str
 
 def _fired_today(conn: Any, widget_id: str, watch_id: str, now: datetime) -> int:
     since = _iso(now - timedelta(days=1))
-    rows = conn.execute(
-        "SELECT payload_json, published_at FROM publication_revisions WHERE widget_id = ? AND published_at > ?",
-        (widget_id, since),
-    ).fetchall()
-    return sum(1 for row in rows if f'"watchId":"{watch_id}"' in (row["payload_json"] or ""))
+    row = conn.execute(
+        "SELECT COUNT(*) AS count FROM publication_revisions "
+        "WHERE widget_id = ? AND watch_id = ? AND published_at > ?",
+        (widget_id, watch_id, since),
+    ).fetchone()
+    return int(row["count"] if row else 0)
 
 
-def tick_watches(*, sources: dict[str, Any] | None = None, now: datetime | None = None) -> list[dict[str, Any]]:
-    """Evaluate due watches and publish only on a false→true transition."""
+def tick_watches(
+    *,
+    sources: dict[str, Any] | None = None,
+    now: datetime | None = None,
+    condition_types: set[str] | None = None,
+) -> list[dict[str, Any]]:
+    """Evaluate due watches and publish only on a falseâ†’true transition."""
     current = now or datetime.now(timezone.utc)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=timezone.utc)
     source_values = sources if isinstance(sources, dict) else {}
     results: list[dict[str, Any]] = []
     for watch in list_watches():
         if not watch["enabled"]:
+            continue
+        condition_type = watch["condition"].get("type")
+        if condition_types is not None and condition_type not in condition_types:
             continue
         if watch["expiresAt"]:
             try:
@@ -267,13 +300,20 @@ def tick_watches(*, sources: dict[str, Any] | None = None, now: datetime | None 
                     continue
             except ValueError:
                 pass
+        if condition_type == "date_reached":
+            try:
+                at = datetime.fromisoformat(watch["condition"]["at"].replace("Z", "+00:00"))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if current < at or watch.get("lastState") is True:
+                continue
         with store._LOCK:
             conn = store._connect()
             try:
                 today = _fired_today(conn, watch["widgetId"], watch["watchId"], current)
             finally:
                 conn.close()
-        state = _evaluate(watch["condition"], source_values, watch["widgetId"])
+        state = _evaluate(watch["condition"], source_values, watch["widgetId"], current)
         previous = watch.get("lastState")
         due_state_change = state and previous is not True
         if not due_state_change:
@@ -289,15 +329,20 @@ def tick_watches(*, sources: dict[str, Any] | None = None, now: datetime | None 
                 results.append({"watchId": watch["watchId"], "state": "cleared"})
             continue
         quiet = watch.get("quietHours") or {}
-        if _in_quiet(quiet.get("start"), quiet.get("end"), current) or today >= watch["maxPerDay"]:
+        in_quiet = _in_quiet_window(quiet.get("start"), quiet.get("end"), quiet.get("timezone"), current)
+        if in_quiet or today >= watch["maxPerDay"]:
             with store._LOCK:
                 conn = store._connect()
                 try:
-                    conn.execute("UPDATE widget_watches SET last_state = ?, next_check_at = ?, updated_at = ? WHERE watch_id = ?", (int(state), _iso(current + timedelta(seconds=watch["cadenceSeconds"])), _iso(current), watch["watchId"]))
+                    # A deferred transition has not been published. Keep it eligible so
+                    # quiet hours or a daily cap ending can release it later.
+                    conn.execute("UPDATE widget_watches SET last_state = 0, next_check_at = ?, updated_at = ? WHERE watch_id = ?", (_iso(current + timedelta(seconds=watch["cadenceSeconds"])), _iso(current), watch["watchId"]))
                     conn.commit()
                 finally:
                     conn.close()
-            results.append({"watchId": watch["watchId"], "state": "deferred", "reason": "quiet_hours" if _in_quiet(quiet.get("start"), quiet.get("end"), current) else "max_per_day"})
+            results.append({"watchId": watch["watchId"], "state": "deferred", "reason": "quiet_hours" if in_quiet else "max_per_day"})
+            continue
+        if not _claim_watch(watch["watchId"], current):
             continue
         payload = dict(watch["payload"])
         try:
@@ -319,7 +364,18 @@ def tick_watches(*, sources: dict[str, Any] | None = None, now: datetime | None 
         with store._LOCK:
             conn = store._connect()
             try:
-                conn.execute("UPDATE widget_watches SET last_state = 1, last_fired_at = ?, next_check_at = ?, updated_at = ? WHERE watch_id = ?", (_iso(current), _iso(current + timedelta(seconds=watch["cadenceSeconds"])), _iso(current), watch["watchId"]))
+                if fired.get("state") == "published":
+                    conn.execute(
+                        "UPDATE widget_watches SET last_state = 1, last_fired_at = ?, next_check_at = ?, updated_at = ?, claim_until = NULL WHERE watch_id = ?",
+                        (_iso(current), _iso(current + timedelta(seconds=watch["cadenceSeconds"])), _iso(current), watch["watchId"]),
+                    )
+                else:
+                    # Keep last_state false so the transition is retried next cadence;
+                    # failed attempts do not consume the daily fire budget.
+                    conn.execute(
+                        "UPDATE widget_watches SET next_check_at = ?, updated_at = ?, claim_until = NULL WHERE watch_id = ?",
+                        (_iso(current + timedelta(seconds=watch["cadenceSeconds"])), _iso(current), watch["watchId"]),
+                    )
                 conn.commit()
             finally:
                 conn.close()

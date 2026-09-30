@@ -32,12 +32,8 @@ import store  # noqa: E402
 
 WIDGET = "hermes-brief"
 
-store.put_widget(WIDGET, {
-    "version": 2,
-    "widgetId": WIDGET,
-    "title": "T",
-    "root": {"type": "column", "children": [{"type": "text", "value": "hi"}]},
-})
+store.ensure_widget(WIDGET)
+store.put_publication(WIDGET, title="T", summary="Test publication", text="hi")
 agent_token = store.get_agent_token()
 
 httpd = server.make_server("127.0.0.1", 0, certfile=str(Path(TMPD) / "cert.pem"), keyfile=str(Path(TMPD) / "key.pem"))
@@ -75,13 +71,13 @@ def check(name: str, ok: bool, detail: str = "") -> None:
 # --- transport: HTTPS serves, tokenless is refused ------------------------
 s, b = req("/v1/health")
 check("https_health_200", s == 200 and '"status":"ok"' in b, b)
-s, b = req(f"/v1/widgets/{WIDGET}")
+s, b = req(f"/v1/widgets/{WIDGET}/publication")
 check("tokenless_401", s == 401, b)
-s, b = req(f"/v1/widgets/{WIDGET}", token=agent_token)
-check("agent_widget_200", s == 200, b)
-s, b = req(f"/v1/widgets/{WIDGET}", token=agent_token, ver="9.9.9")
+s, b = req(f"/v1/widgets/{WIDGET}/publication", token=agent_token)
+check("agent_publication_200", s == 200, b)
+s, b = req(f"/v1/widgets/{WIDGET}/publication", token=agent_token, ver="9.9.9")
 check("bad_version_426", s == 426 and "upgrade_required" in b, b)
-s, b = req(f"/v1/widgets/{WIDGET}", token="bogus")
+s, b = req(f"/v1/widgets/{WIDGET}/publication", token="bogus")
 check("bogus_bearer_401", s == 401, b)  # no loopback upgrade to agent trust
 s, b = req(f"/v1/widgets/{WIDGET}/events", method="POST", body={"event": "refresh"})
 check("tokenless_post_401", s == 401, b)
@@ -103,12 +99,12 @@ conn.close()
 s, b = req("/v1/pair", method="POST", body={"code": expired, "deviceLabel": "late"})
 check("expired_code_400", s == 400 and "invalid_or_expired_code" in b, b)
 
-# --- device role: read + interactions yes, operator actions no ------------
-s, b = req(f"/v1/widgets/{WIDGET}", token=device_token)
-check("device_widget_200", s == 200, b)
-s, b = req(f"/v1/widgets/{WIDGET}", method="PUT", token=device_token,
-           body={"version": 2, "widgetId": WIDGET, "root": {"type": "column", "children": []}})
-check("device_put_401", s == 401, b)
+# --- device role: read + interactions yes, agent-only routes denied -------
+s, b = req(f"/v1/widgets/{WIDGET}/publication", token=device_token)
+check("device_publication_200", s == 200, b)
+s, b = req(f"/v1/widgets/{WIDGET}/publication", method="PUT", token=device_token,
+           body={"title": "T", "summary": "no", "text": "no"})
+check("device_publish_401", s == 401, b)
 s, b = req("/v1/events", token=device_token)
 check("device_events_401", s == 401, b)
 s, b = req("/v1/pairing-codes", method="POST", token=device_token)
@@ -119,7 +115,7 @@ check("device_post_event_200", s == 200, b)
 
 # --- revocation takes effect ---------------------------------------------
 store.revoke_device(device["deviceId"])
-s, b = req(f"/v1/widgets/{WIDGET}", token=device_token)
+s, b = req(f"/v1/widgets/{WIDGET}/publication", token=device_token)
 check("revoked_device_401", s == 401, b)
 s, b = req(f"/v1/widgets/{WIDGET}/events", method="POST", token=device_token, body={"event": "refresh"})
 check("revoked_post_401", s == 401, b)

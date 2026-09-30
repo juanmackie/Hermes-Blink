@@ -1,143 +1,25 @@
 # Hermes personal widget
 
 Hermes can send one-way, accessible visual updates to one persistent Android
-home-screen widget. The existing `hermes-brief` identity and legacy v2 layout
-endpoints remain supported; new updates use `widget_publish` with text, safe
+home-screen widget. The existing `hermes-brief` identity uses the publication
+API; updates use `widget_publish` with text, safe
 static SVG, or a bounded local PNG/JPEG/WebP.
 
-## Agent entry point
+Current product version and compatibility are listed in [CHANGELOG.md](CHANGELOG.md).
 
-Install the plugin, skill, gateway hook, refresh routine, and server on the machine that runs Hermes:
+## Host setup
+
+The full Linux, Windows, and TrueNAS setup, private HTTPS, pairing, persistence, and
+troubleshooting guide is [docs/SETUP.md](docs/SETUP.md).
+
+Quick start on the Hermes host:
 
 ```sh
 bash scripts/bootstrap-linux.sh --json
 hermes widget status
 ```
 
-On Windows, run `python scripts/bootstrap.py --json` from the repository root. Set `HERMES_BIN` when Hermes is not on `PATH`. The bootstrap is capability-based and reports the detected Hermes home, profile, version, toolsets, and any missing host requirements.
-
-Use `hermes widget serve --host 127.0.0.1 --port 8788` as the manual diagnostic
-server. It is also the command used by the generated service and gateway
-startup hook. The server is not exposed directly to the phone; publish it through Tailscale Serve or another private HTTPS proxy.
-
-## Linux and TrueNAS bootstrap
-
-From a checkout on the machine that runs Hermes:
-
-```sh
-bash scripts/bootstrap-linux.sh --json
-```
-
-The installer detects the actual `hermes` executable, version, active profile,
-persistent Hermes home, plugin/skill/gateway/cron capabilities, and available
-toolsets. It copies the plugin and skill into the detected home, enables the
-plugin, installs one idempotent `gateway:startup` hook, creates a bounded
-six-hour refresh routine, and starts the widget server only when the configured
-port is not already healthy. Re-running it is safe and reports failures rather
-than creating duplicate services, jobs, devices, or credentials.
-
-Useful options:
-
-```sh
-bash scripts/bootstrap-linux.sh --restart-gateway --json
-bash scripts/bootstrap-linux.sh --skip-start       # install without launching now
-bash scripts/bootstrap-linux.sh --host 0.0.0.0 --port 8788 --json  # container bind
-bash scripts/install-service.sh                    # compatibility entry point
-```
-
-### Restarting the server
-
-**The supported restart is the plugin's own startup hook**, not a bare kill:
-
-```sh
-bash scripts/bootstrap-linux.sh --restart-gateway --json   # recommended
-# or, equivalently, ask the gateway to run its hook:
-handle("gateway:startup")
-```
-
-`--restart-gateway` reloads the agent, which re-runs the idempotent
-`gateway:startup` hook and brings the server back with no manual step and no
-duplicated services. Verified 2026-09-27: after the hook, health returned
-immediately and the process was listening again.
-
-A bare `kill` of the server process is *not* equivalent: on the same day it left
-the server down for roughly six minutes (health `000`) because nothing re-ran the
-startup hook. If the server must be stopped by hand, restart the gateway
-afterwards so the hook gets its chance.
-
-`--host` and `--port` are independent: an omitted flag keeps the value already
-saved in `widget/server.json`, and a first install defaults to
-`127.0.0.1:8788`. A malformed `server.json` is reported instead of overwritten.
-
-Set `HERMES_BIN` when Hermes is not on `PATH`. Set `HERMES_HOME` only when the
-Hermes command's detected home is not the persistent volume you intend to use;
-the reported home is the one persisted.
-
-### TrueNAS persistence and remote phone networking
-
-Mount the Hermes home (including `widget/widget.db`, `widget/assets/`,
-`widget/server.json`, `widget/server.log`, `plugins/`, `skills/`, and `hooks/`)
-on persistent storage. Keep the container's Hermes profile and `HERMES_HOME`
-stable across recreation. The phone does not need to be on the same LAN as the
-host: both devices join the same Tailscale tailnet, and the phone pulls content
-from the host over private HTTPS.
-
-The server binds loopback by default. Leave it on loopback for a direct host
-install and run Tailscale Serve (or another private HTTPS proxy) in front of it:
-
-```sh
-tailscale serve --bg --https=8788 tcp://127.0.0.1:8788
-```
-
-**TrueNAS/container:** a port published by the container runtime cannot reach a
-loopback-only listener, so bind the server to `0.0.0.0` *inside the container*
-while the host publishes that port to its own loopback only. Pass the container
-binding to the bootstrap:
-
-```sh
-bash scripts/bootstrap-linux.sh --host 0.0.0.0 --port 8788 --json
-```
-
-The paired Compose settings keep the host side on loopback:
-
-```yaml
-services:
-  hermes:
-    ports:
-      - "127.0.0.1:8788:8788"   # host loopback -> container 0.0.0.0:8788
-```
-
-Then run Tailscale Serve on the host (or the namespace that owns the published
-port):
-
-```sh
-tailscale serve --bg --https=8788 tcp://127.0.0.1:8788
-```
-
-Verify the host-side binding yourself; the container's `--host` value is not the
-host's port binding:
-
-```sh
-docker port <container> | grep 8788   # must show 127.0.0.1:8788, not 0.0.0.0:8788
-ss -ltnp | grep 8788                  # no 0.0.0.0 or :: listener on the host
-```
-
-Do not expose the raw widget port publicly and do not give the phone the
-operator token.
-
-Preserve the `Authorization` header through any reverse proxy. The phone uses
-the Tailscale HTTPS URL and a short-lived code created with:
-
-```sh
-hermes widget code
-```
-
-The phone pairs with that code and stores only its device-scoped token. It does
-not need the operator/agent token. It also does not need to be on the same local
-network as the host; both devices only need access to the same tailnet. See
-[docs/HERMES_AGENT_SETUP.md](docs/HERMES_AGENT_SETUP.md) and
-[docs/TAILSCALE_HTTPS.md](docs/TAILSCALE_HTTPS.md) for the detailed flow. The Android widget
-quality checklist is in [docs/WIDGET_DESIGN.md](docs/WIDGET_DESIGN.md).
+On Windows, run `python scripts/bootstrap.py --json` from the repository root.
 
 ## Android
 
@@ -162,9 +44,10 @@ separately; none of those states claims that the user saw or understood an updat
 content-free `fetch` wake to a device-registered UnifiedPush endpoint (ntfy and other
 self-hostable distributors work); the phone then pulls over the existing private HTTPS path.
 The high lane is limited to six wakes per hour and thirty per day, with over-limit requests
-visibly degraded to normal. A per-widget UTC quiet-hours window can be set with
-`widget_set_quiet_hours`. `hermes widget wake-test` sends one content-free wake and prints the
-per-device receipt chain without creating a publication revision. Android requests
+visibly degraded to normal. A per-widget quiet-hours window can be set with
+`widget_set_quiet_hours` (UTC by default; optionally set an IANA timezone).
+`hermes widget wake-test` sends one content-free wake and prints the per-device receipt chain
+without creating a publication revision. Android requests
 battery-optimisation exemption only from the
 user, then uses expedited WorkManager with an exact-alarm fallback where permitted. The app's
 **Delivery diagnostics** screen shows last poll, fetch, render, and exemption state.
@@ -183,11 +66,10 @@ hermes widget preview --publication-file proposal.json --out ./widget-previews
 hermes widget publish --title "Market open" --summary "Brief" --text "..." --priority high
 ```
 
-Fixture paths such as `fixtures/brief-v2.json` are resolved from the current directory, the
-checkout root, or the installed plugin's fixture copy, so the command does not require a
-particular working directory.
+Publication files are resolved from the current directory, checkout root, or installed plugin
+copy, so the command does not require a particular working directory.
 
-Publication and v2 `button`/`list_item` actions may carry stable `itemId`s. `approve`, `snooze`,
+Publication actions may carry stable `itemId`s. `approve`, `snooze`,
 and `open` taps are durably queued as allowlisted intents; they never execute on the HTTP
 server. The phone keeps a bounded retry outbox when the private path is unavailable, and the
 agent reads intents with `widget_read_intents` before recording a terminal decision with

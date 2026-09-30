@@ -4,7 +4,7 @@ Runs inside the Hermes install: one ThreadingHTTPServer, bearer auth, and all
 state delegated to store.py so the serving process and the agent tools share the
 same SQLite DB. Nothing here opens SQLite or invents storage.
 
-Auth model (see docs/CONNECTION.md section 5):
+Auth model (see docs/CONNECTION.md):
   * AGENT  - the operator credential; loopback callers are trusted as agent-level.
   * DEVICE - per-paired-device token; required for device routes unless the
              caller is already agent-authorised.
@@ -14,12 +14,13 @@ requests concurrently, so module globals would race.
 """
 from __future__ import annotations
 
-import base64
+import hashlib
 import json
 import logging
 import os
 import re
 import ssl
+import threading
 import uuid
 from datetime import datetime, timezone
 from email.utils import format_datetime
@@ -28,17 +29,20 @@ from typing import Any
 from urllib.parse import parse_qs, unquote, urlsplit
 
 try:  # normal path: imported as part of the hermes-widget plugin package
-    from . import preview, proactive, store
+    from . import preview, proactive, retention, store, watches
 except ImportError:  # pragma: no cover - direct import from tests/scripts
     import preview  # type: ignore
     import proactive  # type: ignore
+    import retention  # type: ignore
     import store  # type: ignore
+    import watches  # type: ignore
 
 VERSION = "1.0.0"
 MAX_BODY_BYTES = 384 * 1024  # bounded JSON; inline SVG is capped separately at 256 KiB
 MAX_OVERSIZED_DRAIN_BYTES = 8 * 1024 * 1024
 MAX_CONCURRENT = 20  # bounded concurrency for private HTTPS (Phase C)
 REQUEST_TIMEOUT = 30  # request deadline in seconds (Phase C)
+WATCH_TICK_INTERVAL_SECONDS = 60
 _LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
 _UNSET = object()  # sentinel: distinguishes "no body read yet" from "empty body"
 
@@ -150,11 +154,6 @@ def _split_combined_version(raw: Any) -> tuple[Any, Any]:
 
 def _map_store_error(exc: store.StoreError) -> _HttpError:
     message = str(exc)
-    if isinstance(exc, store.LayoutError):
-        # The byte-size cap is a 413; node/field violations stay 400. Message
-        # wording comes from validate.py, so match on "byte" rather than "cap".
-        status = 413 if "byte" in message.lower() else 400
-        return _HttpError(status, exc.code, message)
     if isinstance(exc, store.PublicationTooLarge):
         return _HttpError(413, exc.code, message)
     if isinstance(exc, store.RenderNotReady):
@@ -177,11 +176,35 @@ def _map_store_error(exc: store.StoreError) -> _HttpError:
 class _Server(ThreadingHTTPServer):
     allow_reuse_address = True
     daemon_threads = True
+    request_queue_size = MAX_CONCURRENT
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        import threading
+
+        self._request_slots = threading.BoundedSemaphore(MAX_CONCURRENT)
+        super().__init__(*args, **kwargs)
+
+    def process_request(self, request: Any, client_address: Any) -> None:
+        if not self._request_slots.acquire(blocking=False):
+            request.close()
+            return
+        try:
+            super().process_request(request, client_address)
+        except Exception:
+            self._request_slots.release()
+            raise
+
+    def process_request_thread(self, request: Any, client_address: Any) -> None:
+        try:
+            super().process_request_thread(request, client_address)
+        finally:
+            self._request_slots.release()
 
 
 class _Handler(BaseHTTPRequestHandler):
     server_version = "HermesWidget/" + VERSION
     protocol_version = "HTTP/1.1"
+    timeout = REQUEST_TIMEOUT
 
     # -- response helpers ---------------------------------------------------
 
@@ -202,6 +225,21 @@ class _Handler(BaseHTTPRequestHandler):
         retry = {"Retry-After": "5"} if status in {429, 503} else None
         self._status = status
         self._error_code = code
+        if status >= 400 and self._kind in {"widget-events", "device", "device-instances", "device-attention"} and self._device_id:
+            try:
+                store.record_rejected_event(
+                    self._widget_id or "",
+                    self._device_id,
+                    self._event_name,
+                    method=self.command,
+                    path=urlsplit(self.path).path,
+                    status=status,
+                    code=code,
+                    detail="",
+                    request_id=self._request_id,
+                )
+            except Exception:
+                _log.debug("could not persist device rejection", exc_info=True)
         self._json(status, {"error": code, "detail": detail or code}, retry)
 
     def _not_modified(self, etag: str) -> None:
@@ -244,6 +282,9 @@ class _Handler(BaseHTTPRequestHandler):
         """
         if self._body is not _UNSET:
             return self._body  # type: ignore[return-value]
+        if self.headers.get("Transfer-Encoding"):
+            self.close_connection = True
+            raise _HttpError(400, "bad_request", "Transfer-Encoding is not supported")
         raw_length = self.headers.get("Content-Length")
         if raw_length is None:
             self._body = None
@@ -385,7 +426,10 @@ class _Handler(BaseHTTPRequestHandler):
         if not status:
             return
         # Only the routes where a missing row is a real question.
-        if self._kind not in {"widget-events", "device", "device-instances", "device-attention"}:
+        if self._kind not in {
+            "widget-events", "device", "device-instances", "device-attention",
+            "device-action-confirm",
+        }:
             return
         code = getattr(self, "_error_code", None) if status >= 400 else None
         _log.info(
@@ -399,25 +443,6 @@ class _Handler(BaseHTTPRequestHandler):
             code or "-",
             self._widget_id or "-",
         )
-        if status >= 400:
-            # Persist as well as log, so the trail survives a log rotation. The device id
-            # is the identity when we have one; otherwise the principal that was refused
-            # ("agent", "anonymous") is recorded, because "we do not know who" is itself
-            # the answer to "who was this?".
-            try:
-                store.record_rejected_event(
-                    self._widget_id or "",
-                    self._device_id or self._principal or "anonymous",
-                    self._event_name,
-                    method=self.command,
-                    path=urlsplit(self.path).path,
-                    status=status,
-                    code=code or "unknown",
-                    detail="",
-                    request_id=self._request_id,
-                )
-            except store.StoreError:
-                pass
 
     def _note_event(self, event: Any) -> None:
         """Remember the event name for the access line (never the payload)."""
@@ -444,6 +469,9 @@ class _Handler(BaseHTTPRequestHandler):
             return "device-instances", None
         if path == "/v1/device/attention":
             return "device-attention", None
+        match = re.fullmatch(r"/v1/device/action-intents/([^/]+)/confirm", path)
+        if match:
+            return "device-action-confirm", unquote(match.group(1))
         if path == "/v1/intents":
             return "intents", None
         if path.startswith("/v1/assets/"):
@@ -466,8 +494,6 @@ class _Handler(BaseHTTPRequestHandler):
                 return "publication", unquote(rest[: -len("/publication")])
             if rest.endswith("/events") and rest[: -len("/events")]:
                 return "widget-events", unquote(rest[: -len("/events")])
-            if rest and "/" not in rest:
-                return "widget", unquote(rest)
         return None
 
     _ALLOWED: dict[str, tuple[str, ...]] = {
@@ -480,14 +506,14 @@ class _Handler(BaseHTTPRequestHandler):
         "device": ("PATCH",),
         "device-instances": ("PUT",),
         "device-attention": ("PUT",),
+        "device-action-confirm": ("POST",),
         "intents": ("GET", "POST"),
         "settings": ("GET", "PUT"),
         "asset": ("GET", "HEAD"),
-        "publication": ("GET", "POST", "PUT"),
+        "publication": ("GET", "HEAD", "POST", "PUT"),
         "publication-ack": ("POST",),
         "history": ("GET",),
         "preview": ("POST",),
-        "widget": ("GET", "PUT"),
         "widget-events": ("POST",),
     }
 
@@ -532,7 +558,8 @@ class _Handler(BaseHTTPRequestHandler):
             return
         try:
             handler = getattr(self, "_" + kind.replace("-", "_"))
-            handler(widget_id)
+            with store.db():
+                handler(widget_id)
         except _HttpError as exc:
             self._error(exc.status, exc.code, exc.detail)
         except store.StoreError as exc:
@@ -540,6 +567,13 @@ class _Handler(BaseHTTPRequestHandler):
             self._error(mapped.status, mapped.code, mapped.detail)
         except (BrokenPipeError, ConnectionResetError):
             raise
+        except Exception:
+            _log.exception("request failed request_id=%s", self._request_id)
+            self._error(
+                500,
+                "internal_error",
+                f"request failed; reference {self._request_id}",
+            )
         finally:
             # A request that leaves no row must at least leave a line. Tokens are never
             # logged: the identity here is the device id, which is not a credential.
@@ -649,14 +683,15 @@ class _Handler(BaseHTTPRequestHandler):
         revision = publication.get("revision")
         if isinstance(revision, bool) or not isinstance(revision, int):
             raise _HttpError(503, "publication_unavailable", "stored publication revision is invalid")
-        if role == "device" and device_id:
+        if self.command == "GET" and role == "device" and device_id:
             store.record_publication_fetch(
                 widget_id,
                 device_id,
                 revision,
                 downloaded=publication.get("kind") == "text",
             )
-        etag = f'\"{publication["publicationId"]}\"'
+        canonical = json.dumps(publication, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+        etag = f'\"{hashlib.sha256(canonical.encode("utf-8")).hexdigest()}\"'
         if self._etag_matches(etag):
             self._not_modified(etag)
             return
@@ -710,11 +745,7 @@ class _Handler(BaseHTTPRequestHandler):
             raise _HttpError(404, "not_found", "asset id is required")
         metadata = store.get_asset(asset_id)
         etag = f'\"{metadata["sha256"]}\"'
-        if self._etag_matches(etag):
-            self._not_modified(etag)
-            return
-        metadata, data = store.read_asset(asset_id)
-        if role == "device" and device_id:
+        if self.command == "GET" and role == "device" and device_id:
             publication = store.publication_for_asset(asset_id)
             if publication is not None:
                 revision = publication.get("revision")
@@ -726,6 +757,10 @@ class _Handler(BaseHTTPRequestHandler):
                     revision,
                     asset_id,
                 )
+        if self._etag_matches(etag):
+            self._not_modified(etag)
+            return
+        metadata, data = store.read_asset(asset_id)
         self.send_response(200)
         self.send_header("Content-Type", metadata["mediaType"])
         self.send_header("Content-Length", str(len(data)))
@@ -759,43 +794,6 @@ class _Handler(BaseHTTPRequestHandler):
     def _widgets(self, _widget_id: str | None) -> None:
         self._authorize(allow_device=True)
         self._json(200, {"widgets": store.list_widgets()})
-
-    def _widget(self, widget_id: str | None) -> None:
-        self._authorize(allow_device=True)
-        if widget_id is None:
-            raise _HttpError(404, "not_found", "widget id is required")
-        if self.command == "PUT":
-            self._authorize(allow_device=False)
-            layout = self._read_json_body()
-            if not isinstance(layout, dict):
-                raise _HttpError(400, "invalid_layout", "layout must be a JSON object")
-            self._json(200, store.put_widget(widget_id, layout))
-            return
-        layout = store.get_widget(widget_id)
-        if layout is None:
-            self._error(404, "unknown_widget", f"no widget with id {widget_id!r}")
-            return
-        # The layout and publication channels are separate stores. Echo a pointer
-        # so a raw API consumer does not read a stale layout and conclude that a
-        # just-published revision was lost.
-        current = store.get_publication(widget_id)
-        if current is not None:
-            layout = {
-                **layout,
-                "publication": {
-                    "revision": current.get("revision"),
-                    "publishedAt": current.get("publishedAt"),
-                    "kind": current.get("kind"),
-                    "state": (
-                        "stale"
-                        if current.get("stale")
-                        else "expired"
-                        if current.get("expired")
-                        else "published"
-                    ),
-                },
-            }
-        self._json(200, layout)
 
     def _device_instances(self, _widget_id: str | None) -> None:
         role, device_id = self._authorize(allow_device=True)
@@ -870,67 +868,10 @@ class _Handler(BaseHTTPRequestHandler):
             if publication is None:
                 raise _HttpError(404, "unknown_publication", f"no publication for widget {widget_id!r}")
         else:
-            if not isinstance(raw_publication, dict):
-                raise _HttpError(400, "invalid_preview", "publication must be a JSON object")
-            content_source = raw_publication.get("content")
-            if isinstance(content_source, dict) and (
-                content_source.get("filePath") or content_source.get("file_path")
-            ) and not any(key in raw_publication for key in ("text", "svg", "file_path", "filePath")):
-                raw_publication = {
-                    **raw_publication,
-                    "filePath": content_source.get("filePath", content_source.get("file_path")),
-                }
-                raw_publication.pop("content", None)
-            if isinstance(raw_publication.get("content"), dict) and not any(
-                key in raw_publication for key in ("text", "svg", "file_path", "filePath")
-            ):
-                publication = {**raw_publication, "widgetId": widget_id}
-                raw_publication = None
-        if raw_publication is not None:
             try:
-                prepared = store.prepare_publication(
-                    title=raw_publication.get("title"),
-                    summary=raw_publication.get("summary"),
-                    text=raw_publication.get("text"),
-                    svg=raw_publication.get("svg"),
-                    file_path=raw_publication.get("file_path", raw_publication.get("filePath")),
-                    expires_at=raw_publication.get("expires_at", raw_publication.get("expiresAt")),
-                    ttl_seconds=raw_publication.get("ttl_seconds", raw_publication.get("ttlSeconds")),
-                    max_age_seconds=raw_publication.get("max_age_seconds", raw_publication.get("maxAgeSeconds")),
-                    priority=raw_publication.get("priority", "normal"),
-                    item_id=raw_publication.get("item_id", raw_publication.get("itemId")),
-                    actions=raw_publication.get("actions"),
-                )
+                publication = preview.build_preview_publication(raw_publication, widget_id)
             except Exception as exc:  # normalize publication errors to the HTTP contract
                 raise _HttpError(400, "invalid_publication", str(exc)) from exc
-            content: dict[str, Any]
-            if prepared.kind == "text":
-                content = {"type": "text", "mediaType": "text/plain; charset=utf-8", "text": prepared.text}
-            else:
-                assert prepared.asset is not None
-                content = {
-                    "type": "image", "mediaType": prepared.asset.media_type,
-                    "width": prepared.asset.width, "height": prepared.asset.height,
-                    "bytes": len(prepared.asset.data), "sha256": prepared.asset.sha256,
-                    # The preview endpoint accepts inline asset bytes only for this
-                    # one response; it never persists them.
-                    "data": base64.b64encode(prepared.asset.data).decode("ascii"),
-                }
-            publication = {
-                "version": store._publication_capabilities()["publicationVersion"],
-                "widgetId": widget_id,
-                "publicationId": "preview",
-                "revision": 0,
-                "kind": prepared.kind,
-                "title": prepared.title,
-                "summary": prepared.summary,
-                "publishedAt": store._now(),
-                "expiresAt": prepared.expires_at,
-                "priority": prepared.priority,
-                "itemId": prepared.item_id,
-                "actions": list(prepared.actions),
-                "content": content,
-            }
         inventory = store.list_widget_instances(widget_id)
         requested_sizes = body.get("sizes", body.get("sizeClasses"))
         try:
@@ -982,7 +923,6 @@ class _Handler(BaseHTTPRequestHandler):
             body.get("intentId", body.get("intent_id", "")),
             body.get("outcome", ""),
             result=body.get("result"),
-            confirmed=body.get("confirmed", False),
         )
         self._json(200, {"ok": True, "intent": result})
 
@@ -1026,6 +966,20 @@ class _Handler(BaseHTTPRequestHandler):
             raise _HttpError(400, "bad_request", "label, pushEndpoint, pushState, or client is required")
         self._json(200, updated)
 
+    def _device_action_confirm(self, intent_id: str | None) -> None:
+        role, device_id = self._authorize(allow_device=True)
+        if role != "device" or not device_id:
+            raise _HttpError(403, "device_required", "intent confirmation requires its paired device token")
+        if not intent_id:
+            raise _HttpError(404, "unknown_intent", "intent id is required")
+        body = self._read_json_body()
+        if body not in (None, {}):
+            raise _HttpError(400, "bad_request", "confirmation body must be empty")
+        self._json(200, {
+            "ok": True,
+            "intent": store.confirm_action_intent(intent_id, device_id),
+        })
+
     def _widget_events(self, widget_id: str | None) -> None:
         _role, device_id = self._authorize(allow_device=True)
         if widget_id is None:
@@ -1059,7 +1013,7 @@ class _Handler(BaseHTTPRequestHandler):
             body["payload"] = payload
         else:
             payload = None
-        if store.get_widget(widget_id) is None and store.get_publication(widget_id) is None:
+        if store.get_publication(widget_id) is None:
             raise _HttpError(404, "unknown_widget", f"no widget with id {widget_id!r}")
         if event == "request_update":
             if not device_id:
@@ -1072,15 +1026,16 @@ class _Handler(BaseHTTPRequestHandler):
             request = store.request_update(
                 widget_id, device_id, client_event_id, instance_id=instance_id
             )
+            should_trigger = bool(request.pop("_shouldTrigger", False))
             trigger = (
                 proactive.trigger_refresh()
-                if request.get("status") != "triggered"
+                if should_trigger
                 else {"triggered": False, "duplicate": True}
             )
-            if request.get("status") != "triggered" and not trigger.get("triggered"):
+            if should_trigger and not trigger.get("triggered"):
                 store.mark_update_request_triggered(request["requestId"], error=trigger.get("error"))
                 request = store.list_update_requests(widget_id, limit=1)[0]
-            elif request.get("status") != "triggered":
+            elif should_trigger:
                 request = store.mark_update_request_triggered(request["requestId"]) or request
             self._json(200, {
                 "ok": True,
@@ -1116,7 +1071,6 @@ class _Handler(BaseHTTPRequestHandler):
                 revision=body.get("revision"),
                 item_id=body.get("itemId", body.get("item_id")),
                 action_class=body.get("actionClass", body.get("action_class")),
-                confirm_on_device=body.get("confirmOnDevice", body.get("confirm_on_device", False)),
             )
             self._json(200, {"ok": True, **result})
             return
@@ -1166,7 +1120,16 @@ def run_server(
     quiet: bool = False,
 ) -> None:
     """Serve until interrupted; prints the listen URL unless quiet."""
+    retention.start_retention_job()
     httpd = make_server(host, port, certfile=certfile, keyfile=keyfile)
+    watch_stop = threading.Event()
+    watch_thread = threading.Thread(
+        target=_date_watch_loop,
+        args=(watch_stop,),
+        name="hermes-widget-date-watches",
+        daemon=True,
+    )
+    watch_thread.start()
     scheme = "https" if certfile else "http"
     url = f"{scheme}://{host}:{httpd.server_address[1]}"
     if not quiet:
@@ -1177,7 +1140,27 @@ def run_server(
     except KeyboardInterrupt:
         pass
     finally:
+        watch_stop.set()
+        watch_thread.join(timeout=WATCH_TICK_INTERVAL_SECONDS + 1)
         httpd.server_close()
+
+
+def _date_watch_loop(stop_event: threading.Event) -> None:
+    """Evaluate date watches and retry wakes once a minute."""
+    while not stop_event.is_set():
+        try:
+            fired = watches.tick_watches(condition_types={"date_reached"})
+            if fired:
+                _log.info("date watch tick results: %s", fired)
+        except Exception:
+            _log.warning("date watch ticker failed", exc_info=True)
+        try:
+            retried = store.retry_failed_nudges()
+            if retried:
+                _log.info("retried %d failed priority wake(s)", retried)
+        except Exception:
+            _log.warning("priority wake retry failed", exc_info=True)
+        stop_event.wait(WATCH_TICK_INTERVAL_SECONDS)
 
 
 if __name__ == "__main__":  # pragma: no cover - manual entry point

@@ -78,7 +78,6 @@
     <color name="app_state_layer_filled">#7662AD</color>       <!-- onPrimary @ 10% -->
     <color name="app_state_layer_tonal">#DACCF3</color>        <!-- onPrimaryContainer @ 10% -->
     <color name="app_state_layer_outlined">#EFE6F6</color>     <!-- primary @ 10% on surface -->
-    <color name="app_state_layer_field">#EAE3F1</color>        <!-- onSurface @ 10% -->
 
     <!-- Pairing indicator. Hue is ours; the contract's AA-on-surface values are reused so
          the widget and the app cannot drift apart. -->

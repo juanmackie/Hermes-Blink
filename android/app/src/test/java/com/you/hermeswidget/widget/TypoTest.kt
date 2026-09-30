@@ -1,15 +1,14 @@
 package com.you.hermeswidget.widget
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 /**
- * Locks the design tokens: what the v2 `style` / `color` / `alignment` fields mean.
- * Before Typo existed the renderer ignored all of them, so `title` and `caption` painted
+ * Locks the design tokens used by publication rendering.
+ * Before Typo existed the renderer ignored the style mapping, so `title` and `caption` painted
  * identically. A regression here is exactly that bug coming back.
  */
 class TypoTest {
@@ -82,59 +81,5 @@ class TypoTest {
         assertEquals(androidx.glance.text.TextAlign.End, Typo.textAlign("trailing"))
         assertEquals(androidx.glance.text.TextAlign.Start, Typo.textAlign("start"))
         assertEquals(androidx.glance.text.TextAlign.Start, Typo.textAlign(null))
-    }
-}
-
-/** The datetime rule: a layout binds an ISO datetime, the device shows a clock time. */
-class TimeFormatTest {
-
-    @Test
-    fun `iso datetimes become clock times`() {
-        assertEquals("09:30", TimeFormat.shortTime("2026-09-16T09:30:00Z"))
-        assertEquals("14:00", TimeFormat.shortTime("2026-09-16T14:00:00+02:00"))
-        assertEquals("09:30", TimeFormat.shortTime("2026-09-16T09:30:00"))
-    }
-
-    @Test
-    fun `a date with no time is left alone rather than invented`() {
-        assertEquals("2026-09-16", TimeFormat.shortTime("2026-09-16"))
-    }
-
-    @Test
-    fun `junk and absence both yield null`() {
-        assertNull(TimeFormat.shortTime(null))
-        assertNull(TimeFormat.shortTime(""))
-        assertNull(TimeFormat.epochMillis("not a date"))
-        assertNull(TimeFormat.epochMillis(null))
-    }
-
-    @Test
-    fun `epochMillis reads an offset datetime`() {
-        val expected = java.time.Instant.parse("2026-09-16T07:30:00Z").toEpochMilli()
-        assertEquals(expected, TimeFormat.epochMillis("2026-09-16T07:30:00Z"))
-    }
-}
-
-class LayoutStalenessTest {
-
-    private fun layout(ttl: Int?, updatedAt: String?) = WidgetLayout(
-        ttlSeconds = ttl,
-        updatedAt = updatedAt,
-        root = Node(type = "column"),
-    )
-
-    @Test
-    fun `older than ttl is stale`() {
-        val updated = TimeFormat.epochMillis("2026-09-16T07:30:00Z")!!
-        val fresh = layout(1800, "2026-09-16T07:30:00Z")
-        assertFalse(fresh.isStale(updated + 60_000))
-        assertTrue(fresh.isStale(updated + 3_600_000))
-    }
-
-    @Test
-    fun `no ttl or no timestamp never reports stale`() {
-        assertFalse(layout(null, "2026-09-16T07:30:00Z").isStale(Long.MAX_VALUE))
-        assertFalse(layout(1800, null).isStale(Long.MAX_VALUE))
-        assertFalse(layout(0, "2026-09-16T07:30:00Z").isStale(Long.MAX_VALUE))
     }
 }

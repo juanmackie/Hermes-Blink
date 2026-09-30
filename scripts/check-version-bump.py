@@ -56,7 +56,7 @@ def bump_base() -> str | None:
     Everything shipped after that bump is code the bump does not describe, which is the
     whole point of the check. Falls back to HEAD~1 when the bump is not in this history.
     """
-    build = "android/app/build.gradle.kts"
+    build = BUILD_FILE.as_posix()
     if not git("rev-parse", "--verify", "--quiet", "HEAD~1"):
         return None
     line = (REPO / build).read_text(encoding="utf-8")
@@ -101,7 +101,7 @@ def uncommitted_shipped_paths() -> list[str]:
 def bump_commit(version: int) -> str:
     """The commit that set this versionCode, or "" when it is not in this history."""
     return git(
-        "log", "-1", "--format=%H", "-S", f"versionCode = {version}", "--", BUILD_FILE
+        "log", "-1", "--format=%H", "-S", f"versionCode = {version}", "--", BUILD_FILE.as_posix()
     )
 
 
@@ -146,7 +146,7 @@ def main() -> int:
     base = resolved_base
 
     head_text = (REPO / BUILD_FILE).read_text(encoding="utf-8")
-    base_text = git("show", f"{base}:{BUILD_FILE}")
+    base_text = git("show", f"{base}:{BUILD_FILE.as_posix()}")
     head_code = version_code(head_text)
     if head_code is None:
         print(f"check-version-bump FAILED: no versionCode in {BUILD_FILE}")

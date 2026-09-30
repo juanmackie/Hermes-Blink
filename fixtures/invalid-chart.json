@@ -1,5 +1,0 @@
-{
-  "version": 2,
-  "widgetId": "hermes-brief",
-  "root": { "type": "column", "children": [{ "type": "chart", "chartType": "bar", "series": [1,2,3] }] }
-}

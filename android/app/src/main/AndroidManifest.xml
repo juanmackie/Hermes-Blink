@@ -9,7 +9,7 @@
     <application
         android:label="Hermes Widget"
         android:icon="@mipmap/ic_launcher"
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:usesCleartextTraffic="false"
         tools:replace="android:usesCleartextTraffic"
         android:theme="@style/AppTheme">
@@ -21,7 +21,7 @@
             </intent-filter>
         </activity>
 
-        <activity android:name=".SettingsActivity" android:exported="true" />
+        <activity android:name=".SettingsActivity" android:exported="false" />
         <activity android:name=".config.PairingActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />

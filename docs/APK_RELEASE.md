@@ -5,11 +5,11 @@ hardware testing. The requested personal release APK is not complete until it is
 owner's existing signing identity and verified. Never commit a keystore, signing passwords, or
 `android/signing.properties`.
 
-## Current local artifact
+## Latest recorded shipped artifact
 
-Regenerated from the tree, not carried forward: the numbers below are produced by
-`scripts/release-evidence.py` and verified in CI, because a release document that describes
-an earlier commit is worse than no document at all — it looks current.
+This is historical release evidence for the shipped 0.4.9 debug build. It is not a measurement
+of the current working tree. `scripts/release-evidence.py` checks that the recorded version and
+commit still belong to this repository's history.
 
 | Field | Value |
 | --- | --- |
@@ -23,9 +23,10 @@ an earlier commit is worse than no document at all — it looks current.
 | Signer | Android debug certificate; local testing only |
 
 0.4.9 is the Material 3 round and the first build with `com.google.android.material` in
-it: 7,279,075 → 9,750,534 bytes (+33.9%) against 0.4.8. Nothing here sets
-`isMinifyEnabled`, so that is the release cost too, not a debug-only one — see round 15 in
-`docs/APP_SURFACE.md`.
+it: 7,279,075 → 9,750,534 bytes (+33.9%) against 0.4.8. Current release builds enable R8 and
+resource shrinking. A current non-debuggable review build measured 3,297,454 bytes and a debug
+build measured 10,006,428 bytes; these are different variants and are not a direct before/after
+comparison. See [the Android UI notes](APP_UI.md#deliberate-limits-and-remaining-checks).
 
 ### Release evidence
 
@@ -34,9 +35,9 @@ it: 7,279,075 → 9,750,534 bytes (+33.9%) against 0.4.8. Nothing here sets
 | `0.4.9` (versionCode 13) | `0f25d7713639` | 9,750,534 bytes | `c36b13d479521c565b1d6bd28ace5b844ba1a9d35dc1f08204ea27c5b06f7404` |
 | `0.4.8` (versionCode 12) | `1b16bb6c5a51` | 7,279,099 bytes | `0191a3a5560d1e6164f496cbe8c48dedb40804d864e856bc228ce47eb9a86c40` |
 | `0.4.7` (versionCode 11) | `bf56f9e930b4` | 7,278,183 bytes | `bb53fa6e3e79933ffebb4aece0fb22084639347ce0422228de4fbe111b846f30` |
-| `0.4.6` (versionCode 10) | `076f56e512d6` | 7,278,191 bytes | `f03494c32a62747a400000000000000000000000000000000000000000000000` |
+| `0.4.6` (versionCode 10) | `076f56e512d6` | 7,278,191 bytes | unrecorded |
 | `0.4.5` (versionCode 9) | `822437668205` | 7,269,419 bytes | `b27fd03d060dec5317c3efb0ef72c96f6de97d9fc6816029517fcb18179c4fc4` |
-| `0.4.4` (versionCode 8) | `01b5006` | 7,269,591 bytes | `1aacd52f103cd623999999999999999999999999999999999999999999999999` |
+| `0.4.4` (versionCode 8) | `01b5006` | 7,269,591 bytes | unrecorded |
 | `0.3.0` (versionCode 3) | `e1a9cf8` | 7,229,478 bytes | `7663fa98a56f006e23e2219811b99fb46ecde948fa53550e878e44be9f455b79` |
 | `0.2.0` (versionCode 2) | `7abc096` | 7,182,371 bytes | `895452e10b6e836982f58a051ecb5ce95c0e424a6a808a2647d2c6b56fccd0d4` |
 
@@ -44,9 +45,10 @@ These rules this table now enforces, after four different APKs shipped as `versi
 and one device ended up holding a binary whose `versionCode` matched a release that was
 never built:
 
-1. **Every shipped-app change bumps `versionCode`.** `scripts/check-version-bump.py` fails
-   the build when `android/app/src/main/**` changes without one. `app_build_code = 2`
-   cannot answer "which build is on this phone?".
+1. **A release tag gets a new `versionCode`.** App changes can land during normal
+   development; the release commit increments the code, and `scripts/check-version-bump.py`
+   checks the tag window. `app_build_code` identifies the installed APK independently of
+   the product version listed in `CHANGELOG.md`.
 2. **The commit travels with the app.** `BuildConfig.COMMIT_SHA` is stamped at build time and
    reported as `X-Hermes-App-Sha`; Diagnostics shows it, `widget_status` stores it, and
    `delivery[].renderedBy.appBuildSha` names the build that drew a revision.
@@ -64,7 +66,7 @@ never built:
 # Regenerate this section (and the row above) from a clean build:
 cd android && ./gradlew clean assembleDebug && cd ..
 python3 scripts/release-evidence.py --apk android/app/build/outputs/apk/debug/app-debug.apk
-# What CI runs:
+# Release-tag CI runs the version bump gate; normal development CI does not require a release:
 python3 scripts/check-version-bump.py
 python3 scripts/release-evidence.py --check docs/APK_RELEASE.md
 ```

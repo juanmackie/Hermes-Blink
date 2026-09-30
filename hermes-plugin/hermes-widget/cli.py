@@ -11,6 +11,7 @@ import contextlib
 import json
 import os
 import platform
+import re
 import shutil
 import socket
 import subprocess
@@ -32,7 +33,6 @@ _WILDCARD_HOSTS = frozenset((
     chr(58) * 2,
     chr(42),
 ))
-_PLACEHOLDER_TEXT = "Your Hermes agent is connected. Ask it to update this widget."
 # allowed structured progress states (B/C)
 _ALLOWED_STATES = frozenset({"needs_user_action", "starting", "awaiting_pairing", "ready", "degraded"})
 
@@ -40,10 +40,9 @@ _ALLOWED_STATES = frozenset({"needs_user_action", "starting", "awaiting_pairing"
 def _resolve_input_file(value: Any, *, label: str) -> Path:
     """Resolve a user-supplied JSON path from cwd, the checkout, or Hermes home.
 
-    Fixture paths such as ``fixtures/golden/large-brief.json`` are common in the
-    contract docs, but an installed plugin is not necessarily running from the
-    repository root.  The resolver keeps that ergonomic path working without
-    hiding a missing file behind a raw OSError.
+    Relative publication JSON paths can come from the current directory, the
+    repository, or Hermes home. The resolver keeps those paths usable in an
+    installed plugin without hiding a missing file behind a raw OSError.
     """
     if not isinstance(value, (str, os.PathLike)) or not str(value).strip():
         raise FileNotFoundError(f"{label} path is required")
@@ -75,24 +74,6 @@ def _resolve_input_file(value: Any, *, label: str) -> Path:
     raise FileNotFoundError(
         f"{label} not found: {raw} (searched: {', '.join(searched)})"
     )
-
-
-def _placeholder_layout(widget_id: str) -> dict[str, Any]:
-    """A valid v2 first layout so a freshly paired device shows something useful."""
-    return {
-        "version": 2,
-        "widgetId": widget_id,
-        "title": "Hermes",
-        "updatedAt": "2026-01-01T00:00:00Z",
-        "root": {
-            "type": "column",
-            "spacing": 8,
-            "children": [
-                {"type": "text", "value": "Hermes", "style": "title"},
-                {"type": "text", "value": _PLACEHOLDER_TEXT, "style": "body"},
-            ],
-        },
-    }
 
 
 def _probe_host(bind_host: str) -> str:
@@ -263,7 +244,7 @@ def add_parser(parser: Any) -> None:
     on it would raise AttributeError and silently abort plugin CLI discovery.
     """
     parser.description = (
-        "Manage the Hermes home-screen widget: serve layouts over HTTP, pair "
+    "Manage the Hermes home-screen widget: serve publications over HTTP, pair "
         "devices, and install the background refresh routine."
     )
     commands = parser.add_subparsers(dest="widget_command")
@@ -274,14 +255,6 @@ def add_parser(parser: Any) -> None:
     serve.add_argument("--certfile", default=None, help="TLS certificate for HTTPS.")
     serve.add_argument("--keyfile", default=None, help="TLS private key for HTTPS.")
     serve.add_argument("--quiet", action="store_true", help="Do not print the listen URL.")
-
-    setup = commands.add_parser("setup", help="Create the agent token, skill, and a pairing code.")
-    setup.add_argument("--host", default=None, help="Interface to bind (default: saved config or 127.0.0.1).")
-    setup.add_argument("--port", type=int, default=None, help="Port to bind (default: saved config or 8788).")
-    setup.add_argument("--server-url", default=None, help="Private HTTPS URL the phone will use (printed for manual entry).")
-    setup.add_argument("--widget-id", default=store.DEFAULT_WIDGET_ID)
-    setup.add_argument("--routine", action="store_true", help="Also install the background refresh job.")
-    setup.add_argument("--schedule", default=proactive.DEFAULT_SCHEDULE)
 
     commands.add_parser("code", help="Mint a pairing code for a new device.")
 
@@ -318,10 +291,8 @@ def add_parser(parser: Any) -> None:
     doc = commands.add_parser("doctor", help="Run diagnostics with redaction; report protocol metadata.")
     doc.add_argument("--json", action="store_true", help="Machine-readable JSON.")
 
-    pub = commands.add_parser("publish", help="Publish a brief layout to the widget.")
+    pub = commands.add_parser("publish", help="Publish a text, SVG, or raster update to the widget.")
     pub.add_argument("--widget-id", default=store.DEFAULT_WIDGET_ID)
-    pub.add_argument("--layout-file", default=None, help="Path to layout JSON file (legacy mode).")
-    pub.add_argument("--layout-json", default=None, help="Inline layout JSON (legacy mode).")
     pub.add_argument("--publication-file", default=None, help="JSON publication to publish (title/summary plus one source).")
     pub.add_argument("--title", default=None, help="Publication title.")
     pub.add_argument("--summary", default=None, help="Publication accessible summary.")
@@ -335,9 +306,11 @@ def add_parser(parser: Any) -> None:
     pub.add_argument("--json", action="store_true")
 
     commands.add_parser("restart", help="Restart the hermes-widget systemd user service.")
-    commands.add_parser("upgrade", help="Upgrade the plugin (git pull / reinstall) and verify health.")
+    commands.add_parser("upgrade", help="Update this plugin through Hermes and verify health.")
     commands.add_parser("rollback", help="Rollback to previous version (restore last backup).")
-    uninst = commands.add_parser("uninstall", help="Remove widget data and service.")
+    uninst = commands.add_parser(
+        "uninstall", help="Remove the widget service, hook, routine, skill, and optionally data."
+    )
     uninst.add_argument("--keep-data", action="store_true", help="Keep DB and pairing state.")
     uninst.add_argument("--yes", action="store_true", help="Skip confirmation.")
 
@@ -345,10 +318,9 @@ def add_parser(parser: Any) -> None:
 
     prev = commands.add_parser(
         "preview",
-        help="Render a layout JSON file to an HTML preview (no device needed).",
+        help="Render a proposed or current publication preview (no device needed).",
     )
-    prev.add_argument("layout_file", nargs="?", help="Path to a v2 layout JSON file (legacy HTML mode).")
-    prev.add_argument("--out", default=None, help="Output HTML path or PNG directory; with --json, PNGs are still written when set.")
+    prev.add_argument("--out", default=None, help="Output PNG directory; with --json, PNGs are still written when set.")
     prev.add_argument("--json", action="store_true", help="Print JSON; publication PNGs are written when --out is also set.")
     prev.add_argument("--widget-id", default=store.DEFAULT_WIDGET_ID, help="Widget id for publication preview.")
     prev.add_argument("--sizes", default=None, help="Comma-separated publication sizes, e.g. 2x2,4x2,4x4.")
@@ -363,7 +335,6 @@ def dispatch(args: Any) -> int:
     """Handler installed as args.func by the Hermes CLI."""
     handlers = {
         "serve": _serve,
-        "setup": _setup,
         "up": _up,
         "code": _code,
         "pair": _pair,
@@ -392,43 +363,13 @@ def dispatch(args: Any) -> int:
 
 
 def _preview(args: Any) -> int:
-    """Render either the legacy layout HTML or exact publication PNG previews."""
+    """Render exact publication PNG previews."""
     try:
         from . import preview
-        from .validate import ValidationError, inspect_layout
     except ImportError:  # pragma: no cover - direct import from tests/scripts
         import preview  # type: ignore
-        from validate import ValidationError, inspect_layout  # type: ignore
 
-    # Publication mode is selected by --sizes/--publication-file, or explicitly
-    # by a JSON file containing a publication rather than a v2 layout.
-    publication_mode = bool(getattr(args, "sizes", None) or getattr(args, "publication_file", None))
     source_path = getattr(args, "publication_file", None)
-    if not publication_mode and not source_path and getattr(args, "layout_file", None):
-        try:
-            source = _resolve_input_file(args.layout_file, label="layout file")
-        except FileNotFoundError as exc:
-            print(str(exc))
-            return 1
-        try:
-            layout = json.loads(source.read_text(encoding="utf-8"))
-        except ValueError as exc:
-            print(f"{source} is not valid JSON: {exc}")
-            return 1
-        try:
-            report = inspect_layout(layout)
-        except ValidationError as exc:
-            print(f"invalid layout: {exc}")
-            return 1
-        if getattr(args, "json", False):
-            print(json.dumps(report, indent=2, sort_keys=True))
-            return 0
-        out = preview.preview_file(source, out=args.out)
-        print(f"preview written to {out}")
-        for warning in report["warnings"]:
-            print(f"  warning {warning['code']}: {warning['detail']}")
-        return 0
-
     widget_id = getattr(args, "widget_id", None) or store.DEFAULT_WIDGET_ID
     proposed = None
     if source_path:
@@ -453,44 +394,7 @@ def _preview(args: Any) -> int:
                 print(f"no publication for widget {widget_id!r}")
                 return 1
         else:
-            content_source = proposed.get("content")
-            if isinstance(content_source, dict) and not any(
-                key in proposed for key in ("text", "svg", "file_path", "filePath")
-            ):
-                if content_source.get("filePath") or content_source.get("file_path"):
-                    proposed = {**proposed, "filePath": content_source.get("filePath", content_source.get("file_path"))}
-                    proposed.pop("content", None)
-                else:
-                    publication = {**proposed, "widgetId": widget_id}
-            if publication is None:
-                prepared = store.prepare_publication(
-                    title=proposed.get("title"), summary=proposed.get("summary"),
-                    text=proposed.get("text"), svg=proposed.get("svg"),
-                    file_path=proposed.get("file_path", proposed.get("filePath")),
-                    expires_at=proposed.get("expires_at", proposed.get("expiresAt")),
-                    ttl_seconds=proposed.get("ttl_seconds", proposed.get("ttlSeconds")),
-                    max_age_seconds=proposed.get("max_age_seconds", proposed.get("maxAgeSeconds")),
-                    priority=proposed.get("priority", "normal"),
-                    item_id=proposed.get("item_id", proposed.get("itemId")),
-                    actions=proposed.get("actions"),
-                )
-                if prepared.kind == "text":
-                    content = {"type": "text", "mediaType": "text/plain; charset=utf-8", "text": prepared.text}
-                else:
-                    assert prepared.asset is not None
-                    content = {
-                        "type": "image", "mediaType": prepared.asset.media_type,
-                        "width": prepared.asset.width, "height": prepared.asset.height,
-                        "bytes": len(prepared.asset.data), "sha256": prepared.asset.sha256,
-                        "data": base64.b64encode(prepared.asset.data).decode("ascii"),
-                    }
-                publication = {
-                    "version": 1, "widgetId": widget_id, "publicationId": "preview", "revision": 0,
-                    "kind": prepared.kind, "title": prepared.title, "summary": prepared.summary,
-                    "publishedAt": store._now(), "expiresAt": prepared.expires_at,
-                    "priority": prepared.priority, "itemId": prepared.item_id,
-                    "actions": list(prepared.actions), "content": content,
-                }
+            publication = preview.build_preview_publication(proposed, widget_id)
         rendered = preview.render_publication_previews(
             publication,
             sizes=getattr(args, "sizes", None),
@@ -549,61 +453,6 @@ def _serve(args: Any) -> int:
         quiet=args.quiet,
     )
     return 0
-
-
-def _setup(args: Any) -> int:
-    supported, reason = _check_environment()
-    if not supported:
-        print(f"Unsupported environment: {reason}")
-        print("Aborting before any changes. Install on Ubuntu 24.04 LTS or WSL2 with Ubuntu 24.04.")
-        return 2
-    try:
-        host, port, _saved = proactive.resolve_server_binding(args.host, args.port)
-        raw_server_url = getattr(args, "server_url", None)
-        server_url = _valid_server_url(raw_server_url)
-        if raw_server_url and server_url is None:
-            print("Invalid --server-url: enter a private HTTPS URL the phone can reach (not loopback).")
-            return 2
-    except proactive.ServerConfigError as exc:
-        print(f"Invalid widget server config: {exc}")
-        print("Fix or remove the saved server.json, then retry.")
-        return 2
-    store.get_agent_token()
-    skill_path = proactive.install_skill_file()
-    hook_path = proactive.install_startup_hook()
-    config_path = proactive.write_server_config(args.host, args.port)
-    widget_id = args.widget_id or store.DEFAULT_WIDGET_ID
-    if store.get_widget(widget_id) is None:
-        store.put_widget(widget_id, _placeholder_layout(widget_id))
-    pairing = store.get_or_mint_pairing_code()
-    _ensure_systemd_service(host, port)
-
-    print()
-    print("Hermes widget setup complete")
-    print("----------------------------")
-    print(f"Widget id:  {widget_id}")
-    print(f"Data dir:   {store.data_dir()}")
-    print(f"Skill:      {skill_path}")
-    print(f"Hook:       {hook_path}")
-    print(f"Config:     {config_path}")
-    print()
-    print("1. Start or restart the server to apply this binding:")
-    print(f"     hermes widget serve --host {host} --port {port}")
-    print()
-    print("2. Publish the server through a private HTTPS proxy (for example Tailscale Serve):")
-    print(f"     tailscale serve --bg --https={port} tcp://{_probe_host(host)}:{port}")
-    print("   Do not expose the raw widget port publicly.")
-    print()
-    print("3. On the phone, open Hermes Widget > Pair and enter:")
-    print(f"     Server URL:   {server_url or '<your private HTTPS proxy URL>'}")
-    print(f"     Pairing code: {pairing['code']}   (expires {pairing['expiresAt']})")
-    print("   The code is short-lived; never enter the agent token on the phone.")
-    print()
-    if args.routine:
-        _install_routine_or_report(args.schedule, widget_id)
-    return 0
-
-
 def _up(args: Any) -> int:
     """Deterministic, resumable, idempotent setup (B)."""
     supported, reason = _check_environment()
@@ -688,8 +537,7 @@ def _up(args: Any) -> int:
 
     # 4. widget (idempotent: upsert)
     widget_id = args.widget_id or store.DEFAULT_WIDGET_ID
-    if store.get_widget(widget_id) is None:
-        store.put_widget(widget_id, _placeholder_layout(widget_id))
+    store.ensure_widget(widget_id)
     steps.append({"step": "widget", "ok": True, "widget_id": widget_id})
 
     # 4. systemd service (idempotent: no duplicate units)
@@ -716,7 +564,7 @@ def _up(args: Any) -> int:
     running = _running_binding()
     restart_required = _restart_required((host, port), prior, running)
     token_present = store.get_agent_token(create=False) is not None
-    widget_present = store.get_widget(widget_id) is not None
+    widget_present = widget_id in store.list_widgets()
     device_count = len(store.list_devices())
     state = _derive_state(
         token_present=token_present,
@@ -747,12 +595,6 @@ def _up(args: Any) -> int:
         "listening": listening,
         "host": host,
         "port": port,
-        "configuredHost": host,
-        "configuredPort": port,
-        "configured_host": host,
-        "configured_port": port,
-        "probeHost": probe_host,
-        "probePort": port,
         "probe_host": probe_host,
         "probe_port": port,
         "restart_required": restart_required,
@@ -867,7 +709,7 @@ def _status(args: Any) -> int:
     running = _running_binding()
     restart_required = _restart_required((host, port), None, running)
     widget_id = store.DEFAULT_WIDGET_ID
-    widget_present = store.get_widget(widget_id) is not None
+    widget_present = widget_id in store.list_widgets()
     try:
         publication = store.publication_status(widget_id)
     except store.StoreError:
@@ -895,15 +737,10 @@ def _status(args: Any) -> int:
             "routine": routine_ok,
             "port": port,
             "host": host,
-            "configuredHost": host,
-            "configuredPort": port,
-            "configured_host": host,
-            "configured_port": port,
-            "probeHost": probe_host,
-            "probePort": port,
+            # host/port are the configured bind; probe_host/port identify the
+            # address used to test it when the configured bind is wildcard.
             "probe_host": probe_host,
             "probe_port": port,
-            "restartRequired": restart_required,
             "restart_required": restart_required,
             "publicationState": publication.get("state"),
             "stale": publication.get("stale", False),
@@ -1078,8 +915,8 @@ def _doctor(args: Any) -> int:
     payload = {
         "ok": True,
         "state": _derive_state(token_present=token_present, widget_present=bool(widgets), listening=listening, device_count=len(devices), routine_ok=routine_ok),
-        "protocol": {"transport_version": "v1", "layout_contract": "v2", "server_version": server_version},
-        "capabilities": ["hermes-widget.v2", "pairing-code", "6h-brief"],
+        "protocol": {"transport_version": "v1", "server_version": server_version},
+        "capabilities": ["hermes-widget.publication.v1", "pairing-code", "6h-brief"],
         "dataDir": data_dir,
         "database": db_path,
         "token_present": token_present,
@@ -1109,6 +946,9 @@ def _publish(args: Any) -> int:
         getattr(args, name, None) is not None
         for name in ("publication_file", "title", "summary", "text", "svg", "file_path", "actions")
     ) or getattr(args, "max_age_seconds", None) is not None or getattr(args, "item_id", None) is not None
+    if not publication_mode:
+        print("publish requires publication content; provide --title, --summary, and one source")
+        return 2
     if publication_mode:
         payload: dict[str, Any] = {}
         publication_file = getattr(args, "publication_file", None)
@@ -1163,48 +1003,6 @@ def _publish(args: Any) -> int:
             print(f"Published {widget_id} revision {result.get('revision')} ({result.get('priority', 'normal')})")
         return 0
 
-    layout_json = getattr(args, "layout_json", None)
-    layout_file = getattr(args, "layout_file", None)
-    payload: dict[str, Any] | None = None
-    if layout_json:
-        try:
-            payload = json.loads(layout_json) if isinstance(layout_json, str) else layout_json
-        except Exception as exc:
-            err = {"error": "invalid_layout", "detail": _redact(str(exc))}
-            print(json.dumps(err, indent=2) if getattr(args, "json", False) else _redact(f"publish failed: {exc}"))
-            return 1
-    elif layout_file:
-        try:
-            source = _resolve_input_file(layout_file, label="layout file")
-            payload = json.loads(source.read_text(encoding="utf-8"))
-        except Exception as exc:
-            err = {"error": "invalid_layout", "detail": _redact(str(exc))}
-            print(json.dumps(err, indent=2) if getattr(args, "json", False) else _redact(f"publish failed: {exc}"))
-            return 1
-    else:
-        payload = _placeholder_layout(widget_id)
-    if not isinstance(payload, dict):
-        err = {"error": "invalid_layout", "detail": "layout must be a JSON object"}
-        print(json.dumps(err, indent=2) if getattr(args, "json", False) else _redact(err["detail"]))
-        return 1
-    try:
-        result = store.put_widget(widget_id, payload)
-    except store.StoreError as exc:
-        err = {"error": exc.code, "detail": _redact(str(exc))}
-        print(json.dumps(err, indent=2) if getattr(args, "json", False) else _redact(str(exc)))
-        return 1
-    if getattr(args, "json", False):
-        print(json.dumps({"ok": True, **result}, indent=2))
-    else:
-        print(
-            f"Stored legacy layout {widget_id} (scope=legacy_layout, publicationCreated=false) "
-            f"at {result.get('storedAt')}"
-        )
-        for warning in result.get("warnings", []):
-            print(f"  warning {warning.get('code')}: {warning.get('detail')}")
-    return 0
-
-
 def _restart(_args: Any) -> int:
     svc = Path.home() / ".config" / "systemd" / "user" / "hermes-widget.service"
     if svc.is_file() and shutil.which("systemctl"):
@@ -1220,35 +1018,53 @@ def _restart(_args: Any) -> int:
 
 
 def _upgrade(_args: Any) -> int:
-    # Fresh clone builds handled by CI; upgrade is idempotent pull/reinstall stub with health check.
-    # It takes a DB backup first so `rollback` has a real restore point: this is the only
-    # command that can replace the database, and rollback restores the newest .bak.
+    """Update the installed plugin via Hermes after making a database restore point."""
+    hermes = os.environ.get("HERMES_BIN") or shutil.which("hermes")
+    if not hermes:
+        print("Hermes executable not found; run `hermes plugins update hermes-widget` from the host.")
+        return 1
     try:
         backup = store.backup_db()
+        update = subprocess.run(
+            [hermes, "plugins", "update", "hermes-widget"],
+            check=False,
+            timeout=600,
+        )
+        if update.returncode != 0:
+            print(
+                "Hermes plugin update failed "
+                f"(exit {update.returncode}); database backup is {backup.name if backup else 'unavailable'}."
+            )
+            return 1
         widgets = store.list_widgets()
         token_present = store.get_agent_token(create=False) is not None
         health = {
             "ok": True,
+            "plugin_updated": True,
             "widgets": widgets,
             "token_present": token_present,
             "backup": backup.name if backup else None,
+            "restart_required": True,
         }
         print(json.dumps(health, indent=2))
         return 0
     except Exception as exc:
-        print(_redact(str(exc)))
+        print(_redact(f"plugin update failed: {exc}"))
         return 1
 
 
 def _rollback(_args: Any) -> int:
-    # Restore last backup if present; otherwise report preserved device rows
+    # Replacing a live SQLite database while the server has open connections is unsafe.
     try:
+        host, port, _saved = proactive.resolve_server_binding(None, None)
+        if _port_listening(port, host=_probe_host(host)):
+            print("Stop the widget server before rolling back its database.")
+            return 1
         data_dir = store.data_dir()
         backups = sorted(data_dir.glob("widget.db.bak.*"))
         if backups:
             latest = backups[-1]
-            import shutil
-            shutil.copy2(str(latest), str(store.db_path()))
+            store.restore_db(latest)
             print(f"Rolled back to {latest.name}")
         else:
             print("No backup found; device rows preserved.")
@@ -1262,22 +1078,90 @@ def _rollback(_args: Any) -> int:
 
 def _uninstall(args: Any) -> int:
     keep = getattr(args, "keep_data", False)
+    yes = getattr(args, "yes", False)
+    if not keep and not yes:
+        if not sys.stdin.isatty():
+            print("Data removal needs confirmation; rerun with --yes or use --keep-data.")
+            return 1
+        try:
+            answer = input("Remove Hermes widget data, service, skill, hook, and routine? [y/N] ")
+        except EOFError:
+            answer = ""
+        if answer.strip().lower() not in {"y", "yes"}:
+            print("Uninstall cancelled.")
+            return 1
+
     svc = Path.home() / ".config" / "systemd" / "user" / "hermes-widget.service"
     if svc.is_file():
-        with contextlib.suppress(OSError):
+        systemctl = shutil.which("systemctl")
+        if systemctl:
+            try:
+                stopped = subprocess.run(
+                    [systemctl, "--user", "disable", "--now", "hermes-widget.service"],
+                    check=False,
+                    timeout=20,
+                )
+            except (OSError, subprocess.SubprocessError) as exc:
+                print(_redact(f"Could not stop widget service: {exc}"))
+                return 1
+            if stopped.returncode != 0:
+                print("Could not stop and disable hermes-widget.service; no data was removed.")
+                return 1
+        try:
             svc.unlink()
+        except OSError as exc:
+            print(_redact(f"Could not remove service file: {exc}"))
+            return 1
+        if systemctl:
+            with contextlib.suppress(OSError, subprocess.SubprocessError):
+                subprocess.run([systemctl, "--user", "daemon-reload"], check=False, timeout=10)
+
+    try:
+        host, port, _saved = proactive.resolve_server_binding(None, None)
+    except proactive.ServerConfigError as exc:
+        print(_redact(f"Cannot verify server state: {exc}"))
+        return 1
+    if _port_listening(port, host=_probe_host(host)):
+        print("Widget server is still serving; stop the gateway or manual server before uninstalling.")
+        return 1
+
+    try:
+        proactive.remove_routine()
+        proactive.remove_startup_hook()
+        proactive.remove_skill_file()
+    except Exception as exc:
+        print(_redact(f"Could not remove a widget integration: {exc}"))
+        return 1
+
+    removed = 0
     if not keep:
         try:
-            d = store.data_dir()
-            # Do not delete entire Hermes home; only widget db + token if isolated
-            for name in ["widget.db", "widget.db-wal", "widget.db-shm", "agent_token"]:
-                p = d / name
-                if p.is_file():
-                    p.unlink()
+            data = store.data_dir()
+            targets = [
+                data / "widget.db", data / "widget.db-wal", data / "widget.db-shm",
+                data / "agent_token", data / "server-process.json", data / "server-launch.pid",
+                proactive.server_config_path(),
+            ]
+            targets.extend(data.glob("widget.db.bak.*"))
+            for target in dict.fromkeys(targets):
+                if target.is_file():
+                    target.unlink()
+                    removed += 1
+            assets = data / "assets"
+            if assets.is_dir():
+                for target in assets.iterdir():
+                    if target.is_file() and re.fullmatch(r"asset_[0-9a-f]{24}", target.name):
+                        target.unlink()
+                        removed += 1
+                with contextlib.suppress(OSError):
+                    assets.rmdir()
         except Exception as exc:
             print(_redact(str(exc)))
             return 1
-    print("Uninstalled." + (" (kept data)" if keep else ""))
+    print(
+        "Uninstalled."
+        + (" (kept widget data)" if keep else f" Removed {removed} widget data file(s).")
+    )
     return 0
 
 

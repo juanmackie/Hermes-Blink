@@ -8,6 +8,7 @@ import io
 import json
 import os
 import shutil
+import sqlite3
 import sys
 import tempfile
 import threading
@@ -46,6 +47,7 @@ class PublicationContract(unittest.TestCase):
     def setUpClass(cls):
         _load_plugin()
         cls.store = importlib.import_module("hermes_plugins.hermes_widget.store")
+        cls.telemetry = importlib.import_module("hermes_plugins.hermes_widget.telemetry")
         cls.publication = importlib.import_module("hermes_plugins.hermes_widget.publication")
         cls.tools = importlib.import_module("hermes_plugins.hermes_widget.tools")
         cls.schemas = importlib.import_module("hermes_plugins.hermes_widget.schemas")
@@ -245,7 +247,8 @@ class PublicationContract(unittest.TestCase):
         # The phone's Request update action records a row the routine has to notice.
         # Without this the tap wakes the agent and it no-ops as an ambient refresh,
         # so the user who asked for a fresher brief gets silence.
-        self.assertIn("updateRequests", prompt)
+        self.assertIn("consume_update_requests=true", prompt)
+        self.assertIn("newlyConsumedUpdateRequests", prompt)
         self.assertIn("Request update", prompt)
         # A waiting request is a reason to publish, not a licence to invent content.
         self.assertIn("publish what you already know now", prompt)
@@ -257,7 +260,8 @@ class PublicationContract(unittest.TestCase):
         guidance = plugin._system_prompt_section({})
         # The in-session section is the only always-present trigger, so a mid-conversation
         # poke has to be covered here as well as in the unattended routine prompt.
-        self.assertIn("updateRequests", guidance)
+        self.assertIn("consume_update_requests=true", guidance)
+        self.assertIn("newlyConsumedUpdateRequests", guidance)
         self.assertIn("Request update", guidance)
         self.assertLessEqual(len(guidance), 1800)
 
@@ -382,7 +386,7 @@ class PublicationContract(unittest.TestCase):
     def test_svg_subset_and_rejections(self):
         valid = (
             '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120">'
-            '<title>Chart</title><path d="M0 100 L240 20" stroke="#000" fill="none"/>'
+            '<title>Profile: Metadata:</title><path d="M0 100 L240 20" stroke="#000" fill="none"/>'
             "</svg>"
         )
         result = self.store.put_publication(
@@ -403,6 +407,39 @@ class PublicationContract(unittest.TestCase):
                 self.store.put_publication(
                     "hermes-brief", title="Bad", summary="Unsafe", svg=bad
                 )
+
+    def test_pairing_code_is_consumed_once_under_concurrent_redemption(self):
+        code = self.store.mint_pairing_code()["code"]
+        barrier = threading.Barrier(2)
+        results = []
+
+        def redeem(label):
+            barrier.wait()
+            results.append(self.store.register_device(code, label))
+
+        workers = [threading.Thread(target=redeem, args=(f"device-{i}",)) for i in range(2)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join(timeout=5)
+
+        self.assertTrue(all(not worker.is_alive() for worker in workers))
+        self.assertEqual(sum(result is not None for result in results), 1)
+
+    def test_event_since_pagination_keeps_oldest_unseen_events(self):
+        times = ["2026-01-01T00:00:01Z", "2026-01-01T00:00:02Z"]
+        with patch.object(self.telemetry, "_now", side_effect=times):
+            self.store.post_event("event-page", "device", "tap", {"n": 1})
+            self.store.post_event("event-page", "device", "tap", {"n": 2})
+
+        first_page = self.store.get_events(
+            since="2026-01-01T00:00:00Z", widget_id="event-page", limit=1
+        )
+        self.assertEqual(first_page[0]["payload"]["n"], 1)
+        next_page = self.store.get_events(
+            since=first_page[0]["createdAt"], widget_id="event-page", limit=1
+        )
+        self.assertEqual(next_page[0]["payload"]["n"], 2)
 
     def test_raster_validation_uses_magic_dimensions_and_local_file(self):
         def chunk(kind: bytes, data: bytes) -> bytes:
@@ -475,20 +512,72 @@ class PublicationContract(unittest.TestCase):
         self.assertEqual(status, 200, published)
         asset_id = published["content"]["assetId"]
 
+        # HEAD must not claim a fetch, while an authenticated conditional GET
+        # must still create the fetch receipt even when the body is a 304.
+        self.assertEqual(
+            self.request("HEAD", "/v1/widgets/hermes-brief/publication", token=device)[0], 200
+        )
+        conn = self.store._connect()
+        try:
+            self.assertIsNone(conn.execute(
+                "SELECT 1 FROM publication_fetches WHERE widget_id=? AND device_id=? AND revision=?",
+                ("hermes-brief", self.store.device_for_token(device)["deviceId"], published["revision"]),
+            ).fetchone())
+        finally:
+            conn.close()
+        _, agent_headers, _, _ = self.request(
+            "GET", "/v1/widgets/hermes-brief/publication", token=self.agent_token
+        )
+        self.assertEqual(
+            self.request(
+                "GET", "/v1/widgets/hermes-brief/publication", token=device,
+                headers={"If-None-Match": agent_headers["ETag"]},
+            )[0],
+            304,
+        )
+        conn = self.store._connect()
+        try:
+            fetched = conn.execute(
+                "SELECT downloaded_at FROM publication_fetches WHERE widget_id=? AND device_id=? AND revision=?",
+                ("hermes-brief", self.store.device_for_token(device)["deviceId"], published["revision"]),
+            ).fetchone()
+            self.assertIsNotNone(fetched)
+            self.assertIsNone(fetched["downloaded_at"])
+        finally:
+            conn.close()
+
         status, headers, fetched, _ = self.request(
             "GET", "/v1/widgets/hermes-brief/publication", token=device
         )
         self.assertEqual(status, 200, fetched)
-        etag = headers["ETag"]
+        self.assertEqual(
+            self.request("HEAD", f"/v1/assets/{asset_id}", token=device)[0], 200
+        )
+        conn = self.store._connect()
+        try:
+            fetch = conn.execute(
+                "SELECT downloaded_at FROM publication_fetches WHERE widget_id=? AND device_id=? AND revision=?",
+                ("hermes-brief", self.store.device_for_token(device)["deviceId"], published["revision"]),
+            ).fetchone()
+            self.assertIsNone(fetch["downloaded_at"])
+        finally:
+            conn.close()
         self.assertEqual(
             self.request(
-                "GET",
-                "/v1/widgets/hermes-brief/publication",
-                token=device,
-                headers={"If-None-Match": etag},
+                "GET", f"/v1/assets/{asset_id}", token=device,
+                headers={"If-None-Match": f'"{published["content"]["sha256"]}"'},
             )[0],
             304,
         )
+        conn = self.store._connect()
+        try:
+            fetch = conn.execute(
+                "SELECT downloaded_at FROM publication_fetches WHERE widget_id=? AND device_id=? AND revision=?",
+                ("hermes-brief", self.store.device_for_token(device)["deviceId"], published["revision"]),
+            ).fetchone()
+            self.assertIsNotNone(fetch["downloaded_at"])
+        finally:
+            conn.close()
 
         asset_status, asset_headers, _, asset_bytes = self.request(
             "GET", f"/v1/assets/{asset_id}", token=device
@@ -540,8 +629,12 @@ class PublicationContract(unittest.TestCase):
             401,
         )
         device = self.pair_device()
-        published = self.store.put_publication(
+        self.store.put_publication(
             "hermes-brief", title="Text", summary="Plain text", text="hello"
+        )
+        self.request("GET", "/v1/widgets/hermes-brief/publication", token=device)
+        published = self.store.put_publication(
+            "hermes-brief", title="Text 2", summary="Plain text", text="hello again"
         )
         self.assertEqual(
             self.request(
@@ -587,6 +680,20 @@ class PublicationContract(unittest.TestCase):
             self.request("GET", "/v1/assets/asset_000000000000000000000000", token=self.pair_device())[0],
             404,
         )
+
+    def test_unexpected_store_error_returns_request_referenced_500(self):
+        with patch.object(self.store, "list_widgets", side_effect=sqlite3.OperationalError("database is locked")):
+            status, _headers, payload, _raw = self.request("GET", "/v1/health")
+        self.assertEqual(status, 500)
+        self.assertEqual(payload["error"], "internal_error")
+        self.assertIn("reference", payload["detail"])
+
+    def test_transfer_encoding_is_rejected(self):
+        status, _headers, payload, _raw = self.request(
+            "GET", "/v1/health", headers={"Transfer-Encoding": "chunked"}
+        )
+        self.assertEqual(status, 400)
+        self.assertEqual(payload["error"], "bad_request")
 
 
 if __name__ == "__main__":
