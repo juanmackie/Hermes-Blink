@@ -567,6 +567,36 @@ private fun deliveryLabel(publication: Publication, state: ConnectionState): Str
             PublicationFreshness.STALE -> "Stale • updated $age ago"
             PublicationFreshness.EXPIRED -> "Expired"
         }
+
+/** The loading-state surface referenced by the provider XML (`widget_loading`) and
+ *  backed by the `drawable/*_loading_*` resources. It is the wireframe the launcher
+ *  shows before the first publication arrives, so the surface shape does not jump.
+ */
+@Composable
+fun LoadingState(dark: Boolean = false) {
+    Column {
+        Row {
+            Image(
+                ImageProvider(R.drawable.widget_loading_mark),
+                contentDescription = "loading",
+                modifier = GlanceModifier.size(16.dp),
+                colorFilter = null,
+            )
+            // Placeholder bars that mirror the loading layout's shape.
+            Image(
+                ImageProvider(R.drawable.widget_loading_bar),
+                contentDescription = "loading",
+                modifier = GlanceModifier.fillMaxWidth().height(10.dp).padding(start = 6.dp),
+            )
+        }
+        // Body placeholder line (matches the loading wireframe's body line).
+        Image(
+            ImageProvider(R.drawable.widget_loading_bar),
+            contentDescription = "loading",
+            modifier = GlanceModifier.fillMaxWidth().height(12.dp).padding(top = 4.dp),
+        )
+    }
+}
     }
 }
 

@@ -41,6 +41,8 @@ def main() -> int:
     provider = text("res/xml/hermes_widget_info.xml")
     values = text("res/values/strings.xml")
     night = text("res/values-night/strings.xml")
+    # The actual budget calculations live in the plugin validator, not in the test fixtures.
+    validate_script = (ROOT / "hermes-plugin/hermes-widget/validate.py").read_text(encoding="utf-8") if (ROOT / "hermes-plugin/hermes-widget/validate.py").is_file() else ""
     tests = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "android/app/src/test").rglob("*.kt"))
     plugin_tests = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "hermes-plugin/hermes-widget/tests").rglob("*.py"))
     checks = {
@@ -74,7 +76,9 @@ def main() -> int:
         "loading_state": int("widget_loading" in provider),
         "contrast_gate": int("contrast" in tests.lower() and "4.5" in tests),
         "size_tests": int("WidgetBand" in tests or "Breakpoint" in tests),
-        "publisher_budget": int("band" in plugin_tests.lower() and "line" in plugin_tests.lower()),
+        "publisher_budget": int(
+            "BAND_BODY_LINES" in validate_script or "BAND_CHROME_LINES" in validate_script
+        ),
         "dead_code_clean": int("ErrorStateNode" not in text("java/com/you/hermeswidget/widget/Renderer.kt")),
     }
     # Deliberately score evidence, not intent. Contrast is a separate numeric guard.
@@ -94,6 +98,33 @@ def main() -> int:
         "representative_preview": 7, "loading_state": 6, "contrast_gate": 7,
         "size_tests": 6, "publisher_budget": 5, "dead_code_clean": 3, "contrast_values": 0,
     }
+    # Contradiction gate: the audit must fail loudly when evidence contradicts itself,
+    # not return 0 silently. This is the behavioral audit fix requested in the previous
+    # iteration summary (see .auto/ideas.md, point 5).
+    contradictions = []
+    # Loading: resource evidence (provider XML references widget_loading) without the
+    # corresponding composable is a contradiction.
+    has_loading_resource = "widget_loading" in provider or bool(re.search(r"widget_loading", str((ANDROID / "res").resolve())))
+    has_loading_composable = "LoadingState" in widget or "LoadingState" in widget_package
+    if has_loading_resource and not has_loading_composable:
+        contradictions.append(
+            "CONTRADICTION: loading resources exist (provider references widget_loading, "
+            "drawable/layout widget_loading) but no LoadingState composable in widget/"
+        )
+    # Budget: if validate.py contains budget calculations but the plugin tests reference
+    # nothing meaningful (the loose check was satisfied by any file containing 'line'),
+    # that is a contradiction — budget evidence exists but is unverified.
+    budget_evidence = "BAND_BODY_LINES" in validate_script or "BAND_CHROME_LINES" in validate_script
+    if budget_evidence and not ("BAND_BODY_LINES" in plugin_tests or "BAND_CHROME_LINES" in plugin_tests):
+        contradictions.append(
+            "CONTRADICTION: validate.py has budget calculations (BAND_BODY_LINES / "
+            "BAND_CHROME_LINES) but no test verifies them (plugin_tests missing references)"
+        )
+    if contradictions:
+        for msg in contradictions:
+            print(f"GATE_FAIL {msg}")
+        return 1
+
     score = sum(weights[k] for k, v in checks.items() if v) if "contrast_values" in weights else sum(weights[k] for k, v in checks.items() if v)
     print(f"METRIC widget_quality_score={score}")
     for key, value in checks.items():
