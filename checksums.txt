@@ -1,0 +1,3 @@
+# SHA256 checksums — 2026-09-24T23:59:46Z
+27856713ed871754f19cde157bf946780bd441713a5cbeed98135956431aa768  android/app/build/outputs/apk/debug/app-debug.apk
+ebd94efa9653f7a75b3a756bdee24fd1712f00ff7bf12780beea833ce2cd94df  android/app/build/outputs/apk/release/app-release-unsigned.apk
