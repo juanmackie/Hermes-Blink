@@ -15,7 +15,7 @@ jobs:
       matrix:
         python-version: ['3.11', '3.13']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
@@ -57,7 +57,7 @@ jobs:
       matrix:
         backend: [cairosvg, pillow-only]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.13'
@@ -88,7 +88,7 @@ jobs:
   windows-tests:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -109,7 +109,7 @@ jobs:
   secret-scan:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Secret scan and wrapper checks
         run: |
           if git ls-files | grep -Eq \
@@ -128,7 +128,7 @@ jobs:
   android-tests:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           # Field round 8: these gates read git history. A depth-1 clone has no parent,
           # so the evidence check failed on every honest push while the version-bump gate
