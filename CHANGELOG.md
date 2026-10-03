@@ -24,6 +24,10 @@
   Existing render confirmations are migrated before the duplicate receipt table is removed.
 - HTTP requests and registered agent-tool calls share a scoped thread-local SQLite connection;
   nested store operations still roll back any uncommitted borrow when they release it.
+- Android toolchain moved to Gradle 9 with AGP 9 (dependabot PRs #8/#10): AGP 9 integrates
+  Kotlin support directly, so the `org.jetbrains.kotlin.android` plugin is gone and the
+  Compose compiler plugin tracks AGP's embedded KGP; the JVM_17 floor moved from the removed
+  `kotlinOptions` block to AGP's `KotlinAndroidProjectExtension.compilerOptions`.
 
 
 ## Current release and compatibility

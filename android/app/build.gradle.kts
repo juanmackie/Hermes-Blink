@@ -1,7 +1,9 @@
 // Backend URL validation allows Tailscale IP/host URLs over HTTPS (see docs/SETUP.md)
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
+    // No org.jetbrains.kotlin.android: AGP 9 integrates Kotlin support directly and
+    // refuses the old plugin (issuetracker.google.com/438678642). The Compose compiler
+    // plugin stays: @Composable sources still need it.
     id("org.jetbrains.kotlin.plugin.compose")
 }
 
@@ -106,8 +108,15 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
+    // AGP 9 registers the Kotlin extension itself during its own evaluation (no
+    // static KTS accessor for it), so reach it by type once evaluation settles.
+    // This is the same JVM_17 floor kotlinOptions used to set.
+    afterEvaluate {
+        extensions.configure<org.jetbrains.kotlin.gradle.dsl.KotlinAndroidProjectExtension> {
+            compilerOptions {
+                jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+            }
+        }
     }
     sourceSets {
         getByName("test") {
