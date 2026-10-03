@@ -171,7 +171,7 @@ dependencies {
     implementation("com.google.android.material:material:1.12.0")
     // Kept explicitly even though Material depends on it: AppTheme is still an AppCompat
     // theme (Material3 extends it), and pinning it here documents that.
-    implementation("androidx.appcompat:appcompat:1.7.0")  // AppTheme's parent chain; see themes.xml
+    implementation("androidx.appcompat:appcompat:1.8.0")  // AppTheme's parent chain; see themes.xml
     implementation("androidx.glance:glance-appwidget:1.1.0")
     implementation("androidx.work:work-runtime-ktx:2.9.1")
     implementation("androidx.security:security-crypto:1.1.0")
