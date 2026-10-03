@@ -79,6 +79,7 @@ private val RESPONSIVE_SIZES = setOf(
     DpSize(245.dp, 185.dp),   // 4x2 floor
     DpSize(624.dp, 276.dp),   // 4x2 max
     DpSize(624.dp, 422.dp),   // 4x4 max
+    DpSize(1000.dp, 1000.dp), // large tablet / unfolded foldable anchor
     DpSize(407.dp, 412.dp),   // 4x4 typical (Pixel 10 Pro XL)
 )
 
@@ -302,7 +303,7 @@ private fun PublicationSurface(
     }
 }
 
-/** The pinned request action, 48dp, top-end. The only control that must stay reachable. */
+/** The pinned request action, 48dp MD3 M-size pill, top-end. The only control that must stay reachable. */
 @Composable
 private fun RequestActionRow(dark: Boolean) {
     val context = LocalContext.current
@@ -316,7 +317,7 @@ private fun RequestActionRow(dark: Boolean) {
             modifier = GlanceModifier
                 .height(48.dp)
                 .background(WidgetTheme.accent(context, dark, null))
-                .cornerRadius(8.dp)
+                .cornerRadius(24.dp)
                 .clickable(requestUpdateAction())
                 .padding(horizontal = 12.dp, vertical = 12.dp),
             style = Typo.textStyle("label", WidgetTheme.onAccent(context, dark, null)),
@@ -490,7 +491,7 @@ private fun EmptyState(
                 modifier = GlanceModifier
                     .height(48.dp)
                     .background(accent)
-                    .cornerRadius(8.dp)
+                    .cornerRadius(24.dp)
                     .clickable(requestUpdateAction())
                     .padding(horizontal = 12.dp, vertical = 12.dp),
                 style = Typo.textStyle("label", WidgetTheme.onAccent(LocalContext.current, dark, null)),
@@ -573,21 +574,21 @@ fun LoadingState(dark: Boolean = false) {
         Row {
             Image(
                 ImageProvider(R.drawable.widget_loading_mark),
-                contentDescription = "loading",
+                contentDescription = null,
                 modifier = GlanceModifier.size(16.dp),
                 colorFilter = null,
             )
             // Placeholder bars that mirror the loading layout's shape.
             Image(
                 ImageProvider(R.drawable.widget_loading_bar),
-                contentDescription = "loading",
+                contentDescription = null,
                 modifier = GlanceModifier.fillMaxWidth().height(10.dp).padding(start = 6.dp),
             )
         }
         // Body placeholder line (matches the loading wireframe's body line).
         Image(
             ImageProvider(R.drawable.widget_loading_bar),
-            contentDescription = "loading",
+            contentDescription = null,
             modifier = GlanceModifier.fillMaxWidth().height(12.dp).padding(top = 4.dp),
         )
     }

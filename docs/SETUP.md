@@ -209,10 +209,16 @@ late. The bootstrap installs one idempotent Hermes routine every six hours:
     hermes widget routine --schedule "every 6h" --widget-id hermes-brief
 
 The routine uses `widget_publish` only when context contains a genuinely useful
-supported update. The widget skill is attached to the job, so the unattended run does not spend
-a second turn loading it. If nothing useful changed it does nothing, leaving the
+supported update. The widget skill (`skills/widget/SKILL.md` in the plugin, installed to
+`~/.hermes/skills/hermes-widget/SKILL.md`) is attached to the job, so the unattended run
+does not spend a second turn loading it — and the skill file must stay populated: an empty
+skill leaves proactive runs without rules (`scripts/check-contract-parity.py` fails on an
+empty or v2-referencing skill). If nothing useful changed it does nothing, leaving the
 current publication untouched. `widget_status` distinguishes host storage,
-device download, and render submission; none claims user visibility.
+device download, and render submission; none claims user visibility. The routine delivers
+`local` (file output, no extra agent turn); session heartbeats are deliberately not wired
+to widget checks — the six-hour routine owns the cadence, and heartbeat nudges would buy
+extra turns for an ambient surface.
 
 `hermes widget up` is the idempotent operator setup path: it installs the skill, startup hook,
 server configuration, and this proactive routine. Pair new devices with `hermes widget pair`

@@ -11,7 +11,7 @@ import kotlin.math.pow
  * WCAG 2.x relative luminance and contrast ratio (Task 7).
  *
  * Small text needs 4.5:1, and a widget's ink is always small text — the whole scale tops
- * out at 18sp bold. This is the arithmetic the palette decisions were made with: the old
+ * out at 16sp bold (title-md). This is the arithmetic the palette decisions were made with: the old
  * #8E8E93 caption measured 2.97:1 on the light surface, and 1.34:1 composited over a dark
  * wallpaper, which is why the ship failed AA.
  */

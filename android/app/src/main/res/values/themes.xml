@@ -303,7 +303,8 @@
     <!-- ==== Containers ====
          Tonal, not shadowed: MD3's filled card is surfaceContainerHighest with no
          elevation at all, and the outlined card replaces the shadow with a hairline in
-         outline-variant (never outline, which is for a boundary that carries meaning). -->
+         outline-variant (never outline, which is for a boundary that carries meaning).
+         Cards take the `medium` (12dp) corner step per the MD3 shape mapping. -->
     <style name="SurfaceCard" parent="Widget.Material3.CardView.Filled">
         <item name="cardBackgroundColor">@color/app_surface_container</item>
         <item name="cardCornerRadius">@dimen/shape_container</item>
@@ -323,8 +324,8 @@
 
     <!-- ==== Text fields ====
          MD3's outlined box: 4dp box in outline, 2dp in primary when it is focused, with
-         the label cut into the top of the outline. The corner is `medium` (12dp), which
-         is the MD3 step for a field — a card's 16dp would make the field look like a
+         the label cut into the top of the outline. The corner is `small` (8dp), which
+         is the MD3 step for a field — a card's 12dp would make the field look like a
          card and the card look like a field. -->
     <style name="TextField" parent="Widget.Material3.TextInputLayout.OutlinedBox">
         <!-- A state list, not a colour: 1dp outline at rest, 2dp in primary on focus. The

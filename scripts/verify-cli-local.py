@@ -131,6 +131,15 @@ check("agent_tools_present", not missing,
       ("missing: " + ", ".join(missing)) if missing else f"{len(expected_tools)}/{len(expected_tools)}")
 skills = list(REPO.glob("hermes-plugin/hermes-widget/skills/*/SKILL.md"))
 check("single_skill_doc", len(skills) == 1, ", ".join(str(p.relative_to(REPO)) for p in skills))
+if len(skills) == 1:
+    skill_text = skills[0].read_text(encoding="utf-8")
+    check("skill_doc_nonempty", len(skill_text.strip()) >= 500,
+          f"{len(skill_text.strip())} chars; an empty skill leaves proactive runs without rules")
+    check("skill_doc_frontmatter", "name: hermes-widget" in skill_text.split("---")[1]
+          if skill_text.startswith("---") and len(skill_text.split("---")) >= 3 else False,
+          "frontmatter names hermes-widget")
+    check("skill_doc_no_v2", "widget_update" not in skill_text and "widget_validate" not in skill_text,
+          "no removed v2 tool references")
 
 # --- offline preview + contract parity -------------------------------------
 preview_src = (REPO / "hermes-plugin" / "hermes-widget" / "preview.py").read_text(encoding="utf-8")

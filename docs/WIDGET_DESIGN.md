@@ -13,8 +13,8 @@ Height selects the band; width applies the single-column guard.
 | --- | --- | --- | --- | --- | --- |
 | `XS` | < 130dp | 2×1, 4×1 | mark + status dot, provenance + 1 hero line | `2x2` | tap opens the app |
 | `S` | 130–184dp | 2×2, 4×2 floor | `XS` + 1 summary line | `2x2` | tap opens the app |
-| `M` | 185–299dp | 4×2, 2×3 | `S` + scrollable body (≈3 lines visible) + pinned status + **Request update** | `4x2` | 48dp button |
-| `L` | ≥ 300dp | 4×3, 4×4 | `M` + ticker, ≈8 body lines visible | `4x4` (falls back to `4x2`) | 48dp button |
+| `M` | 185–299dp | 4×2, 2×3 | `S` + scrollable body (≈3 lines visible) + pinned status + **Request update** | `4x2` | 48dp MD3 M pill button |
+| `L` | ≥ 300dp | 4×3, 4×4 | `M` + ticker, ≈8 body lines visible | `4x4` (falls back to `4x2`) | 48dp MD3 M pill button |
 
 `widthDp < 245` is single column: no ticker, no question, no split row, one hero line.
 
@@ -28,7 +28,7 @@ user will actually see. The offline preview mirrors the same plan in `preview.py
 | ID | Requirement | Where | Proof |
 | --- | --- | --- | --- |
 | WL-1 | Content fills the allocated bounds | `HermesWidget.kt` (outer `Column.fillMaxSize`) | `WidgetBreakpointsTest` + device pass list |
-| WL-2 | Resizable to at least 2×2 / 4×1 / 4×2 | `res/xml/hermes_widget_info.xml` (`minResize*`, `maxResize*`) | `lintDebug` |
+| WL-2 | Resizable from 2×1 (110×56dp) up through tablet / unfolded-foldable sizes | `res/xml/hermes_widget_info.xml` (`minResize*` 110×56, `maxResize*` 1600) — beyond-guide sizes report `custom` and take the band from the height | `lintDebug` |
 | WL-3 | Header: icon always, title when space allows | `HermesWidget.kt:258` `HeaderRow`, `res/drawable/ic_hermes_mark.xml` | device pass list (2×2, 4×4) |
 | WL-4.2 | The minimum size still offers value | `Breakpoints.kt` `WidgetBand`, `HermesWidget.kt` `HeroBlock` | `WidgetBreakpointsTest.band edges …` |
 | Breakpoints | Conditional content per size | `Breakpoints.kt`, `SizeGate` (`WidgetTheme.kt:140`) | `WidgetBreakpointsTest` (19 cases) |
@@ -57,8 +57,8 @@ the status line and the action never scroll away from it.
 
 - The hero is the single focal point; title, summary, body, ticker, and delivery state have distinct hierarchy.
 - A ticker can update without replacing the hero.
-- Empty and expired states explain the next useful action, and offer the same 48dp action once the band has room.
-- **Request update** is a 48dp-or-larger action that pokes the agent; it does not prescribe content.
+- Empty and expired states explain the next useful action, and offer the same 48dp pill action once the band has room.
+- **Request update** is a 48dp MD3 M-size pill action that pokes the agent; it does not prescribe content.
 - Publication history is bounded and reachable without unbounded storage.
 
 ## Publisher budgets (host side)
@@ -104,7 +104,7 @@ Before shipping a widget change:
 | 9 | Android 12+ dynamic theme | surface/accent follow the wallpaper-derived palette | `dynamic-4x4.png` |
 | 10 | Empty / expired / offline | each state explains the next action and offers it | `empty.png`, `expired.png` |
 | 11 | TalkBack on the header | announces "Hermes, fresh, updated 6 min ago" | — |
-| 12 | Tap targets | action ≥48dp; surface tap opens the app; action does not open the app | — |
+| 12 | Tap targets | action ≥48dp MD3 M pill; surface tap opens the app; action does not open the app | — |
 | 13 | Picker preview | light and dark previews match cases 3/4 | `picker-light.png`, `picker-dark.png` |
 | 14 | Cold add | loading wireframe does not jump to a different shape | `loading.png` |
 | 15 | Corner radius | matches a stock Google widget on the same launcher | `radius.png` |

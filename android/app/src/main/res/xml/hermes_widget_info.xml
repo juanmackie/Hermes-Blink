@@ -1,12 +1,21 @@
 <?xml version="1.0" encoding="utf-8"?>
+<!--
+  Resize bounds: the widget renders at any cell, so the launcher is allowed (nearly) any
+  cell. The resize floor is the 2x1 floor the renderer and size classes are built around
+  (MIN_WIDTH/MIN_HEIGHT_DP 109/56, responsive 110x56: mark + status dot + one hero line).
+  The ceiling covers tablets and unfolded foldables; anything beyond the canonical guide
+  ranges reports size_class `custom` and takes its band from the height, which is exactly
+  what the renderer, publisher budgets and previews already do. minWidth/minHeight stay
+  at the 4x2-ish default placement (targetCellWidth/Height win on API 31+).
+-->
 <appwidget-provider xmlns:android="http://schemas.android.com/apk/res/android"
     android:description="@string/widget_description"
     android:minWidth="180dp"
     android:minHeight="110dp"
-    android:minResizeWidth="180dp"
-    android:minResizeHeight="110dp"
-    android:maxResizeWidth="624dp"
-    android:maxResizeHeight="422dp"
+    android:minResizeWidth="110dp"
+    android:minResizeHeight="56dp"
+    android:maxResizeWidth="1600dp"
+    android:maxResizeHeight="1600dp"
     android:targetCellWidth="4"
     android:targetCellHeight="2"
     android:resizeMode="horizontal|vertical"

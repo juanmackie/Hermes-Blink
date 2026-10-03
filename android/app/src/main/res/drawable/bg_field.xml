@@ -5,10 +5,10 @@
 
   The MD3 screens use TextInputLayout's outlined box, which carries its own focus cue (the
   outline thickens to 2dp in primary and the label moves up into it) — that is the reason
-  this file is no longer what a user sees. It stays because it is the app's statement of
-  the field geometry (container-high fill, 12dp = the `medium` step, outline-variant
-  boundary) and because `AppSurfaceTest` fails if a field ever loses its focused state, on
-  this file or on the component that replaced it.
+   this file is no longer what a user sees. It stays because it is the app's statement of
+   the field geometry (container-high fill, 8dp = the `small` step, outline-variant
+   boundary) and because `AppSurfaceTest` fails if a field ever loses its focused state, on
+   this file or on the component that replaced it.
 -->
 <selector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools"

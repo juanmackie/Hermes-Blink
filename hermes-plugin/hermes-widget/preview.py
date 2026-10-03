@@ -198,7 +198,7 @@ def _band_plan(width_px: int, height_px: int) -> tuple[str, dict[str, Any], bool
 
 
 LABEL_ADVANCE = 0.62   # bold label average advance, as a fraction of the font size
-TITLE_ADVANCE = 0.62  # bold 18sp hero, same figure as the action label
+TITLE_ADVANCE = 0.62  # bold 16sp hero (title-md), same figure as the action label
 
 
 @functools.lru_cache(maxsize=1)
@@ -281,7 +281,7 @@ def _svg_text_png(publication: dict, width: int, height: int) -> tuple[bytes, st
     pad = 12 * scale
     mark = 16 * scale
     dot = 6 * scale
-    title_size = 18 * scale
+    title_size = 16 * scale
     body_size = 14 * scale
     caption_size = 11 * scale
     label_size = 12 * scale
@@ -347,7 +347,7 @@ def _svg_text_png(publication: dict, width: int, height: int) -> tuple[bytes, st
             f'{xml_escape(textwrap.shorten(ticker, width=max(12, usable // (caption_size // 2)), placeholder=ELLIPSIS))}</text>'
         )
 
-    # Pinned footer: status line plus the 48dp request action.
+    # Pinned footer: status line plus the 48dp MD3 M pill request action.
     if plan["footer"]:
         footer_y = height_px - pad - footer_h
         label = "Request update"
@@ -360,7 +360,7 @@ def _svg_text_png(publication: dict, width: int, height: int) -> tuple[bytes, st
             f'<text x="{pad}" y="{footer_y + footer_h * 0.68}" font-family="sans-serif" '
             f'font-size="{caption_size}" fill="{tokens["secondary"]}">{xml_escape(status_line)}</text>'
             f'<rect x="{button_x}" y="{footer_y}" width="{label_w}" height="{footer_h}" '
-            f'rx="{8 * scale}" ry="{8 * scale}" fill="{tokens["accent"]}"/>'
+            f'rx="{24 * scale}" ry="{24 * scale}" fill="{tokens["accent"]}"/>'
             f'<text x="{button_x + label_w / 2}" y="{footer_y + footer_h * 0.66}" '
             f'font-family="sans-serif" font-size="{label_size}" font-weight="500" '
             f'fill="{tokens["on_accent"]}" text-anchor="middle">{xml_escape(label)}</text>'
@@ -397,7 +397,7 @@ def _pillow_text_png(publication: dict, width: int, height: int) -> tuple[bytes,
         pad = 12 * scale
         mark = 16 * scale
         dot = 6 * scale
-        title_size = 18 * scale
+        title_size = 16 * scale
         body_size = 14 * scale
         caption_size = 11 * scale
         label_size = 12 * scale
@@ -468,7 +468,7 @@ def _pillow_text_png(publication: dict, width: int, height: int) -> tuple[bytes,
             )
             draw.rounded_rectangle(
                 [button_x, footer_y, width_px - pad, footer_y + footer_h],
-                radius=8 * scale, fill=rgb(tokens["accent"]),
+                radius=24 * scale, fill=rgb(tokens["accent"]),
             )
             draw.text(
                 (button_x + 12 * scale, footer_y + footer_h * 0.32), label,

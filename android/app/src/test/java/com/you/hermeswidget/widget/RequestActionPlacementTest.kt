@@ -104,6 +104,10 @@ class RequestActionPlacementTest {
             !action.substringAfter("Row(").substringBefore("Spacer(").contains("clickable("),
         )
         assertTrue("the action must be a 48dp touch target", action.contains("height(48.dp)"))
+        assertTrue(
+            "the action must be an MD3 pill (full corner step = half of the 48dp M height)",
+            action.contains("cornerRadius(24.dp)"),
+        )
     }
 
     @Test

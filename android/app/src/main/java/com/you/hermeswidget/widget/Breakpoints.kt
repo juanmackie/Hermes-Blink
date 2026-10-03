@@ -6,7 +6,7 @@ import kotlin.math.roundToInt
 /** The pinned chrome the scroll region must leave behind, in dp. */
 internal const val SURFACE_PADDING_DP = 12f
 internal const val HEADER_HEIGHT_DP = 20f            // 16dp mark + 4dp gap
-internal const val HEADER_WITH_ACTION_DP = 52f       // 48dp action + 4dp gap
+internal const val HEADER_WITH_ACTION_DP = 52f       // 48dp MD3 M action + 4dp gap
 internal const val FOOTER_HEIGHT_DP = 18f            // status line + 4dp gap
 internal const val MIN_SCROLL_DP = 56f   // the height at which a body line is still legible
 
@@ -61,7 +61,7 @@ enum class WidgetBand(
         /**
          * Pinned chrome that a body cannot borrow from: header (16dp + 4dp), surface
          * padding (12dp top/bottom), two hero lines, one summary line and the footer
-         * (48dp action + 4dp gap).
+         * (48dp MD3 M action + 4dp gap).
          */
         const val CHROME_HEIGHT_DP = 16f + 4f + 24f + 2f * 22f + 15f + 48f + 4f
 

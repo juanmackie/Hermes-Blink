@@ -43,12 +43,13 @@ object Typo {
     data class Spec(val sizeSp: Int, val weight: String, val colorHex: String)
 
     /**
-     * The whole scale used by publication text.
+     * The whole scale used by publication text: title 16 (title-md), body 14 (body-md),
+     * label 12 (label-md), caption 11 (label-sm) — all MD3 steps.
      * Glance only ships FontWeight Normal/Medium/Bold, so `weight` is one of those three
      * and the scale keeps to two active weights (see the design skill).
      */
     val SCALE: Map<String, Spec> = mapOf(
-        "title" to Spec(18, "bold", PRIMARY),
+        "title" to Spec(16, "bold", PRIMARY),
         "body" to Spec(14, "normal", PRIMARY),
         "label" to Spec(12, "medium", PRIMARY),
         "caption" to Spec(11, "normal", SECONDARY),

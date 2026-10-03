@@ -13,8 +13,8 @@
     <!--
       Shape: the Material 3 corner radius scale, by name.
       Material uses a size-based scale, and each component takes a step from it: a pill for
-      anything pressed, `medium` for fields and small chips, `large` for cards and dialogs,
-      `extra large` for the widget root and full-screen surfaces.
+      anything pressed, `small` for fields, `medium` for cards, `extra large` for dialogs,
+      sheets, the widget root and full-screen surfaces.
     -->
     <dimen name="shape_xs">4dp</dimen>
     <dimen name="shape_sm">8dp</dimen>
@@ -25,8 +25,8 @@
 
     <!-- Named component steps, so a layout never invents a radius. -->
     <dimen name="shape_button">@dimen/shape_full</dimen>
-    <dimen name="shape_container">@dimen/shape_lg</dimen>
-    <dimen name="shape_field">@dimen/shape_md</dimen>
+    <dimen name="shape_container">@dimen/shape_md</dimen>
+    <dimen name="shape_field">@dimen/shape_sm</dimen>
 
     <dimen name="hairline">1dp</dimen>
 

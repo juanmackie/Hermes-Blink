@@ -320,9 +320,9 @@ class PublicationActivity : AppCompatActivity() {
             setHint("Your answer")
             boxBackgroundMode =
                 com.google.android.material.textfield.TextInputLayout.BOX_BACKGROUND_OUTLINE
-            // The `medium` step of the shape scale, the same corner the fields on the
+            // The `small` step of the shape scale, the same corner the fields on the
             // pairing screens use, so a dialog's field is not a different shape.
-            val radius = dp(12).toFloat()
+            val radius = dp(8).toFloat()
             setBoxCornerRadii(radius, radius, radius, radius)
         }
         val input = TextInputEditText(field.context).apply {

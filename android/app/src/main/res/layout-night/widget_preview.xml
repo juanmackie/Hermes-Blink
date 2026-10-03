@@ -50,7 +50,7 @@
         android:maxLines="2"
         android:text="✓ Overnight batch finished"
         android:textColor="@color/widget_on_surface"
-        android:textSize="18sp"
+        android:textSize="16sp"
         android:textStyle="bold" />
 
     <TextView

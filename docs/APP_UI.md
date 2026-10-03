@@ -9,8 +9,10 @@ content must render consistently on launchers.
 - App color roles and day/night tokens live in `android/app/src/main/res/values*/app_colors.xml`
   and the Material theme files. Android 12+ follows dynamic system colors; earlier versions use
   the authored light and dark palettes.
-- Type and spacing roles live in the app resources. The widget's band, size, and type rules remain
-  in `bands.py`, `Typo.kt`, and `docs/WIDGET_DESIGN.md`.
+- Type and spacing roles live in the app resources. The widget's band and size rules remain
+  in `bands.py` and `docs/WIDGET_DESIGN.md`; its type steps (`Typo.kt`: title 16, body 14,
+  label 12, caption 11) are the MD3 title-md / body-md / label-md / label-sm steps, and the
+  request action is the 48dp MD3 M-size pill.
 - Screens use Material 3 controls, one primary action, named surface/shape roles, and visible
   pressed/focus states. The widget reports delivery state in words and gives its action a separate
   accessible target.

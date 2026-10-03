@@ -22,9 +22,6 @@ PLUGIN_DIR = Path(__file__).resolve().parent
 SKILL_PATH = PLUGIN_DIR / "skills" / "widget" / "SKILL.md"
 
 _TOOLSET = "hermes-widget"
-_SKILL_DESCRIPTION = (
-    "Proactive home-screen widget publishing, previews, delivery, and action intents."
-)
 
 _TOOLS: tuple[tuple[dict[str, Any], Callable[..., str]], ...] = (
     (schemas.WIDGET_LIST, tools.widget_list),
@@ -230,8 +227,11 @@ def _register_skill(ctx: Any) -> None:
     register_skill = getattr(ctx, "register_skill", None)
     if register_skill is None:
         return
+    # Documented signature is register_skill(name, path): the skill's frontmatter
+    # carries its description. A third kwarg risks a TypeError on strict hosts,
+    # which would silently skip registration inside the except below.
     try:
-        register_skill("widget", SKILL_PATH, description=_SKILL_DESCRIPTION)
+        register_skill("widget", SKILL_PATH)
     except FileNotFoundError:
         logger.warning("hermes-widget: bundled skill missing at %s; skipping", SKILL_PATH)
     except Exception:  # noqa: BLE001

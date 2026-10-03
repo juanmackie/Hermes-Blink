@@ -291,11 +291,17 @@ class AppSurfaceTest {
             )
         }
         assertTrue("the scale needs a full radius", "shape_full" in dimens)
-        // Cards take `large`; the widget root keeps `extra large` as its floor.
+        // Cards take `medium` per the MD3 component/shape mapping; the widget root
+        // keeps `extra large` as its floor.
         assertTrue(
             "containers take a named scale step, not an off-scale value: " +
-                "containers should use the large radius (16dp)",
-            dimens.contains("name=\"shape_container\">@dimen/shape_lg"),
+                "containers should use the medium radius (12dp)",
+            dimens.contains("name=\"shape_container\">@dimen/shape_md"),
+        )
+        // Fields take `small` per the same mapping.
+        assertTrue(
+            "fields should use the small radius (8dp)",
+            dimens.contains("name=\"shape_field\">@dimen/shape_sm"),
         )
     }
 

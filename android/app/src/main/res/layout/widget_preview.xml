@@ -2,7 +2,7 @@
 <!--
   Widget picker preview (WD-1 / WD-4): mirrors the composition HermesWidget.kt actually
   ships — header (mark + wordmark + status dot), provenance + hero line, one summary line,
-  a body line, and the pinned footer (status line + 48dp request action).
+  a body line, and the pinned footer (status line + 48dp MD3 M pill request action).
 
   The strings are deliberately inlined (android:text, not @string) and the colors come
   from @color/widget_* tokens rather than literals, so:
@@ -61,7 +61,7 @@
         android:maxLines="2"
         android:text="✓ Overnight batch finished"
         android:textColor="@color/widget_on_surface"
-        android:textSize="18sp"
+        android:textSize="16sp"
         android:textStyle="bold" />
 
     <TextView
