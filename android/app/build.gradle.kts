@@ -173,7 +173,7 @@ dependencies {
     // theme (Material3 extends it), and pinning it here documents that.
     implementation("androidx.appcompat:appcompat:1.8.0")  // AppTheme's parent chain; see themes.xml
     implementation("androidx.glance:glance-appwidget:1.1.0")
-    implementation("androidx.work:work-runtime-ktx:2.9.1")
+    implementation("androidx.work:work-runtime-ktx:2.12.0")
     implementation("androidx.security:security-crypto:1.1.0")
     implementation("com.caverock:androidsvg-aar:1.4")
     // User-selected distributor (ntfy, NextPush, embedded FCM, ...); no Google
