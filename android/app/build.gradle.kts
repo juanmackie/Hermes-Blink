@@ -96,8 +96,8 @@ android {
         targetSdk = 35
         // Increment for a release tag that ships app changes. Release history and
         // compatibility details live in CHANGELOG.md; CI checks the tag window.
-        versionCode = 13
-        versionName = "0.4.9"
+        versionCode = 14
+        versionName = "0.5.0"
     }
     buildFeatures {
         compose = true

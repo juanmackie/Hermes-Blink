@@ -20,6 +20,7 @@ ANDROID = REPO / "android" / "app" / "src" / "main" / "java" / "com" / "you" / "
 sys.path.insert(0, str(PLUGIN))
 import bands  # noqa: E402
 import publication  # noqa: E402
+import composition  # noqa: E402
 
 PUBLICATION_KT = (ANDROID / "net" / "Publication.kt").read_text(encoding="utf-8")
 API_KT = (ANDROID / "net" / "HermesApi.kt").read_text(encoding="utf-8")
@@ -199,9 +200,8 @@ def compare_widget_surface_parity() -> None:
         action_heights.update(
             int(v) for v in re.findall(r"\.height\((\d+)\.dp\)\s*\n\s*\.background", block)
         )
-    preview_py = (PLUGIN / "preview.py").read_text(encoding="utf-8")
-    preview_footers = set(int(v) for v in re.findall(r"footer_h = (\d+) \* scale", preview_py))
-    preview_titles = set(int(v) for v in re.findall(r"title_size = (\d+) \* scale", preview_py))
+    preview_footers = {composition.ACTION_HEIGHT_DP}
+    preview_titles = {composition.TITLE_SIZE_SP}
     xml_heights: set[int] = set()
     for name in ("layout/widget_preview.xml", "layout-night/widget_preview.xml"):
         text = (res / name).read_text(encoding="utf-8")
@@ -286,7 +286,7 @@ def compare_agent_skill() -> None:
                 f"skills/widget/SKILL.md: references removed v2 API {removed!r}"
             )
     for tool in ("widget_publish", "widget_preview", "widget_status", "widget_watch",
-                 "widget_read_intents", "widget_resolve_intent", "widget_ask"):
+                 "widget_read_intents", "widget_resolve_intent", "widget_ask", "widget_finish_refresh"):
         if tool not in text:
             failures.append(f"skills/widget/SKILL.md: current tool {tool!r} is not mentioned")
     typo_sizes = {

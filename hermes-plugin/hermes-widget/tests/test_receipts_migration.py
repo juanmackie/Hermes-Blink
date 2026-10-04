@@ -53,7 +53,7 @@ class DeliveryReceiptMigration(unittest.TestCase):
 
                 schema.ensure_schema(conn)
 
-                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 7)
+                self.assertEqual(conn.execute("PRAGMA user_version").fetchone()[0], 8)
                 row = conn.execute(
                     "SELECT rendered_at, render_confirmed_at FROM publication_acks"
                 ).fetchone()

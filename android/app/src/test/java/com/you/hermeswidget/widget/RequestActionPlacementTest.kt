@@ -78,7 +78,7 @@ class RequestActionPlacementTest {
         // Shape 2: the action must not live inside the Column that holds the LazyColumn, and
         // it must be declared after it so it is laid out and hit-tested last.
         val surface = bodyOf("PublicationSurface(")
-        val column = surface.substringAfter("Column(").substringBefore("RequestActionRow(dark)")
+        val column = surface.substringAfter("Column(").substringBefore("RequestActionRow(dark,")
         assertTrue(
             "the request action must not be composed inside the column that holds the " +
                 "LazyColumn: a collection view can measure past its height and cover it",
@@ -86,11 +86,11 @@ class RequestActionPlacementTest {
         )
         assertTrue(
             "the request action must be composed at all",
-            surface.contains("RequestActionRow(dark)"),
+            surface.contains("RequestActionRow(dark,"),
         )
         assertTrue(
             "the action must be the last child of the root Box, so it is topmost",
-            surface.indexOf("RequestActionRow(dark)") > surface.lastIndexOf("LazyColumn("),
+            surface.indexOf("RequestActionRow(dark,") > surface.lastIndexOf("LazyColumn("),
         )
     }
 

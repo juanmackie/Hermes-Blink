@@ -215,27 +215,26 @@ def write_server_config(host: str | None = None, port: int | None = None) -> Pat
 def routine_prompt(widget_id: str = store.DEFAULT_WIDGET_ID) -> str:
     """The unattended prompt that makes the agent rebuild the widget."""
     return (
-        "Refresh the user's home-screen Hermes widget. "
-        f"The '{SKILL_NAME}' skill is attached to this job; use its rules directly and do not "
-        "load it a second time unless the host reports that it is missing. Then decide whether "
-        "the context already contains a genuinely useful change for the user right now: "
-        "recent sessions, memory, or a connected calendar, email, or task source. "
-        "First call widget_watch with operation=tick and any bounded source snapshot so standing watches "
-        "can publish their own state changes. Then call widget_status with "
-        "consume_update_requests=true. A non-empty newlyConsumedUpdateRequests list means the "
-        "user tapped Request update on the widget and asked for something fresher, so publish what you already know now instead of treating the run as "
-        "an ambient refresh and doing nothing. This is an ambient surface: publish only when the user would want to see the "
-        "change at a glance; otherwise do nothing when nothing useful changed and do not ask a question. "
-        "If a publication exists and delivery/freshness is uncertain, check widget_status "
-        "before replacing it. For a new visual, use widget_preview at the registered sizes "
-        "before publishing. If and only if there is a useful, supported update, call "
-        f"widget_publish with widget_id='{widget_id}', a truthful title and summary, and "
-        "exactly one of text, safe static SVG, or a bounded local PNG/JPEG/WebP path. "
-        "Use priority='high' only for time-sensitive content. After a queued action, read "
-        "widget_read_intents, do the allowlisted work, and record the outcome with "
-        "widget_resolve_intent. Never invent data or filler, never republish an identical "
-        "revision, and never claim that storing or fetching proves the user noticed it; "
-        "a publish is not that the phone rendered."
+        f"Refresh the user's home-screen Hermes widget '{widget_id}'. "
+        f"The '{SKILL_NAME}' skill is attached; use its rules without loading it twice. "
+        "First call widget_status with consume_update_requests=true and the widget_id. "
+        "Read workContext, its presentation, sources, session reference, finalResult, and "
+        "recheck instructions before selecting checks. This is a fresh cron session; "
+        "workContext is the deliberate handoff from recent work. If refreshLease is busy, "
+        "stop: another run owns the requests. Otherwise retain its refreshId. Recheck "
+        "the cited sources using enabled tools. Publish a meaningful finding, comparison, "
+        "blocker, or milestone with structured presentation data and work_context when "
+        "the evidence changes. Preview at inventory geometry first. Pass refresh_id to "
+        "widget_publish to complete the refresh atomically. Use widget_finish_refresh "
+        "with outcome=unchanged and a reason after checks find no useful change, or "
+        "outcome=failed and a concrete reason if sources cannot be rechecked. Keep existing "
+        "data and timestamps when sources are unavailable; never invent fresher data. "
+        "A Request update tap requires an explicit outcome. Normal work selects useful "
+        "updates autonomously; this six-hour run is a fallback. Custom SVG and local "
+        "PNG/JPEG/WebP remain supported. Use high priority for time-sensitive content. "
+        "widget_watch operation=tick can evaluate bounded source snapshots; resolve "
+        "queued actions through widget_read_intents/widget_resolve_intent. Publishing "
+        "does not prove delivery or visibility; inspect widget_status receipts."
     )
 
 
@@ -323,6 +322,7 @@ def install_routine(
         "schedule": schedule,
         "skills": [SKILL_NAME],
         "deliver": "local",
+        "enabled_toolsets": ["hermes-widget", "web", "file", "terminal"],
     }
     existing_jobs = [
         job for job in jobs.list_jobs() if job.get("name") == name
@@ -332,14 +332,21 @@ def install_routine(
         updated = jobs.update_job(existing["id"], updates)
         for duplicate in existing_jobs[1:]:
             jobs.remove_job(duplicate["id"])
-        return updated or existing
-    return jobs.create_job(
+        result = updated or existing
+        if "hermes-widget" not in result.get("enabled_toolsets", []):
+            raise RuntimeError("refresh job must enable the hermes-widget toolset")
+        return result
+    created = jobs.create_job(
         prompt=prompt,
         schedule=schedule,
         name=name,
         skills=[SKILL_NAME],
         deliver="local",
+        enabled_toolsets=updates["enabled_toolsets"],
     )
+    if "hermes-widget" not in created.get("enabled_toolsets", []):
+        raise RuntimeError("refresh job must enable the hermes-widget toolset")
+    return created
 
 
 def remove_routine(name: str = ROUTINE_NAME) -> bool:

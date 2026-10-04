@@ -47,7 +47,7 @@ class DatabaseConnectionScope(unittest.TestCase):
             borrowed_again = self.db._connect()
             self.assertIs(outer, borrowed)
             self.assertIs(outer, borrowed_again)
-            self.assertEqual(borrowed_again.execute("PRAGMA user_version").fetchone()[0], 7)
+            self.assertEqual(borrowed_again.execute("PRAGMA user_version").fetchone()[0], 8)
 
         with self.assertRaisesRegex(Exception, "closed"):
             outer.execute("SELECT 1")

@@ -45,7 +45,7 @@ WIDGET_PUBLISH = {
     "description": (
         "Publish one accessible update to the personal Hermes widget. Provide a short title "
         "and a required text summary, then exactly one source: plain text, a supported static "
-        "inline SVG subset, or a local PNG/JPEG/WebP file. Publishing stores a revision; the "
+        "inline SVG subset, a local PNG/JPEG/WebP file, or structured presentation data. Publishing stores a revision; the "
         "phone fetches it periodically, so success does not mean the user has seen it."
     ),
     "parameters": {
@@ -65,7 +65,7 @@ WIDGET_PUBLISH = {
             },
             "text": {
                 "type": "string",
-                "description": "Plain accessible text; mutually exclusive with svg and file_path.",
+                "description": "Plain accessible text; mutually exclusive with svg, file_path, and presentation.",
             },
             "svg": {
                 "type": "string",
@@ -107,6 +107,26 @@ WIDGET_PUBLISH = {
                 "type": "object",
                 "description": "Optional text variants keyed by registered size class (2x2, 4x2, 2x4, 4x4).",
             },
+            "presentation": {
+                "type": "object",
+                "description": "Exactly one source. Blink renders typography/layout. metric/progress: label,value,unit,target (required for progress); comparison: rows of label,value,detail; chart: style=line/bar, points of label,value; timeline: events of date,label,detail. At most 32 items, finite numbers; units optional.",
+                "properties": {
+                    "type": {"type": "string", "enum": ["metric", "progress", "comparison", "chart", "timeline"]},
+                    "label": {"type": "string", "maxLength": 120},
+                    "value": {"type": "number"},
+                    "unit": {"type": "string", "maxLength": 120},
+                    "target": {"type": "number", "exclusiveMinimum": 0},
+                    "style": {"type": "string", "enum": ["line", "bar"]},
+                    "rows": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
+                    "points": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
+                    "events": {"type": "array", "maxItems": 32, "items": {"type": "object"}},
+                },
+                "required": ["type"],
+                "additionalProperties": False,
+            },
+            "visual_variants": {"type": "object", "description": "Optional custom image sources keyed m/l-narrow/wide-light/dark, e.g. m-narrow-dark. Each has exactly one svg or file_path. Requires a primary SVG/raster; structured presentations generate these automatically."},
+            "work_context": {"type": "object", "properties": {"sources": {"type": "array", "maxItems": 12, "items": {"type": "string", "maxLength": 512}}, "session": {"type": "string", "maxLength": 256}, "recheck": {"type": "string", "maxLength": 2000}}, "additionalProperties": False},
+            "refresh_id": {"type": "string", "description": "Lease returned by widget_status when refreshing. Completes requests atomically after publishing or deduplicating."},
             "provenance": {
                 "type": "string",
                 "enum": ["verified", "from_price", "estimate"],
@@ -168,11 +188,28 @@ WIDGET_PREVIEW = {
             },
             "sizes": {
                 "type": "array",
-                "items": {"type": "string", "enum": ["2x2", "4x2", "2x4", "4x4"]},
+                "items": {"type": "string"},
                 "description": "Optional size classes; omit to use the device inventory.",
             },
+            "palette": {"type": "string", "enum": ["light", "dark"]},
+            "font_scale": {"type": "number", "minimum": 0.5, "maximum": 3},
         },
         "required": [],
+    },
+}
+
+WIDGET_FINISH_REFRESH = {
+    "name": "widget_finish_refresh",
+    "description": "Complete an acknowledged refresh without publishing. Report unchanged only after rechecking sources; report failed with a reason if they cannot be rechecked. Old data remains dated honestly.",
+    "parameters": {
+        "type": "object",
+        "properties": {
+            "widget_id": {"type": "string"},
+            "refresh_id": {"type": "string"},
+            "outcome": {"type": "string", "enum": ["unchanged", "failed"]},
+            "reason": {"type": "string", "minLength": 1, "maxLength": 2000},
+        },
+        "required": ["refresh_id", "outcome", "reason"],
     },
 }
 
@@ -329,7 +366,7 @@ WIDGET_STATUS = {
             },
             "consume_update_requests": {
                 "type": "boolean",
-                "description": "Mark triggered requests as consumed and return only the newly consumed requests.",
+                "description": "Acknowledge update requests and claim a durable refreshLease. Read workContext before rechecking. Consumed means read; pass refresh_id to widget_publish or widget_finish_refresh to complete. A busy lease belongs to another run.",
             },
             "summary": {
                 "type": "boolean",

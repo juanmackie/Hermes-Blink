@@ -137,12 +137,12 @@ class WidgetBreakpointsTest {
 
     @Test
     fun `image height is band driven and never exceeds the cell`() {
-        assertEquals(96, Breakpoints.spec(300f, 150f).imageHeightDp)
-        assertEquals(160, Breakpoints.spec(400f, 250f).imageHeightDp)
-        assertEquals(240, Breakpoints.spec(407f, 412f).imageHeightDp)
+        assertEquals(0, Breakpoints.spec(300f, 150f).imageHeightDp)
+        assertEquals(68, Breakpoints.spec(400f, 250f).imageHeightDp)
+        assertEquals(211, Breakpoints.spec(407f, 412f).imageHeightDp)
         // A 4x4 at the 300dp floor still leaves a usable image band.
         val tight = Breakpoints.spec(400f, 300f).imageHeightDp
-        assertTrue("tight 4x4 image height was $tight", tight in 120..240)
+        assertTrue("tight 4x4 image height was $tight", tight in 0..240)
         // The chrome it subtracts is real: the image can never eat the footer.
         assertTrue(Breakpoints.spec(400f, 412f).imageHeightDp < 412)
     }

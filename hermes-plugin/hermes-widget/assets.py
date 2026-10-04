@@ -75,6 +75,9 @@ def _write_immutable_asset(conn: sqlite3.Connection, asset: Any) -> tuple[str, P
 
 def _publication_asset_ids(publication: dict) -> set[str]:
     ids: set[str] = set()
+    for descriptor in publication.get("visualVariants", {}).values():
+        if isinstance(descriptor, dict) and isinstance(descriptor.get("assetId"), str):
+            ids.add(descriptor["assetId"])
     content = publication.get("content")
     if isinstance(content, dict) and isinstance(content.get("assetId"), str):
         ids.add(content["assetId"])

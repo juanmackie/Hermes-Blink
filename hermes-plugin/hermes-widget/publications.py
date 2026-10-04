@@ -31,7 +31,7 @@ try:
     from .bands import chars_per_line as _chars_per_line
     from .bands import size_band as _size_band
     from .actions import _expire_stale_intents
-    from .push_state import DEFAULT_WIDGET_ID, check_push_rate, list_push_states, set_device_push_endpoint
+    from .push_state import DEFAULT_WIDGET_ID, list_push_states, set_device_push_endpoint
     from .assets import _publication_asset_ids, _write_immutable_asset
 except ImportError:  # direct import from scripts/tests
     from db import _LOCK, _connect, asset_path  # type: ignore
@@ -51,7 +51,7 @@ except ImportError:  # direct import from scripts/tests
     from bands import chars_per_line as _chars_per_line  # type: ignore
     from bands import size_band as _size_band  # type: ignore
     from actions import _expire_stale_intents  # type: ignore
-    from push_state import DEFAULT_WIDGET_ID, check_push_rate, list_push_states, set_device_push_endpoint  # type: ignore
+    from push_state import DEFAULT_WIDGET_ID, list_push_states, set_device_push_endpoint  # type: ignore
     from assets import _publication_asset_ids, _write_immutable_asset  # type: ignore
 
 DEFAULT_WIDGET_ID = "hermes-brief"
@@ -113,9 +113,9 @@ def _publication_semantics(publication: dict) -> dict:
         "kind": publication.get("kind"),
         "title": publication.get("title"),
         "summary": publication.get("summary"),
-        "expiresAt": publication.get("expiresAt"),
+        "expiresAt": None if publication.get("ttlSeconds") else publication.get("expiresAt"),
+        "ttlSeconds": publication.get("ttlSeconds"),
         "maxAgeSeconds": publication.get("maxAgeSeconds"),
-        "priority": publication.get("priority", "normal"),
         "requestedPriority": publication.get("requestedPriority", publication.get("priority", "normal")),
         "itemId": publication.get("itemId"),
         "actions": publication.get("actions", []),
@@ -124,6 +124,8 @@ def _publication_semantics(publication: dict) -> dict:
         "provenance": publication.get("provenance"),
         "darkPalette": publication.get("darkPalette", False),
         "variants": publication.get("variants", {}),
+        "presentation": publication.get("presentation"),
+        "visualVariants": {k: {f: v for f, v in descriptor.items() if f != "assetId"} for k, descriptor in publication.get("visualVariants", {}).items()},
         "content": content,
     }
 
@@ -535,6 +537,10 @@ def put_publication(
     provenance: str | None = None,
     dark_palette: bool = False,
     variants: Any = None,
+    presentation: Any = None,
+    visual_variants: Any = None,
+    work_context: Any = None,
+    refresh_id: str | None = None,
 ) -> dict:
     """Validate, store, and atomically publish one text or visual revision."""
     if not isinstance(widget_id, str) or not widget_id or len(widget_id) > 128:
@@ -555,11 +561,19 @@ def put_publication(
             provenance=provenance,
             dark_palette=dark_palette,
             variants=variants,
+            presentation=presentation,
+            visual_variants=visual_variants,
         )
     except _PublicationInputTooLarge as exc:
         raise PublicationTooLarge(str(exc)) from exc
     except PublicationInputError as exc:
         raise PublicationError(str(exc)) from exc
+
+    try:
+        from .refresh import normalize_context, save_context, finish
+    except ImportError:
+        from refresh import normalize_context, save_context, finish
+    context = normalize_context(work_context, prepared.presentation)
 
     prepared_ticker: PreparedRegion | None = None
     if ticker is not None:
@@ -570,7 +584,6 @@ def put_publication(
         except PublicationInputError as exc:
             raise PublicationError(str(exc)) from exc
 
-    check_push_rate(widget_id)
     effective_priority, degraded_reason = _priority_effective(widget_id, prepared.priority)
     content: dict[str, Any]
     if prepared.kind == "text":
@@ -607,6 +620,11 @@ def put_publication(
                 else {}
             )
             candidate_regions = dict(carried_regions)
+            retained_ttl = old_payload.get("ttlSeconds") if preserve_regions and old_row else ttl_seconds
+            if preserve_regions and old_row:
+                prior_context = conn.execute("SELECT context_json FROM widget_work_context WHERE widget_id=?", (widget_id,)).fetchone()
+                if prior_context:
+                    context = json.loads(prior_context[0])
             if prepared_ticker is not None:
                 candidate_regions["ticker"] = prepared_ticker.metadata()
             candidate = {
@@ -616,6 +634,7 @@ def put_publication(
                 "title": prepared.title,
                 "summary": prepared.summary,
                 "expiresAt": prepared.expires_at,
+                "ttlSeconds": retained_ttl,
                 "maxAgeSeconds": prepared.max_age_seconds,
                 "priority": effective_priority,
                 "requestedPriority": prepared.priority,
@@ -626,6 +645,8 @@ def put_publication(
                 "provenance": prepared.provenance,
                 "darkPalette": prepared.dark_palette,
                 "variants": prepared.variants or {},
+                "presentation": prepared.presentation,
+                "visualVariants": {key: asset.metadata() for key, asset in (prepared.visual_variants or {}).items()},
                 "content": content,
                 "regions": candidate_regions,
             }
@@ -634,6 +655,10 @@ def put_publication(
                 and not _publication_expired(old_payload)
                 and _publication_semantics(old_payload) == _publication_semantics(candidate)
             ):
+                if work_context is not None:
+                    save_context(widget_id, old_payload["revision"], context, conn)
+                if refresh_id:
+                    finish(widget_id, refresh_id, "unchanged", "rechecked content is unchanged", old_payload["revision"], conn)
                 conn.commit()
                 result = dict(old_payload)
                 result["unchanged"] = True
@@ -644,6 +669,12 @@ def put_publication(
                 if asset_path_value is not None:
                     new_asset_paths.append(asset_path_value)
                 content = {**content, "assetId": asset_id}
+            visual_descriptors = {}
+            for key, visual_asset in (prepared.visual_variants or {}).items():
+                visual_id, visual_path = _write_immutable_asset(conn, visual_asset)
+                if visual_path is not None:
+                    new_asset_paths.append(visual_path)
+                visual_descriptors[key] = {**visual_asset.metadata(), "assetId": visual_id}
             revision = _as_int(old_row["revision"], "publication revision") + 1 if old_row else 1
             published_regions = dict(carried_regions)
             if prepared_ticker is not None:
@@ -667,6 +698,7 @@ def put_publication(
                 "summary": prepared.summary,
                 "publishedAt": now,
                 "expiresAt": prepared.expires_at,
+                "ttlSeconds": retained_ttl,
                 "maxAgeSeconds": prepared.max_age_seconds,
                 "priority": effective_priority,
                 "requestedPriority": prepared.priority,
@@ -677,6 +709,8 @@ def put_publication(
                 "provenance": prepared.provenance,
                 "darkPalette": prepared.dark_palette,
                 "variants": prepared.variants or {},
+                "presentation": prepared.presentation,
+                "visualVariants": visual_descriptors,
                 "content": content,
                 "regions": published_regions,
             }
@@ -755,6 +789,15 @@ def put_publication(
                     "INSERT OR IGNORE INTO widget_devices (widget_id, device_id) VALUES (?, ?)",
                     (widget_id, device["device_id"]),
                 )
+            save_context(widget_id, revision, context, conn)
+            if refresh_id:
+                finish(widget_id, refresh_id, "published", "", revision, conn)
+            if effective_priority == "normal":
+                try:
+                    from .normal_wakes import queue_wake
+                except ImportError:
+                    from normal_wakes import queue_wake
+                queue_wake(widget_id, revision, conn)
             conn.commit()
             dispatch_priority = effective_priority == "high"
         except Exception:
@@ -771,6 +814,15 @@ def put_publication(
             _dispatch_priority_nudges(widget_id, revision)
         except Exception:  # noqa: BLE001 - a wake failure must not lose a publication
             logger.warning("priority wake dispatch failed", exc_info=True)
+    else:
+        try:
+            from .normal_wakes import flush
+        except ImportError:
+            from normal_wakes import flush
+        try:
+            flush()
+        except Exception:
+            logger.warning("normal wake dispatch failed; durable queue retained", exc_info=True)
     try:
         publication["warnings"] = _capacity_warnings_for_publication(publication, widget_id)
     except Exception:  # noqa: BLE001 - advisory warnings must not fail a commit
@@ -882,13 +934,22 @@ def put_ticker(
         "dark_palette": bool(current.get("darkPalette", False)),
         "variants": current.get("variants", {}),
     }
-    if content.get("type") == "text":
-        hero_kwargs["text"] = content.get("text", "")
-    else:
-        asset = content.get("assetId")
+    def image_source(descriptor):
+        asset = descriptor.get("assetId")
         if not isinstance(asset, str):
             raise PublicationError("current hero image asset is unavailable")
-        hero_kwargs["file_path"] = str(asset_path(asset))
+        path = asset_path(asset)
+        if descriptor.get("mediaType") == "image/svg+xml":
+            return {"svg": path.read_text(encoding="utf-8")}
+        return {"file_path": str(path)}
+
+    if current.get("presentation"):
+        hero_kwargs["presentation"] = current["presentation"]
+    elif content.get("type") == "text":
+        hero_kwargs["text"] = content.get("text", "")
+    else:
+        hero_kwargs.update(image_source(content))
+        hero_kwargs["visual_variants"] = {key: image_source(descriptor) for key, descriptor in current.get("visualVariants", {}).items()}
     ticker_spec: dict[str, Any] = {
         "title": title,
         "summary": summary,

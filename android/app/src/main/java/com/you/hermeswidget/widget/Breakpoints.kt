@@ -87,6 +87,7 @@ data class BandSpec(
     val heightDp: Float,
     /** `widthDp < 245` — one column, no split row, no ticker. */
     val singleColumn: Boolean,
+    val fontScale: Float = 1f,
 ) {
     val showsTicker: Boolean get() = band >= WidgetBand.L && !singleColumn
     val showsQuestion: Boolean get() = band >= WidgetBand.S && !singleColumn
@@ -137,13 +138,12 @@ data class BandSpec(
      * band at the bottom of a 4x4.
      */
     val imageHeightDp: Int
-        get() = when (band) {
-            WidgetBand.XS, WidgetBand.S -> 96
-            WidgetBand.M -> 160
-            WidgetBand.L -> (
-                (heightDp - WidgetBand.CHROME_HEIGHT_DP).roundToInt().coerceIn(120, 240)
-                )
-        }
+        get() = if (!showsBody) 0 else (
+            scrollHeightDp -
+                (heroMaxLines * 22f + if (summaryMaxLines > 0) 17f else 0f) * fontScale -
+                8f - (if (showsTicker) 19f * fontScale else 0f) -
+                (if (showsQuestion) 19f * fontScale else 0f)
+            ).roundToInt().coerceAtLeast(0)
 
     /** The `variants` key to read, with the ladder's "next larger key" fallback. */
     fun variantKey(hasVariant: (String) -> Boolean): String = when (band) {

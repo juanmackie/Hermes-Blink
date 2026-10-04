@@ -87,7 +87,7 @@ class HermesWidget : GlanceAppWidget() {
     override val sizeMode: SizeMode = SizeMode.Responsive(RESPONSIVE_SIZES)
 
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val snapshot = withContext(Dispatchers.IO) { loadSnapshot(context) }
+        val snapshot = withContext(Dispatchers.IO) { loadSnapshot(context, WidgetInstanceIds.idOf(id)) }
         // Which widget instance this composition belongs to. Attributing a tap or a render
         // to a device but not an instance is what made round 5 unanswerable — and the
         // numeric id is what lets us ask the launcher how big *this* cell is.
@@ -102,7 +102,7 @@ class HermesWidget : GlanceAppWidget() {
             // content into a 270dp cell and pushed the action out of view.
             val localSize = LocalSize.current
             val resolved = SizeGate.specForInstance(context, appWidgetId, localSize)
-            val spec = resolved.first
+            val spec = resolved.first.copy(fontScale = context.resources.configuration.fontScale)
             val geometry = resolved.second
             if (composed == null) composed = WidgetSize.fromInventory(context, appWidgetId)
             val dark = snapshot.publication?.darkPalette == true || WidgetTheme.isDark(context)
@@ -185,15 +185,20 @@ class HermesWidget : GlanceAppWidget() {
         }
     }
 
-    private fun loadSnapshot(context: Context): WidgetSnapshot {
+    private fun loadSnapshot(context: Context, appWidgetId: Int?): WidgetSnapshot {
         val appContext = context.applicationContext
         val baseUrl = SecureStore.baseUrl(appContext)
         val token = SecureStore.token(appContext)
         val paired = !baseUrl.isNullOrBlank() && !token.isNullOrBlank()
         val publication = if (paired) PublicationRepository.loadCached(appContext) else null
+        val geometry = WidgetSize.fromInventory(context, appWidgetId)
+        val dark = publication?.darkPalette == true || WidgetTheme.isDark(context)
+        val selected = if (geometry != null) publication?.visualFor(geometry.first, geometry.second, dark)
+            else publication?.content as? PublicationContent.Image
         return WidgetSnapshot(
             publication = publication,
-            bitmap = publication?.let { PublicationImages.load(appContext, it) },
+            bitmap = selected?.let { PublicationImages.load(appContext, it) }
+                ?: publication?.let { PublicationImages.load(appContext, it) },
             paired = paired,
             connectionState = Config.getConnectionState(appContext),
         )
@@ -217,7 +222,8 @@ private fun PublicationSurface(
     val variant = publication.variants[variantKey]
     val title = variant?.title ?: publication.title
     val summary = variant?.summary ?: publication.summary
-    val body = variant?.let { PublicationContent.Text(it.text) } ?: publication.content
+    val body = if (publication.content is PublicationContent.Image) publication.content
+        else variant?.let { PublicationContent.Text(it.text) } ?: publication.content
     val intent = Intent(context, PublicationActivity::class.java)
         .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         // Carried so the in-app "Request update" button can name the instance it belongs
@@ -298,14 +304,14 @@ private fun PublicationSurface(
         // no longer depends on the collection's measurement at all. The Row carries no
         // clickable of its own, so the hero underneath still receives its own taps.
         if (spec.showsRequestAction) {
-            RequestActionRow(dark)
+            RequestActionRow(dark, spec.singleColumn)
         }
     }
 }
 
 /** The pinned request action, 48dp MD3 M-size pill, top-end. The only control that must stay reachable. */
 @Composable
-private fun RequestActionRow(dark: Boolean) {
+private fun RequestActionRow(dark: Boolean, narrow: Boolean) {
     val context = LocalContext.current
     Row(
         modifier = GlanceModifier.fillMaxWidth().padding(top = 12.dp, end = 12.dp),
@@ -313,7 +319,7 @@ private fun RequestActionRow(dark: Boolean) {
     ) {
         Spacer(GlanceModifier.defaultWeight())
         Text(
-            text = context.getString(R.string.widget_request_update),
+            text = if (narrow) "Update" else context.getString(R.string.widget_request_update),
             modifier = GlanceModifier
                 .height(48.dp)
                 .background(WidgetTheme.accent(context, dark, null))
@@ -448,7 +454,7 @@ private fun PublicationBody(
                     style = Typo.textStyle("caption", secondary),
                     maxLines = 1,
                 )
-            } else {
+            } else if (spec.imageHeightDp > 0) {
                 Image(
                     provider = ImageProvider(bitmap),
                     contentDescription = summary.ifBlank {

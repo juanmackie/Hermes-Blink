@@ -38,7 +38,20 @@ data class Publication(
     val ticker: PublicationRegion?,
     val question: PublicationQuestion?,
     val variants: Map<String, PublicationVariant>,
+    val visualVariants: Map<String, PublicationContent.Image> = emptyMap(),
 ) {
+    fun images(): List<PublicationContent.Image> = buildList {
+        (content as? PublicationContent.Image)?.let { add(it) }
+        addAll(visualVariants.values)
+        (ticker?.content as? PublicationContent.Image)?.let { add(it) }
+    }.distinctBy { it.assetId }
+
+    fun visualFor(widthDp: Float, heightDp: Float, dark: Boolean): PublicationContent.Image? {
+        val band = if (heightDp < 300f) "m" else "l"
+        val layout = if (widthDp < 245f) "narrow" else "wide"
+        val palette = if (dark) "dark" else "light"
+        return visualVariants["$band-$layout-$palette"] ?: content as? PublicationContent.Image
+    }
     fun isExpired(nowMillis: Long = System.currentTimeMillis()): Boolean {
         if (expired) return true
         val expiry = expiresAt?.let {
@@ -135,6 +148,21 @@ data class Publication(
             runCatching { Instant.parse(publishedAt) }.getOrThrow()
 
             val content = parseContent(kind, contentJson)
+            val visualVariants = buildMap {
+                val descriptors = json.optJSONObject("visualVariants")
+                if (descriptors != null) {
+                    require(descriptors.length() <= 8) { "too many visual variants" }
+                    val keys = descriptors.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        require(key.matches(Regex("[ml]-(narrow|wide)-(light|dark)"))) { "invalid visual variant key" }
+                        val descriptor = descriptors.optJSONObject(key)
+                            ?: throw IllegalArgumentException("invalid visual variant descriptor")
+                        put(key, parseContent("image", descriptor) as PublicationContent.Image)
+                    }
+                    require(kind == "image" || descriptors.length() == 0) { "visual variants require a primary image" }
+                }
+            }
 
             val regionJson = json.optJSONObject("ticker")
                 ?: json.optJSONObject("regions")?.optJSONObject("ticker")
@@ -185,6 +213,7 @@ data class Publication(
                 ticker = ticker,
                 question = question,
                 variants = variants,
+                visualVariants = visualVariants,
             )
         }
     }

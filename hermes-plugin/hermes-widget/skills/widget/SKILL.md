@@ -1,7 +1,7 @@
 ---
 name: hermes-widget
-description: "Proactive widget publishing, previews, delivery, actions."
-version: 3.4.0
+description: "Publish useful findings, comparisons, blockers, and milestones during normal work; preview structured visuals, refresh sources, and resolve widget actions."
+version: 3.5.0
 author: Hermes Widget contributors
 license: MIT
 metadata:
@@ -13,8 +13,9 @@ metadata:
 # Hermes Widget
 
 Publish one useful update to the user's Android home-screen widget with `widget_publish`.
-Use text for a concise readable note, inline SVG for a static chart/diagram, or a local
-PNG/JPEG/WebP for a photo.
+Prefer structured `presentation` data for metrics/progress, comparisons, line/bar charts,
+and timelines. Blink renders layout and typography. Text, custom SVG, and local raster
+assets remain available for findings that suit those formats.
 
 ## When to use this skill
 
@@ -30,8 +31,9 @@ PNG/JPEG/WebP for a photo.
 
 This is an ambient surface, not a chat log. Before publishing, ask: **is there a real change
 the user would want to see at a glance?** If yes, publish one useful revision. If not, do
-nothing and do not spend a rate-limit slot. Never turn an ordinary coding turn into a widget
-update merely because the plugin is available.
+nothing and do not spend a rate-limit slot. During normal work, autonomously select useful
+findings, comparisons, blockers, and milestones. Publish at meaningful milestones; the
+six-hour routine is a fallback.
 
 Use `widget_status` before replacing a working publication when freshness or delivery is
 uncertain. Use `widget_preview` before publishing a visual that has not already been checked
@@ -44,9 +46,44 @@ handle the allowlisted work in the agent, and record the outcome with `widget_re
 Call `widget_publish` with a short `title`, a non-empty plain-text `summary`, and exactly one
 source:
 
+- `presentation`: a structured visual; mutually exclusive with the other three sources.
 - `text`: accessible plain text.
 - `svg`: inline static SVG for charts, diagrams, or simple shapes.
 - `file_path`: one local PNG, JPEG, or WebP file on the Hermes host.
+
+For example, after comparing verified build timings:
+
+```json
+{
+  "title": "Incremental builds save 38 seconds",
+  "summary": "The measured incremental build took 12 seconds versus 50 seconds clean.",
+  "presentation": {
+    "type": "comparison", "unit": "seconds",
+    "rows": [{"label": "Incremental", "value": 12}, {"label": "Clean", "value": 50}]
+  },
+  "work_context": {
+    "sources": ["build timing report path or source URL"],
+    "session": "current session reference",
+    "recheck": "Rerun the same timing commands before claiming a new measurement."
+  }
+}
+```
+
+Supply actual evidence in place of these illustrative measurements. `metric` and `progress`
+use `label`, `value`, optional `unit`, and `target` (required for progress). `chart` uses
+`style` (`line`/`bar`) and `points` of `label`/`value`. `timeline` uses `events` of
+`date`/`label` and optional `detail`. `comparison` uses `rows` of `label`/`value`.
+Inputs permit up to 32 items and 32 KiB; values must be finite. The normalized data remains
+in the publication and `widget_status.workContext` for reuse. A primary image retains all
+items for expanded view and older clients; medium and large variants select bounded items
+for narrow/wide and light/dark geometry. Optional `visual_variants` for custom assets use
+keys such as `m-narrow-dark`, each with one `svg` or `file_path`.
+
+Call `widget_preview` with the proposed publication and inspect the complete widget,
+`hiddenDetails`, geometry, and capacity diagnostics. It returns supported Hermes image
+results when available, otherwise local PNG paths. HTTP previews retain inline base64.
+Use `palette="dark"` and `font_scale=1.5` for accessibility checks. Host previews are
+advisory: Android geometry, fonts, and dynamic colors remain authoritative.
 
 `widget_publish` returns advisory capacity warnings keyed to the smallest registered band
 (`BODY_HIDDEN_IN_XS`/`_S`, `BODY_MAY_SCROLL_M`/`_L`, `TITLE_MAY_CLIP`, `SUMMARY_HIDDEN_IN_XS`).
@@ -55,6 +92,9 @@ They are estimates (~34 chars per line at 245dp); heed them instead of hoping te
 Use `widget_set_quiet_hours` for a quiet window (UTC by default, optional IANA timezone)
 when the user does not want wake noise. High-priority wakes degrade visibly to normal
 during quiet hours and past the rate limits (6/hour, 30/day).
+Changed normal publications send an immediate content-free wake, then coalesce changes
+within 60 seconds, capped at 30 wakes per widget per hour. Quiet hours defer these wakes;
+polling remains the fallback. Identical content produces no revision or wake.
 Do not put publication content in a push payload. A successful tool result means the host
 stored a revision; it does **not** mean the phone downloaded or rendered it. Use
 `widget_status` for `nudge_sent`, `fetched`, `downloaded`, and `render_submitted` separately.
@@ -70,8 +110,8 @@ stored a revision; it does **not** mean the phone downloaded or rendered it. Use
   instructions, and unsupported elements/attributes are rejected.
 - The previous successful display remains current when publication validation fails.
 
-Do not retry an identical rejected payload. Correct the source first. Prefer a static SVG
-with a text summary over a dense unreadable chart. For a photo, write it to a bounded local
+Correct a rejected source before retrying. Prefer a structured visual with a truthful
+summary and concise labels. For a photo, write it to a bounded local
 file first; do not send a remote URL.
 
 ## Canvas sizes
@@ -163,12 +203,20 @@ Keep the contrast between `title` and `caption`; adding emphasis everywhere flat
 `appBuildCode`) and which build rendered the current revision (`delivery[].renderedBy`), so a
 user report of "it looks wrong on my phone" starts with the build rather than a guess.
 
-Call `widget_status` with `consume_update_requests=true` on every proactive run. A non-empty
-`newlyConsumedUpdateRequests` list means the user tapped **Request update** on the widget and
-asked for something fresher: publish what you already know now instead of treating the run as
-an ambient refresh. Call widget_read_events (optionally `since`, `widget_id`, `limit`) to see
-taps and refreshes. Events are newest first and carry the widget id, device id, event name,
-and payload.
+For a scheduled or requested refresh, call `widget_status` with
+`consume_update_requests=true`. Read `workContext` before rechecking its cited sources.
+The `newlyConsumedUpdateRequests` list acknowledges **Request update** taps; the requests
+remain incomplete until an explicit outcome. Retain `refreshLease.refreshId` and pass it
+as `refresh_id` to `widget_publish`, or call `widget_finish_refresh` with that lease,
+`outcome="unchanged"`/`"failed"`, and a concrete reason. Unchanged requires a successful
+recheck; unavailable sources require failed. Existing verified data retains its original
+timestamps. A busy lease belongs to another run. Expired leases recover interrupted runs;
+check `refreshOutcomes`, request `completedAt`, and `resultRevision` to confirm completion.
+
+Successful publications save compact `work_context` sources/session/recheck instructions
+and the normalized presentation. Hermes's `post_llm_call` attaches the bounded final
+user-facing result only for the exact turn that published. Other chat turns are excluded.
+Call `widget_read_events` to inspect taps; events remain separate from refresh completion.
 
 Action taps are a queue, not an authorisation. Publications may carry stable `itemId`s and
 `approve`/`snooze`/`open` actions. Read them with `widget_read_intents`, perform only the
@@ -178,11 +226,13 @@ still only recorded as intent state. Duplicate `clientEventId`s collapse to one 
 
 ## Proactive refresh
 
-The plugin installs an idempotent Hermes cron job every 6 hours. On an unattended run, use
-context you already know and call `widget_publish` only when there is a genuinely useful,
-supported update. Never invent calendar, task, metric, chart, or image data. If nothing useful
-changed, do nothing and leave the current publication untouched. Never republish an identical
-revision merely because the routine ran.
+The plugin installs an idempotent Hermes cron job every 6 hours with the `hermes-widget`
+toolset explicitly enabled, plus web/file/terminal for rechecking references. Cron starts
+fresh: use the saved handoff, then record published, unchanged, or failed. Publish only
+when new evidence supports a useful change. Duplicate content creates no revision or wake.
+Normal changed publications send content-free wakes: first immediately, subsequent changes
+coalesced for 60 seconds, capped at 30/hour. Quiet hours defer them; missing push support
+uses periodic polling. High priority keeps its separate 6/hour and 30/day limits.
 
 Standing watches are separate from ordinary publishes. Use `widget_watch` with
 `operation=create` for a durable condition → publication rule, `operation=tick` to evaluate
@@ -204,7 +254,7 @@ user noticed or understood the content.
 
 - [ ] Publication has a useful title, a truthful accessible summary, and exactly one source
 - [ ] Text/SVG/raster is bounded, supported, and contains no secret or unwanted lock-screen data
-- [ ] Scheduled refresh made no call when nothing useful changed
+- [ ] Refresh completed through publication or an explicit unchanged/failed outcome
 - [ ] Capacity warnings from `widget_publish`/`widget_preview` either fixed or deliberately accepted
 - [ ] Every color is 6-digit hex
 - [ ] Content fits the smallest registered band, and degrades if the user resizes

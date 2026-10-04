@@ -238,9 +238,9 @@ class PublicationContract(unittest.TestCase):
     def test_routine_prompt_uses_publish_and_can_noop(self):
         prompt = self.proactive.routine_prompt("hermes-brief")
         self.assertIn("widget_publish", prompt)
-        self.assertIn("do nothing when nothing useful changed", prompt)
+        self.assertIn("widget_finish_refresh", prompt)
         self.assertNotIn("widget_update", prompt)
-        self.assertIn("not that the phone rendered", prompt)
+        self.assertIn("does not prove delivery", prompt)
 
     def test_routine_prompt_honors_a_waiting_update_request(self):
         prompt = self.proactive.routine_prompt("hermes-brief")
@@ -248,10 +248,10 @@ class PublicationContract(unittest.TestCase):
         # Without this the tap wakes the agent and it no-ops as an ambient refresh,
         # so the user who asked for a fresher brief gets silence.
         self.assertIn("consume_update_requests=true", prompt)
-        self.assertIn("newlyConsumedUpdateRequests", prompt)
+        self.assertIn("refreshId", prompt)
         self.assertIn("Request update", prompt)
         # A waiting request is a reason to publish, not a licence to invent content.
-        self.assertIn("publish what you already know now", prompt)
+        self.assertIn("sources cannot be rechecked", prompt)
         # The routine still must not steer the agent to the legacy tool.
         self.assertNotIn("widget_update", prompt)
 

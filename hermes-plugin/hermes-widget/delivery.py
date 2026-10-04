@@ -209,7 +209,7 @@ def mark_update_request_triggered(request_id: str, *, error: str | None = None) 
         try:
             status = "failed" if error else "triggered"
             conn.execute(
-                "UPDATE widget_update_requests SET status = ?, triggered_at = ?, trigger_error = ? WHERE request_id = ?",
+                "UPDATE widget_update_requests SET status = CASE WHEN consumed_at IS NULL AND completed_at IS NULL THEN ? ELSE status END, triggered_at = ?, trigger_error = CASE WHEN completed_at IS NULL THEN ? ELSE trigger_error END WHERE request_id = ?",
                 (status, _now(), error, request_id),
             )
             conn.commit()
@@ -255,7 +255,7 @@ def consume_update_requests(widget_id: str) -> list[dict]:
 def has_unconsumed_update_requests(*, created_after: str | None = None) -> bool:
     conn = _connect()
     try:
-        where = "status='triggered' AND consumed_at IS NULL"
+        where = "status IN ('triggered','consumed') AND completed_at IS NULL AND refresh_id IS NULL"
         params: tuple[str, ...] = ()
         if created_after is not None:
             where += " AND created_at > ?"
@@ -301,6 +301,10 @@ def _update_request_row(row: Any) -> dict:
         "triggeredAt": row["triggered_at"],
         "consumedAt": row["consumed_at"] if "consumed_at" in keys else None,
         "error": row["trigger_error"],
+        "refreshId": row["refresh_id"] if "refresh_id" in keys else None,
+        "completedAt": row["completed_at"] if "completed_at" in keys else None,
+        "outcome": row["outcome"] if "outcome" in keys else None,
+        "resultRevision": row["result_revision"] if "result_revision" in keys else None,
     }
 
 

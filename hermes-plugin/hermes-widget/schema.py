@@ -11,7 +11,7 @@ try:
 except ImportError:  # direct import from scripts/tests
     from errors import StoreError  # type: ignore
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 _SCHEMA_LOCK = threading.RLock()
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,11 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
                 f"database schema {schema_version} is newer than supported schema {SCHEMA_VERSION}"
             )
         conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE IF NOT EXISTS widget_work_context (widget_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, context_json TEXT NOT NULL, updated_at TEXT NOT NULL)")
+        conn.execute("CREATE TABLE IF NOT EXISTS widget_published_turns (session_id TEXT NOT NULL, turn_id TEXT NOT NULL, widget_id TEXT NOT NULL, revision INTEGER NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY(session_id, turn_id, widget_id))")
+        conn.execute("CREATE TABLE IF NOT EXISTS widget_refresh_runs (refresh_id TEXT PRIMARY KEY, widget_id TEXT NOT NULL, status TEXT NOT NULL, lease_until TEXT NOT NULL, started_at TEXT NOT NULL, completed_at TEXT, revision INTEGER, reason TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS widget_normal_wakes (widget_id TEXT PRIMARY KEY, revision INTEGER NOT NULL, due_at TEXT NOT NULL, claim_until TEXT)")
+        conn.execute("CREATE TABLE IF NOT EXISTS widget_normal_wake_attempts (widget_id TEXT NOT NULL, attempted_at TEXT NOT NULL)")
         conn.execute(
             "CREATE TABLE IF NOT EXISTS devices ("
             "device_id TEXT PRIMARY KEY, token_hash TEXT NOT NULL, label TEXT, "
@@ -233,6 +238,10 @@ def ensure_schema(conn: sqlite3.Connection) -> None:
         _add_column_if_missing(conn, "publication_revisions", "watch_id", "TEXT")
         _add_column_if_missing(conn, "widget_update_requests", "instance_id", "TEXT")
         _add_column_if_missing(conn, "widget_update_requests", "consumed_at", "TEXT")
+        _add_column_if_missing(conn, "widget_update_requests", "refresh_id", "TEXT")
+        _add_column_if_missing(conn, "widget_update_requests", "completed_at", "TEXT")
+        _add_column_if_missing(conn, "widget_update_requests", "outcome", "TEXT")
+        _add_column_if_missing(conn, "widget_update_requests", "result_revision", "INTEGER")
         _add_column_if_missing(conn, "publication_render_builds", "instance_id", "TEXT")
         _add_column_if_missing(conn, "device_client_info", "app_build_sha", "TEXT")
         _add_column_if_missing(conn, "publication_render_builds", "app_build_sha", "TEXT")

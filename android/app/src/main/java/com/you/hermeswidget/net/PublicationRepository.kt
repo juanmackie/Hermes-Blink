@@ -5,7 +5,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
-import java.security.MessageDigest
 
 enum class RefreshOutcome {
     UPDATED,
@@ -53,8 +52,8 @@ object PublicationRepository {
             Config.getPublicationEtag(appContext),
         )
 
-        if (response.code == 304 && publication?.content is PublicationContent.Image &&
-            !assetIsValid(appContext, publication.content)
+        if (response.code == 304 && publication != null &&
+            publication.images().any { !assetIsValid(appContext, it) }
         ) {
             response = HermesApi.fetchPublication(baseUrl, widgetId, token)
         }
@@ -102,46 +101,28 @@ object PublicationRepository {
         }
 
         var assetEtag: String? = null
-        val content = publication.content
-        if (content is PublicationContent.Image && !publication.isExpired()) {
-            val asset = content
-            var assetResponse: HttpResult
-            if (assetIsValid(appContext, asset)) {
-                assetEtag = Config.getAssetEtag(appContext, asset.assetId)
-                assetResponse = HttpResult(304, etag = assetEtag)
-            } else {
-                assetResponse = HermesApi.fetchAsset(
-                    baseUrl,
-                    asset.assetId,
-                    token,
-                    Config.getAssetEtag(appContext, asset.assetId),
-                )
-            }
-            if (assetResponse.code == 304 && !assetIsValid(appContext, asset)) {
-                assetResponse = HermesApi.fetchAsset(baseUrl, asset.assetId, token)
-            }
-            when (assetResponse.code) {
-                200 -> {
-                    val bytes = assetResponse.bytes
-                        ?: return@withContext assetFailure(appContext, "asset response was empty")
-                    if (bytes.size.toLong() != asset.bytes || sha256(bytes) != asset.sha256) {
-                        return@withContext assetFailure(appContext, "asset integrity check failed")
-                    }
-                    writeAsset(appContext, asset.assetId, bytes)
-                    assetEtag = assetResponse.etag
+        val missingVariants = mutableListOf<String>()
+        for (asset in publication.images().filter { !publication.isExpired() }) {
+            val optional = asset.assetId != (publication.content as? PublicationContent.Image)?.assetId
+            val download = downloadAsset(
+                asset,
+                cached = { assetIsValid(appContext, asset) },
+                fetch = { conditional ->
+                    HermesApi.fetchAsset(baseUrl, asset.assetId, token,
+                        if (conditional) Config.getAssetEtag(appContext, asset.assetId) else null)
+                },
+                persist = { bytes -> writeAsset(appContext, asset.assetId, bytes) },
+            )
+            if (download.error != null) {
+                if (optional) {
+                    missingVariants.add(asset.assetId)
+                    continue
                 }
-                304 -> {
-                    if (!assetIsValid(appContext, asset)) {
-                        return@withContext assetFailure(appContext, "asset was not cached")
-                    }
-                    assetEtag = assetResponse.etag ?: Config.getAssetEtag(appContext, asset.assetId)
-                }
-                else -> return@withContext assetResponse.toResult(
-                    appContext,
-                    publication,
-                    assetResponse.error,
-                )
+                if (download.offline) return@withContext HttpResult(-1).toResult(appContext, publication, download.error)
+                return@withContext assetFailure(appContext, download.error)
             }
+            if (!optional) assetEtag = download.etag ?: Config.getAssetEtag(appContext, asset.assetId)
+
         }
 
         if (!Config.setCachedPublication(
@@ -154,9 +135,10 @@ object PublicationRepository {
         ) {
             return@withContext assetFailure(appContext, "could not persist publication")
         }
-        cleanupAssets(appContext, (publication.content as? PublicationContent.Image)?.assetId)
+        cleanupAssets(appContext, publication.images().map { it.assetId }.toSet())
         Config.setConnectionState(appContext, ConnectionState.ONLINE, System.currentTimeMillis())
-        RefreshResult(RefreshOutcome.UPDATED, publication)
+        RefreshResult(RefreshOutcome.UPDATED, publication,
+            missingVariants.takeIf { it.isNotEmpty() }?.let { "${it.size} optional visual assets unavailable; primary fallback" })
     }
 
     fun loadCached(context: Context): Publication? {
@@ -249,20 +231,17 @@ object PublicationRepository {
         }
     }
 
-    private fun cleanupAssets(context: Context, keepAssetId: String?) {
+    private fun cleanupAssets(context: Context, keepAssetIds: Set<String>) {
         val directory = File(context.filesDir, "publication-assets")
         directory.listFiles()?.forEach { file ->
-            if (file.isFile && file.name != keepAssetId) file.delete()
+            if (file.isFile && file.name !in keepAssetIds) file.delete()
         }
     }
 
     private fun clear(context: Context) {
         Config.clearCachedPublication(context)
-        cleanupAssets(context, null)
+        cleanupAssets(context, emptySet())
     }
 
-    private fun sha256(bytes: ByteArray): String =
-        MessageDigest.getInstance("SHA-256").digest(bytes).joinToString("") { byte ->
-            "%02x".format(byte.toInt() and 0xff)
-        }
+    private fun sha256(bytes: ByteArray): String = digest(bytes)
 }

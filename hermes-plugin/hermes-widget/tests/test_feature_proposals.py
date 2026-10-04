@@ -174,7 +174,7 @@ class FeatureProposals(unittest.TestCase):
         # CI job installs the optional preview dependencies; a minimal host does not). The contract is "a real text
         # renderer", not a specific one â€” see the suppressed tests below for the
         # deterministic path.
-        self.assertIn(rendered[0]["renderer"], {"pillow-text", "cairosvg"})
+        self.assertIn(rendered[0]["renderer"], {"pillow-composition"})
 
     def test_request_update_pokes_the_existing_refresh_routine(self):
         self.store.put_publication("poke", title="A", summary="S", text="body")
@@ -237,6 +237,8 @@ class FeatureProposals(unittest.TestCase):
         self.assertEqual(compact["resultLimits"]["limit"], 10)
 
     def test_refresh_process_single_flight_reuses_running_cron(self):
+        # Isolate the process fixture from previous HTTP trigger fixtures.
+        self.proactive._REFRESH_PROCESS = None
         release = threading.Event()
         reaped = threading.Event()
 
@@ -589,7 +591,7 @@ class FeatureProposals(unittest.TestCase):
             "sizes": ["2x2"],
         }))
         self.assertTrue(result["ok"], result)
-        self.assertEqual(result["previews"][0]["renderer"], "pillow")
+        self.assertEqual(result["previews"][0]["renderer"], "pillow-composition")
 
     def test_svg_preview_reports_missing_local_renderer(self):
         svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10"/></svg>'
@@ -598,16 +600,17 @@ class FeatureProposals(unittest.TestCase):
             "content": {"type": "image", "mediaType": "image/svg+xml", "data": __import__("base64").b64encode(svg).decode()},
         }
         with patch.dict(sys.modules, {"cairosvg": None}):
-            rendered = self.preview.render_publication_previews(publication, sizes=["2x2"])
+            rendered = self.preview.render_publication_previews(publication, sizes=["400x400"])
         self.assertEqual(rendered[0]["renderer"], "svg-renderer-unavailable")
         self.assertIn("No local SVG renderer", rendered[0]["note"])
 
     def test_text_preview_keeps_a_usable_path_without_cairo(self):
         with patch.dict(sys.modules, {"cairosvg": None}):
-            data, renderer = self.preview._svg_text_png(
-                {"title": "Title", "summary": "Summary", "content": {"text": "Body"}}, 240, 240
+            previews = self.preview.render_publication_previews(
+                {"kind": "text", "title": "Title", "summary": "Summary", "content": {"text": "Body"}}, sizes=["400x400"]
             )
-        self.assertEqual(renderer, "pillow-text")
+            data = __import__("base64").b64decode(previews[0]["data"])
+        self.assertEqual(previews[0]["renderer"], "pillow-composition")
         self.assertTrue(data.startswith(b"\x89PNG\r\n\x1a\n"))
 
     def test_action_is_idempotent_queued_and_resolution_is_audited(self):

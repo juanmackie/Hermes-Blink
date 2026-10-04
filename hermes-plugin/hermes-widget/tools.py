@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 import logging
+import base64
+from pathlib import Path
 from typing import Any
 
 try:  # normal path: imported as part of the hermes-widget plugin package
@@ -79,7 +81,7 @@ def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     max_age_seconds = args.get("max_age_seconds", args.get("maxAgeSeconds"))
     item_id = args.get("item_id", args.get("itemId"))
     ticker = args.get("ticker")
-    if ticker is not None and not any(args.get(name) is not None for name in ("text", "svg")) and file_path is None:
+    if ticker is not None and not any(args.get(name) is not None for name in ("text", "svg", "presentation")) and file_path is None:
         if not isinstance(ticker, dict):
             return _error("invalid_publication", "ticker must be an object")
         try:
@@ -120,6 +122,11 @@ def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
                 provenance=args.get("provenance"),
                 dark_palette=bool(args.get("dark_palette", args.get("darkPalette", False))),
                 variants=args.get("variants"),
+                presentation=args.get("presentation"),
+                visual_variants=args.get("visual_variants", args.get("visualVariants")),
+                work_context=args.get("work_context"),
+                refresh_id=args.get("refresh_id"),
+                ticker=ticker,
             )
         except store.StoreError as exc:
             return _store_error(exc)
@@ -127,7 +134,7 @@ def widget_publish(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
         {
             "ok": True,
             **result,
-            "delivery": "pending_wake" if result.get("priority") == "high" else "pending_periodic_fetch",
+            "delivery": "unchanged" if result.get("unchanged") else "wake_or_poll_pending",
             "visibility": "not_claimed",
             "next": (
                 "The revision is stored. The phone will fetch it on its next poll or "
@@ -172,8 +179,10 @@ def widget_preview(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
             sizes=args.get("sizes"),
             inventory=store.list_widget_instances(widget_id),
             asset_loader=lambda asset_id: store.read_asset(asset_id)[1],
+            palette=args.get("palette", "light"),
+            font_scale=args.get("font_scale", 1.0),
         )
-    except (ValueError, store.StoreError) as exc:
+    except (ValueError, store.StoreError, ImportError, OSError) as exc:
         return _store_error(exc) if isinstance(exc, store.StoreError) else _error("invalid_preview", str(exc))
     last_render = store._last_render_metrics()
     for item in rendered:
@@ -182,7 +191,20 @@ def widget_preview(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
                 "No local SVG renderer (CairoSVG/libcairo); "
                 f"last device render {last_render['width']}×{last_render['height']}px"
             )
-    return _dumps({
+    images = []
+    directory = store.data_dir() / "previews"
+    directory.mkdir(parents=True, exist_ok=True)
+    for item in rendered:
+        data = item.pop("data")
+        path = directory / (item["sha256"] + ".png")
+        path.write_bytes(base64.b64decode(data))
+        item["path"] = str(path.resolve())
+        images.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + data}})
+    retained = {Path(item["path"]) for item in rendered}
+    older = sorted((p for p in directory.glob("*.png") if p not in retained), key=lambda p: p.stat().st_mtime, reverse=True)
+    for path in older[32:]:
+        path.unlink(missing_ok=True)
+    result = _dumps({
         "ok": True,
         "widgetId": widget_id,
         "revision": publication.get("revision"),
@@ -190,6 +212,30 @@ def widget_preview(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
         "warnings": store._capacity_warnings_for_publication(publication, widget_id),
         "note": "Preview is advisory; the Android device remains authoritative.",
     })
+    try:
+        from tools.vision_tools import _should_use_native_vision_fast_path
+        native = _should_use_native_vision_fast_path()
+    except (ImportError, AttributeError):
+        native = False
+    if native:
+        return {"_multimodal": True, "content": [{"type": "text", "text": result}, *images], "text_summary": result}
+    return result
+
+
+def widget_finish_refresh(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
+    args = args or {}
+    try:
+        from . import refresh
+    except ImportError:
+        import refresh
+    try:
+        widget_id = args.get("widget_id") or store.DEFAULT_WIDGET_ID
+        if args.get("outcome") not in ("unchanged", "failed"):
+            return _error("invalid_outcome", "Use widget_publish for published outcomes; finish accepts unchanged or failed")
+        refresh.finish(widget_id,args.get("refresh_id"),args.get("outcome"),args.get("reason"))
+        return _dumps({"ok": True, "refreshOutcomes": refresh.outcomes(widget_id)})
+    except store.StoreError as exc:
+        return _store_error(exc)
 
 
 def widget_read_intents(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
@@ -358,12 +404,22 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
         limit = args.get("limit", 10 if summary else 50)
         if isinstance(limit, bool) or not isinstance(limit, int):
             return _error("invalid_limit", "limit must be an integer")
+        limit = max(1, min(limit, 10 if summary else 100))
         publication = store.publication_status(
             widget_id,
-            consume_update_requests_now=consume_updates,
+            consume_update_requests_now=False,
             limit=limit,
             summary=summary,
         )
+        try:
+            from . import refresh
+        except ImportError:
+            import refresh
+        lease = refresh.claim(widget_id) if consume_updates else None
+        if lease:
+            requests = store.list_update_requests(widget_id, limit=200)
+            publication["updateRequests"] = requests[:limit]
+            publication["newlyConsumedUpdateRequests"] = [r for r in requests if r["requestId"] in lease["requests"]]
     except store.StoreError as exc:
         return _store_error(exc)
 
@@ -408,6 +464,9 @@ def widget_status(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
                 for d in devices[:limit]
             ],
             "publication": publication.get("publication"),
+            "workContext": refresh.read_context(widget_id),
+            "refreshLease": lease,
+            "refreshOutcomes": refresh.outcomes(widget_id),
             "publicationState": publication.get("state"),
             "stale": publication.get("stale", False),
             "revisions": publication.get("revisions", []),

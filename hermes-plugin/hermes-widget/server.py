@@ -627,7 +627,7 @@ class _Handler(BaseHTTPRequestHandler):
                 raise _HttpError(400, "invalid_publication", "publication must be a JSON object")
             file_path = body.get("file_path", body.get("image_path", body.get("path")))
             ticker = body.get("ticker")
-            ticker_only = isinstance(ticker, dict) and body.get("text") is None and body.get("svg") is None and file_path is None
+            ticker_only = isinstance(ticker, dict) and body.get("text") is None and body.get("svg") is None and body.get("presentation") is None and file_path is None
             title = body.get("title") or (ticker.get("title") if ticker_only else None)
             summary = body.get("summary") or (ticker.get("summary") if ticker_only else None)
             if not isinstance(title, str) or not isinstance(summary, str):
@@ -662,6 +662,11 @@ class _Handler(BaseHTTPRequestHandler):
                     provenance=body.get("provenance"),
                     dark_palette=bool(body.get("darkPalette", body.get("dark_palette", False))),
                     variants=body.get("variants"),
+                    presentation=body.get("presentation"),
+                    visual_variants=body.get("visual_variants", body.get("visualVariants")),
+                    work_context=body.get("work_context"),
+                    refresh_id=body.get("refresh_id"),
+                    ticker=ticker,
                 )
             self._json(200, result)
             return
@@ -861,7 +866,7 @@ class _Handler(BaseHTTPRequestHandler):
             raise _HttpError(400, "invalid_preview", "preview body must be a JSON object")
         raw_publication = body.get("publication")
         if raw_publication is None:
-            source_keys = {"title", "summary", "text", "svg", "file_path", "filePath"}
+            source_keys = {"title", "summary", "text", "svg", "file_path", "filePath", "presentation", "variants", "visual_variants", "visualVariants", "ticker", "sizes", "sizeClasses"}
             raw_publication = body if source_keys.intersection(body) else None
         if raw_publication is None:
             publication = store.get_publication(widget_id)
@@ -880,8 +885,10 @@ class _Handler(BaseHTTPRequestHandler):
                 sizes=requested_sizes,
                 inventory=inventory,
                 asset_loader=lambda asset_id: store.read_asset(asset_id)[1],
+                palette=body.get("palette", "light"),
+                font_scale=body.get("font_scale", body.get("fontScale", 1.0)),
             )
-        except ValueError as exc:
+        except (ValueError, ImportError, OSError) as exc:
             raise _HttpError(400, "invalid_preview", str(exc)) from exc
         last_render = store._last_render_metrics()
         for item in previews:
@@ -1130,6 +1137,8 @@ def run_server(
         daemon=True,
     )
     watch_thread.start()
+    wake_thread = threading.Thread(target=_normal_wake_loop, args=(watch_stop,), name="hermes-widget-normal-wakes", daemon=True)
+    wake_thread.start()
     scheme = "https" if certfile else "http"
     url = f"{scheme}://{host}:{httpd.server_address[1]}"
     if not quiet:
@@ -1142,6 +1151,7 @@ def run_server(
     finally:
         watch_stop.set()
         watch_thread.join(timeout=WATCH_TICK_INTERVAL_SECONDS + 1)
+        wake_thread.join(timeout=10)
         httpd.server_close()
 
 
@@ -1161,6 +1171,28 @@ def _date_watch_loop(stop_event: threading.Event) -> None:
         except Exception:
             _log.warning("priority wake retry failed", exc_info=True)
         stop_event.wait(WATCH_TICK_INTERVAL_SECONDS)
+
+
+def _normal_wake_loop(stop_event: threading.Event) -> None:
+    try:
+        from .normal_wakes import flush
+    except ImportError:
+        from normal_wakes import flush
+    while not stop_event.is_set():
+        try:
+            from .refresh import recover_expired
+        except ImportError:
+            from refresh import recover_expired
+        try:
+            if recover_expired() and store.has_unconsumed_update_requests():
+                proactive.trigger_refresh()
+        except Exception:
+            _log.warning("interrupted refresh recovery failed", exc_info=True)
+        try:
+            flush()
+        except Exception:
+            _log.warning("normal wake dispatch failed", exc_info=True)
+        stop_event.wait(1)
 
 
 if __name__ == "__main__":  # pragma: no cover - manual entry point

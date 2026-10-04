@@ -23,6 +23,10 @@ object PublicationImages {
 
     fun load(context: android.content.Context, publication: Publication): Bitmap? {
         val image = publication.content as? PublicationContent.Image ?: return null
+        return load(context, image)
+    }
+
+    fun load(context: android.content.Context, image: PublicationContent.Image): Bitmap? {
         val file = runCatching { Config.assetFile(context, image.assetId) }.getOrNull()
             ?.takeIf { it.isFile && it.length() == image.bytes }
             ?: return null

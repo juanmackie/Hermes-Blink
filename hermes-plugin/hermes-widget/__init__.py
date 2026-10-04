@@ -36,6 +36,7 @@ _TOOLS: tuple[tuple[dict[str, Any], Callable[..., str]], ...] = (
     (schemas.WIDGET_WAKE_TEST, tools.widget_wake_test),
     (schemas.WIDGET_SET_QUIET_HOURS, tools.widget_set_quiet_hours),
     (schemas.WIDGET_STATUS, tools.widget_status),
+    (schemas.WIDGET_FINISH_REFRESH, tools.widget_finish_refresh),
 )
 
 
@@ -46,6 +47,14 @@ def register(ctx: Any) -> None:
     _register_cli_command(ctx)
     _register_skill(ctx)
     _register_proactive_guidance(ctx)
+    register_hook = getattr(ctx, "register_hook", None)
+    if callable(register_hook):
+        from . import refresh
+        for event, handler in (("post_tool_call", refresh.published_turn), ("post_llm_call", refresh.final_result)):
+            try:
+                register_hook(event, handler)
+            except Exception:
+                logger.warning("hermes-widget: could not register %s", event, exc_info=True)
 
 
 _PROACTIVE_GUIDANCE = (
@@ -58,9 +67,15 @@ _PROACTIVE_GUIDANCE = (
     "priority is only for genuinely time-sensitive content. Publishing stores a revision; "
     "it never proves the user saw it (publishing does not prove delivery or visibility). "
     "If host setup is missing, direct the operator to `hermes widget up`; never "
-    "guess private paths. Call widget_status with consume_update_requests=true; a non-empty "
-    "newlyConsumedUpdateRequests list means the user tapped Request update on the widget and "
-    "wants something fresher: publish what you know now rather than waiting for the next run."
+    "guess private paths. During normal work, publish meaningful findings, comparisons, "
+    "blockers, and milestones when useful. Prefer structured presentation data: Blink owns "
+    "typography and layout. Save work_context sources/session/recheck with each publication. "
+    "Request update taps appear in newlyConsumedUpdateRequests. "
+    "For refreshes, first read widget_status with consume_update_requests=true and use its "
+    "workContext to recheck sources. Reading acknowledges a request; completion requires "
+    "widget_publish with refresh_id from refreshLease, or widget_finish_refresh with an "
+    "unchanged/failed outcome and reason. A busy lease belongs to another run. Preserve "
+    "the last verified data if sources cannot be rechecked; report failed explicitly."
 )
 
 

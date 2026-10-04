@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Structured Pillow presentations compile metrics/progress, comparisons, charts, and timelines
+  into compatible primary images and eight geometry/palette variants. Android downloads,
+  verifies, retains, and selects every referenced variant with primary-image fallback.
+- Advisory previews show the full widget composition at reported dp geometry, including the
+  pinned update action, with native Hermes image results or bounded local PNG paths.
+- Publications preserve a bounded work handoff. Publishing turns attach their final result via
+  Hermes hooks; refreshes use durable leases and explicit published/unchanged/failed outcomes.
+- Changed normal publications wake immediately, then coalesce for 60 seconds at 30 wakes per
+  widget/hour, respecting quiet hours. Duplicate content creates no revision or wake.
+- SQLite schema version 8 adds visual work context, refresh leases, and durable normal wakes.
+  Local validation and the pending manual phone/release pass are recorded in
+  [the visual publishing checklist](docs/VISUAL_PUBLISHING.md).
 - Removed the v2 layout transport and the duplicate setup/pairing agent tools; operators use
   `hermes widget up`, `hermes widget pair`, and `hermes widget code`.
 - Consolidated watch operations under `widget_watch` and removed the redundant camelCase aliases
@@ -38,8 +50,8 @@ The product release number is maintained here; the plugin manifest follows it. A
 
 | Surface | Current value |
 | --- | --- |
-| Product / plugin | `3.4.0` |
-| Android APK | `0.4.9` (`versionCode` 13) |
+| Product / plugin | `3.5.0` (release candidate) |
+| Android APK | `0.5.0` (`versionCode` 14, release candidate) |
 | Layout v2 | Removed; not supported |
 | HTTP transport | `v1` |
 | Publication envelope | `v1` |

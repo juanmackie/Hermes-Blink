@@ -205,6 +205,8 @@ class PreparedPublication:
     provenance: str | None = None
     dark_palette: bool = False
     variants: dict[str, Any] | None = None
+    presentation: dict[str, Any] | None = None
+    visual_variants: dict[str, PreparedAsset] | None = None
 
 
 def capabilities() -> dict[str, Any]:
@@ -212,6 +214,8 @@ def capabilities() -> dict[str, Any]:
     return {
         "publicationVersion": PUBLICATION_VERSION,
         "kinds": ["text", "image"],
+        "presentation": {"types": ["metric", "progress", "comparison", "chart", "timeline"], "maxBytes": 32768, "maxItems": 32, "renderer": "Pillow"},
+        "visualVariants": {"bands": ["m", "l"], "layouts": ["narrow", "wide"], "palettes": ["light", "dark"], "primaryRequired": True},
         "regions": {
             "slots": ["hero", "ticker"],
             "independentTtl": True,
@@ -462,6 +466,8 @@ def prepare_publication(
     provenance: str | None = None,
     dark_palette: bool = False,
     variants: Any = None,
+    presentation: Any = None,
+    visual_variants: Any = None,
     now: datetime | None = None,
 ) -> PreparedPublication:
     """Validate exactly one content source and return bounded publication data."""
@@ -490,12 +496,32 @@ def prepare_publication(
                 "text": _bounded_text(variant.get("text"), f"variants.{name}.text", MAX_TEXT_BYTES, required=True),
             }
 
-    sources = [("text", text), ("svg", svg), ("file", file_path)]
+    sources = [("text", text), ("svg", svg), ("file", file_path), ("presentation", presentation)]
     supplied = [(kind, value) for kind, value in sources if value is not None]
     if len(supplied) != 1:
-        raise PublicationInputError("provide exactly one of text, svg, or file_path")
+        raise PublicationInputError("provide exactly one of text, svg, file_path, or presentation")
     kind, value = supplied[0]
-    text_value, asset = _prepare_content_source(kind, value)
+    normalized = None
+    visual_assets = {}
+    if kind == "presentation":
+        try:
+            from .presentations import compile_presentation
+        except ImportError:
+            from presentations import compile_presentation
+        normalized, asset, visual_assets = compile_presentation(value)
+        text_value = None
+    else:
+        text_value, asset = _prepare_content_source(kind, value)
+    if visual_variants is not None:
+        if kind in {"text", "presentation"} or not isinstance(visual_variants, dict) or len(visual_variants) > 8:
+            raise PublicationInputError("visual_variants must be up to 8 custom image sources with a primary SVG or raster")
+        for key, source in visual_variants.items():
+            if key not in {f"{b}-{w}-{p}" for b in ("m", "l") for w in ("narrow", "wide") for p in ("light", "dark")}:
+                raise PublicationInputError("invalid visual variant key; use m/l-narrow/wide-light/dark")
+            if not isinstance(source, dict) or len(source) != 1 or next(iter(source)) not in {"svg", "file_path"}:
+                raise PublicationInputError("each visual variant requires exactly one svg or file_path")
+            source_kind, source_value = next(iter(source.items()))
+            _, visual_assets[key] = _prepare_content_source("file" if source_kind == "file_path" else source_kind, source_value)
     expiry = _normalize_expiry(expires_at, ttl_seconds, now or datetime.now(timezone.utc))
     return PreparedPublication(
         title_value,
@@ -511,6 +537,8 @@ def prepare_publication(
         provenance,
         dark_palette,
         variant_values,
+        normalized,
+        visual_assets,
     )
 
 

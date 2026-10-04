@@ -1,11 +1,11 @@
 [project]
 name = "hermes-widget"
-version = "3.4.0"
+version = "3.5.0"
 requires-python = ">=3.11"
-dependencies = ["defusedxml>=0.7.1,<1"]
+dependencies = ["defusedxml>=0.7.1,<1", "Pillow>=10.4,<13"]
 
 [project.optional-dependencies]
-preview = ["Pillow>=12.3.0,<13", "CairoSVG>=2.9.1,<3"]
+preview = ["CairoSVG>=2.9.1,<3"]
 
 [tool.ruff]
 extend = "../../pyproject.toml"
