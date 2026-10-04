@@ -86,10 +86,14 @@ verb_cases = [
     ("publish", cli._publish, SimpleNamespace(widget_id=WIDGET, publication_file=None,
         title="CLI check", summary="CLI check", text="hello", svg=None, file_path=None,
         actions=None, max_age_seconds=None, item_id=None, priority="normal", json=True)),
+    ("requests", cli._requests, SimpleNamespace(widget_id=WIDGET, limit=5, json=True)),
 ]
 for name, fn, ns in verb_cases:
     rc, _ = run(fn, ns)
     check(f"verb_{name}", rc == 0)
+with patch.object(cli.proactive, "trigger_refresh", return_value={"triggered": True, "job": "hermes-widget-refresh", "pid": 1}):
+    rc, _ = run(cli._trigger_refresh, SimpleNamespace(json=True))
+check("verb_trigger_refresh", rc == 0)
 
 rc, _ = run(cli._publish, SimpleNamespace(
     widget_id=WIDGET, publication_file=None,
@@ -113,7 +117,10 @@ check("upgrade_keeps_device", store.device_for_token(device_token) is not None
 
 # rollback restores the newest widget.db.bak.* — produced by _upgrade just above, so this is a
 # real end-to-end check of the recovery guarantee, not a fixture we planted ourselves.
-rc, out = run(cli._rollback, SimpleNamespace())
+# Isolate from any real server on :8788 (e.g. `hermes widget serve` running during
+# USB development): rollback must not refuse because an unrelated process listens.
+with patch.object(cli, "_port_listening", return_value=False):
+    rc, out = run(cli._rollback, SimpleNamespace())
 check("rollback_exit_0", rc == 0 and "Rolled back" in out, out.strip().splitlines()[0] if out.strip() else "")
 check("rollback_keeps_device", store.device_for_token(device_token) is not None
       and len(store.list_devices()) == devices_before)

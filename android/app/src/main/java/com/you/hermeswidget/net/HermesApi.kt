@@ -241,7 +241,11 @@ object HermesApi {
             val code = conn.responseCode
             HttpResult(
                 code = code,
-                body = if (code in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null,
+                body = if (code in 200..299) {
+                    conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) }
+                } else {
+                    readErrorBody(conn)
+                },
                 retryAfterSeconds = retryAfter(conn),
             )
         } catch (e: Exception) {
@@ -317,7 +321,11 @@ object HermesApi {
             val code = conn.responseCode
             HttpResult(
                 code = code,
-                body = if (code in 200..299) conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) } else null,
+                body = if (code in 200..299) {
+                    conn.inputStream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) }
+                } else {
+                    readErrorBody(conn)
+                },
                 retryAfterSeconds = retryAfter(conn),
             )
         } catch (e: Exception) {
@@ -512,6 +520,16 @@ object HermesApi {
 
     private fun readText(input: java.io.InputStream, limit: Int): String =
         String(readBytes(input, limit), StandardCharsets.UTF_8)
+
+    /** Bounded server error body for non-2xx event posts; null when absent/unreadable. */
+    private fun readErrorBody(conn: HttpURLConnection): String? = runCatching {
+        val stream = try {
+            conn.errorStream ?: return null
+        } catch (_: Exception) {
+            return null
+        }
+        stream.use { readText(it, MAX_SMALL_RESPONSE_BYTES) }.takeIf { it.isNotBlank() }
+    }.getOrNull()
 
     private fun readBytes(input: java.io.InputStream, limit: Int): ByteArray {
         val declared = input.available().toLong()

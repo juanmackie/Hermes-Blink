@@ -21,6 +21,9 @@ limits, SVG rules, and retention are in [SCHEMA.md](SCHEMA.md).
 - A tap queues an idempotent event or action intent. The HTTP server does not execute agent work.
 - A fetch, download, or render receipt describes transport state; none proves that a person saw
   or understood the content.
+- For USB-cable development, `adb reverse tcp:8788 tcp:8788` exposes the host loopback at
+  `http://127.0.0.1:8788` on the phone (see `USB_ADB.md`). Debug builds allow cleartext;
+  release builds still require private HTTPS.
 - Publication ETags are hashes of the complete canonical envelope, including regions such as the
   ticker. `GET` records a fetch receipt even for `304`; `HEAD` never records one.
 

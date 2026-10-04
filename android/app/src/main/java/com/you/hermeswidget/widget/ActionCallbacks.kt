@@ -107,13 +107,30 @@ object ActionCallbacks {
             }
             if (result.code in 200..299) {
                 val publication = com.you.hermeswidget.net.PublicationRepository.loadCached(context)
-                if (publication != null) {
-                    HermesApi.reportAttention(url, token, widgetId, publication.revision, taps = 1)
+                if (event == "request_update") {
+                    // A 200 with trigger.error means Hermes stored the tap but the refresh
+                    // never started (dead cron/auth). That must not read as success.
+                    val resolved = Outcome.forRequestUpdate(result)
+                    if (!resolved.ok) {
+                        recordActionFailure(context, event, instanceId, resolved)
+                    } else {
+                        if (publication != null) {
+                            HermesApi.reportAttention(url, token, widgetId, publication.revision, taps = 1)
+                        }
+                        Config.recordActionOutcome(
+                            context, event, instanceId, 200, "ok", null,
+                            source = Config.SOURCE_WIDGET_ACTION,
+                        )
+                    }
+                } else {
+                    if (publication != null) {
+                        HermesApi.reportAttention(url, token, widgetId, publication.revision, taps = 1)
+                    }
+                    Config.recordActionOutcome(
+                        context, event, instanceId, 200, "ok", null,
+                        source = Config.SOURCE_WIDGET_ACTION,
+                    )
                 }
-                Config.recordActionOutcome(
-                    context, event, instanceId, 200, "ok", null,
-                    source = Config.SOURCE_WIDGET_ACTION,
-                )
                 RefreshWorker.schedulePostTapPoll(context)
             } else {
                 val outcome = Outcome.from(result, "Update requested", "Request update")

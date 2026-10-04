@@ -9,6 +9,7 @@ The phone and host do **not** need to be on the same Wi-Fi or LAN. Install Tails
 join them to the same tailnet, and let the phone pull from the host through Tailscale Serve.
 
 For the HTTP/auth contract, see `CONNECTION.md`; for payload and retention limits, see `SCHEMA.md`.
+For USB-cable development (no Tailscale needed, debug builds only), see `USB_ADB.md`.
 
 ---
 

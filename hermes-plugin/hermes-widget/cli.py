@@ -326,6 +326,54 @@ def add_parser(parser: Any) -> None:
     prev.add_argument("--sizes", default=None, help="Comma-separated publication sizes, e.g. 2x2,4x2,4x4.")
     prev.add_argument("--publication-file", default=None, help="JSON file containing a publication to preview before publishing.")
 
+    adb_dev = commands.add_parser("adb-devices", help="List ADB devices on USB/network.")
+    adb_dev.add_argument("--json", action="store_true", help="Machine-readable JSON.")
+
+    adb_rev = commands.add_parser(
+        "adb-reverse",
+        help="Expose host loopback to the phone over USB (debug builds use http://127.0.0.1:PORT).",
+    )
+    adb_rev.add_argument("--port", type=int, default=None, help="Host port (default: saved config or 8788).")
+    adb_rev.add_argument("--device-port", type=int, default=None, help="Device loopback port (default: same as --port).")
+    adb_rev.add_argument("--device", default=None, help="ADB serial (default: the single online device).")
+    adb_rev.add_argument("--remove", action="store_true", help="Remove the reverse instead of creating it.")
+    adb_rev.add_argument("--list", action="store_true", help="List active reverses and exit.")
+    adb_rev.add_argument("--json", action="store_true", help="Machine-readable JSON.")
+
+    adb_ins = commands.add_parser("adb-install", help="Install a debug APK over USB.")
+    adb_ins.add_argument("--apk", default=None, help="APK path (default: newest app-debug.apk under android/).")
+    adb_ins.add_argument("--device", default=None, help="ADB serial.")
+    adb_ins.add_argument("--launch", action="store_true", help="Launch MainActivity after install.")
+    adb_ins.add_argument("--json", action="store_true", help="Machine-readable JSON.")
+
+    adb_log = commands.add_parser("adb-logcat", help="Capture or clear logcat over USB.")
+    adb_log.add_argument("--device", default=None, help="ADB serial.")
+    adb_log.add_argument("--clear", action="store_true", help="Clear the logcat buffer and exit.")
+    adb_log.add_argument("--dump", action="store_true", help="Dump current buffer and exit (default streams briefly).")
+    adb_log.add_argument("--tag", default="HermesWidget", help="Log tag filter for streaming (default: HermesWidget).")
+
+    usb = commands.add_parser(
+        "usb-up",
+        help="One-shot USB dev setup: reverse host port to the phone and report status.",
+    )
+    usb.add_argument("--port", type=int, default=None, help="Host port (default: saved config or 8788).")
+    usb.add_argument("--device", default=None, help="ADB serial.")
+    usb.add_argument("--json", action="store_true", help="Machine-readable JSON.")
+
+    req = commands.add_parser(
+        "requests",
+        help="List Request-update taps with trigger state (did Hermes start a refresh?).",
+    )
+    req.add_argument("--widget-id", default=store.DEFAULT_WIDGET_ID)
+    req.add_argument("--limit", type=int, default=10)
+    req.add_argument("--json", action="store_true", help="Machine-readable JSON.")
+
+    trig = commands.add_parser(
+        "trigger-refresh",
+        help="Manually spawn the refresh cron (used when a tap recorded but never triggered).",
+    )
+    trig.add_argument("--json", action="store_true", help="Machine-readable JSON.")
+
 
 # ---------------------------------------------------------------------------
 # Dispatch
@@ -350,6 +398,13 @@ def dispatch(args: Any) -> int:
         "uninstall": _uninstall,
         "install-skill": _install_skill,
         "preview": _preview,
+        "adb-devices": _adb_devices,
+        "adb-reverse": _adb_reverse,
+        "adb-install": _adb_install,
+        "adb-logcat": _adb_logcat,
+        "usb-up": _usb_up,
+        "requests": _requests,
+        "trigger-refresh": _trigger_refresh,
     }
     command = getattr(args, "widget_command", None)
     if not isinstance(command, str):
@@ -800,6 +855,10 @@ def _status(args: Any) -> int:
         )
     if publication.get("updateRequests"):
         print(f"Update reqs:  {len(publication['updateRequests'])} recorded")
+        for req in publication["updateRequests"][:5]:
+            err = f" error={req.get('error')}" if req.get("error") else ""
+            print(f"  - {req.get('createdAt')} {req.get('requestId')} status={req.get('status')}{err}")
+        print("  (detail: hermes widget requests)")
     print(f"Instances:    {len(publication.get('inventory', []))} registered")
     print(f"Intents:      {len(publication.get('intents', []))} recorded")
     if publication.get("anomalies"):
@@ -889,6 +948,88 @@ def _redact(text: str) -> str:
     return text
 
 
+def _jdk_candidates() -> list[str]:
+    """JDK installs that can build the Android app (17+); PATH java may be 8."""
+    seen: list[str] = []
+    for raw in (
+        os.environ.get("JAVA_HOME", ""),
+        r"C:\Program Files\Eclipse Adoptium\jdk-25.0.3.9-hotspot",
+        r"C:\Program Files\Java\jdk-17",
+        r"C:\Program Files\Microsoft\jdk-17",
+    ):
+        candidate = str(raw).strip()
+        if candidate and candidate not in seen:
+            seen.append(candidate)
+    return seen
+
+
+def _java_version_string(java_bin: str) -> str | None:
+    try:
+        probe = subprocess.run(
+            [java_bin, "-version"], capture_output=True, text=True, timeout=5
+        )
+        output = (probe.stderr or probe.stdout).splitlines()
+        return output[0][:200] if output else "unknown"
+    except Exception:
+        return None
+
+
+def _java_major_ok(version: str | None) -> bool | None:
+    """True when the java -version line reports 17+; None when unparseable."""
+    import re as _re
+    if not version:
+        return None
+    match = _re.search(r'"(\d+)(?:\.(\d+))?', version)
+    if not match:
+        match = _re.search(r"(\d+)(?:\.(\d+))?", version)
+    if not match:
+        return None
+    try:
+        major = int(match.group(1))
+        minor = int(match.group(2)) if match.group(2) else 0
+    except ValueError:
+        return None
+    if major == 1:  # legacy 1.8 numbering
+        return minor >= 17
+    return major >= 17
+
+
+def _usb_doctor_snapshot(port: int) -> dict[str, Any]:
+    """Best-effort ADB/USB + JDK snapshot for doctor; never raises."""
+    snapshot: dict[str, Any] = {"available": False}
+    try:
+        adb_mod = _adb_import()
+        snapshot.update(adb_mod.usb_status(port))
+        snapshot["available"] = bool(snapshot.get("ok"))
+    except Exception as exc:
+        snapshot = {"available": False, "error": str(exc)[:300]}
+    try:
+        java = shutil.which("java")
+        snapshot["javaOnPath"] = java
+        if java:
+            version = _java_version_string(java)
+            if version:
+                snapshot["javaVersion"] = version
+                snapshot["jdk17OnPath"] = _java_major_ok(version)
+        jdks: dict[str, str] = {}
+        for home in _jdk_candidates():
+            java_bin = str(Path(home) / "bin" / "java.exe" if os.name == "nt" else Path(home) / "bin" / "java")
+            if Path(java_bin).is_file():
+                version = _java_version_string(java_bin)
+                if version:
+                    jdks[home] = version
+        if jdks:
+            snapshot["jdks"] = jdks
+            snapshot["jdkOk"] = any(_java_major_ok(v) is True for v in jdks.values())
+    except Exception:
+        pass
+    for key in ("JAVA_HOME", "ANDROID_HOME", "ANDROID_SDK_ROOT"):
+        value = os.environ.get(key, "").strip()
+        if value:
+            snapshot[key] = value
+    return snapshot
+
+
 def _doctor(args: Any) -> int:
     """Diagnostics with redaction and protocol metadata."""
     token_present = store.get_agent_token(create=False) is not None
@@ -928,6 +1069,7 @@ def _doctor(args: Any) -> int:
         "service": (Path.home() / ".config" / "systemd" / "user" / "hermes-widget.service").is_file(),
         "host": host,
         "port": port,
+        "usb": _usb_doctor_snapshot(port),
     }
     # If a token value accidentally leaked into payload, redact
     out = json.dumps(payload, indent=2)
@@ -1167,4 +1309,283 @@ def _uninstall(args: Any) -> int:
 
 def _install_skill(_args: Any) -> int:
     print(f"Skill installed: {proactive.install_skill_file()}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# ADB-over-USB (local dev transport; debug builds only for cleartext)
+# ---------------------------------------------------------------------------
+
+def _adb_import():
+    try:
+        from . import adb as _adb
+    except ImportError:  # pragma: no cover - direct import from tests/scripts
+        import adb as _adb  # type: ignore
+    return _adb
+
+
+def _adb_devices(args: Any) -> int:
+    _adb = _adb_import()
+    try:
+        devices = _adb.list_devices()
+    except Exception as exc:
+        print(f"adb devices failed: {exc}")
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": True, "devices": devices}, indent=2))
+        return 0
+    if not devices:
+        print("No adb devices. Enable USB debugging, connect via USB, accept the RSA prompt.")
+        return 1
+    for item in devices:
+        extra = " ".join(
+            f"{key}={item[key]}" for key in ("model", "product", "transport") if key in item
+        )
+        print(f"{item['serial']}  {item['state']}  {extra}".rstrip())
+    return 0
+
+
+def _resolve_usb_port(value: Any) -> int:
+    if isinstance(value, int) and not isinstance(value, bool) and 1 <= value <= 65535:
+        return value
+    try:
+        _, port, _ = proactive.resolve_server_binding(None, None)
+        return port
+    except Exception:
+        return DEFAULT_PORT
+
+
+def _adb_reverse(args: Any) -> int:
+    _adb = _adb_import()
+    port = _resolve_usb_port(getattr(args, "port", None))
+    device_port = getattr(args, "device_port", None) or port
+    serial = getattr(args, "device", None)
+    as_json = getattr(args, "json", False)
+    try:
+        if getattr(args, "list", False):
+            target = _adb.ensure_device(serial)
+            specs = _adb.reverse_list(serial=target)
+            if as_json:
+                print(json.dumps({"ok": True, "serial": target, "reverses": specs}, indent=2))
+            else:
+                print(f"reverses for {target}:")
+                for spec in specs or ["(none)"]:
+                    print(f"  {spec}")
+            return 0
+        result = _adb.reverse(port, device_port, serial=serial, remove=bool(getattr(args, "remove", False)))
+    except Exception as exc:
+        print(f"adb reverse failed: {exc}")
+        return 1
+    if as_json:
+        print(json.dumps({"ok": True, **result}, indent=2))
+        return 0
+    if result.get("removed"):
+        print(f"Removed reverse {result.get('spec')} on {result.get('serial')}.")
+    else:
+        print(f"USB reverse ready: phone http://127.0.0.1:{device_port} -> host :{port} ({result.get('serial')}).")
+        print("Debug builds only: release forbids cleartext; use Tailscale HTTPS for release.")
+    return 0
+
+
+def _default_debug_apk() -> Path | None:
+    """Newest debug APK, searching cwd, the checkout, then the installed copy."""
+    seen: set[Path] = set()
+    roots: list[Path] = [Path.cwd()]
+    try:
+        roots.append(Path(__file__).resolve().parents[2])
+    except Exception:
+        pass
+    # Installed plugin lives under <home>/plugins/hermes-widget; the checkout
+    # is not рядом, so also try sibling checkouts and the documented SDK path.
+    for root in list(roots):
+        for parent in [root, root.parent]:
+            candidate = parent / "Hermes_blink"
+            if candidate.is_dir() and candidate not in seen:
+                roots.append(candidate)
+                seen.add(candidate)
+    apk_candidates: list[Path] = []
+    for root in roots:
+        for pattern in (
+            "android/app/build/outputs/apk/debug/*.apk",
+            "app/build/outputs/apk/debug/*.apk",
+        ):
+            try:
+                apk_candidates.extend(root.glob(pattern))
+            except Exception:
+                continue
+    apk_candidates = [p for p in apk_candidates if p.is_file()]
+    if not apk_candidates:
+        return None
+    apk_candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+    return apk_candidates[0]
+
+
+def _adb_install(args: Any) -> int:
+    _adb = _adb_import()
+    raw = getattr(args, "apk", None) or getattr(args, "apk_path", None)
+    apk = Path(raw).expanduser() if raw else _default_debug_apk()
+    as_json = getattr(args, "json", False)
+    if apk is None or not apk.is_file():
+        hint = "Build one with: cd android && ./gradlew assembleDebug (JDK 17+ required)."
+        print(f"No APK found. {hint}" if as_json else f"No APK found at {apk or '(default debug output)'}. {hint}")
+        return 1
+    try:
+        result = _adb.install_apk(apk, serial=getattr(args, "device", None))
+        if getattr(args, "launch", False):
+            launched = _adb.start_app(serial=result.get("serial"))
+            result = {**result, "launched": launched.get("component")}
+    except Exception as exc:
+        print(f"adb install failed: {exc}")
+        return 1
+    if as_json:
+        print(json.dumps({"ok": True, **{k: str(v) if isinstance(v, Path) else v for k, v in result.items()}}, indent=2))
+        return 0
+    print(f"Installed {apk.name} on {result.get('serial')}.")
+    if result.get("launched"):
+        print(f"Launched {result['launched']}.")
+    return 0
+
+
+def _adb_logcat(args: Any) -> int:
+    _adb = _adb_import()
+    serial = getattr(args, "device", None)
+    try:
+        target = _adb.ensure_device(serial)
+    except Exception as exc:
+        print(f"adb logcat failed: {exc}")
+        return 1
+    if getattr(args, "clear", False):
+        try:
+            _adb.run_adb(["-s", target, "logcat", "-c"])
+        except Exception as exc:
+            print(f"adb logcat -c failed: {exc}")
+            return 1
+        print(f"Cleared logcat on {target}.")
+        return 0
+    tag = getattr(args, "tag", None) or "HermesWidget"
+    needle = tag.lower()
+    try:
+        if getattr(args, "dump", False):
+            result = _adb.run_adb(["-s", target, "logcat", "-d", "-v", "brief"])
+            if result.returncode != 0:
+                print(f"adb logcat -d failed: {(result.stderr or result.stdout).strip()}")
+                return 1
+            lines = [ln for ln in result.stdout.splitlines() if needle in ln.lower()]
+            print("\n".join(lines[-200:] or [f"(no logcat lines matching {tag!r}; use --tag HermesWidget)"]))
+            return 0
+        result = _adb.run_adb(["-s", target, "logcat", "-v", "brief", "-T", "200"], timeout=12)
+        if result.returncode != 0:
+            print(f"adb logcat failed: {(result.stderr or result.stdout).strip()}")
+            return 1
+        lines = [ln for ln in result.stdout.splitlines() if needle in ln.lower()]
+        print("\n".join(lines[-200:] or [f"(no logcat lines matching {tag!r}; use --dump for full buffer)"]))
+        return 0
+    except Exception as exc:
+        print(f"adb logcat failed: {exc}")
+        return 1
+
+
+def _usb_up(args: Any) -> int:
+    """Reverse the host port to the USB phone and report server + device state."""
+    _adb = _adb_import()
+    port = _resolve_usb_port(getattr(args, "port", None))
+    serial = getattr(args, "device", None)
+    as_json = getattr(args, "json", False)
+    try:
+        host, saved_port, _ = proactive.resolve_server_binding(None, None)
+        probe_host = _probe_host(host)
+        listening = _port_listening(saved_port, host=probe_host)
+    except Exception:
+        host, saved_port, listening, probe_host = "127.0.0.1", port, False, "127.0.0.1"
+    try:
+        status = _adb.usb_status(port)
+    except Exception as exc:
+        print(f"usb-up failed: {exc}")
+        return 1
+    if status.get("ok") and status.get("onlineCount"):
+        try:
+            target = _adb.ensure_device(serial)
+            reverse_result = _adb.reverse(port, port, serial=target)
+            status = {**status, **_adb.usb_status(port), "reverse": reverse_result}
+        except Exception as exc:
+            status = {**status, "reverseError": str(exc)}
+    payload = {
+        "ok": bool(status.get("ok") and status.get("onlineCount")),
+        "host": host,
+        "port": saved_port,
+        "listening": listening,
+        "usb": status,
+        "deviceUrl": f"http://127.0.0.1:{port}",
+        "note": "Start the server (hermes widget serve) if listening=false; debug APKs use the USB URL, release uses HTTPS.",
+    }
+    if as_json:
+        print(json.dumps(payload, indent=2))
+        return 0 if payload["ok"] else 1
+    if not status.get("ok"):
+        print(f"USB setup failed: {status.get('error')}")
+        return 1
+    if not status.get("onlineCount"):
+        print("No online adb device. Enable USB debugging and reconnect.")
+        return 1
+    print(f"USB ready: phone http://127.0.0.1:{port} -> host :{port}")
+    print(f"Server: {host}:{saved_port} listening={listening}")
+    if not listening:
+        print("Start it with: hermes widget serve --host 127.0.0.1 --port 8788")
+    return 0
+
+
+def _requests(args: Any) -> int:
+    """List Request-update taps: did each one start a Hermes refresh?"""
+    widget_id = getattr(args, "widget_id", None) or store.DEFAULT_WIDGET_ID
+    try:
+        limit = int(getattr(args, "limit", 10) or 10)
+    except (TypeError, ValueError):
+        limit = 10
+    limit = max(1, min(limit, 50))
+    try:
+        rows = store.list_update_requests(widget_id, limit=limit)
+    except Exception as exc:
+        print(f"requests failed: {exc}")
+        return 1
+    if getattr(args, "json", False):
+        print(json.dumps({"ok": True, "widgetId": widget_id, "requests": rows}, indent=2))
+        return 0
+    if not rows:
+        print(f"No Request-update taps recorded for {widget_id!r}.")
+        print("Tap Request update in the app/widget, then rerun this.")
+        return 0
+    print(f"Request-update taps for {widget_id!r} (newest first):")
+    for row in rows:
+        error = f" error={row.get('error')}" if row.get("error") else ""
+        print(
+            f"  {row.get('createdAt')} {row.get('requestId')} "
+            f"status={row.get('status')} device={row.get('deviceId')}{error}"
+        )
+    stuck = [r for r in rows if r.get("status") == "failed" or r.get("error")]
+    if stuck:
+        print("A failed row means Hermes stored the tap but `hermes cron run` did not start.")
+        print("Run: hermes widget trigger-refresh  (then `hermes cron list` to check the job)")
+    return 0
+
+
+def _trigger_refresh(args: Any) -> int:
+    """Manually spawn the refresh cron and report whether Hermes was hit."""
+    try:
+        result = proactive.trigger_refresh()
+    except Exception as exc:
+        print(f"trigger-refresh failed: {exc}")
+        return 1
+    as_json = getattr(args, "json", False)
+    if as_json:
+        print(json.dumps({"ok": bool(result.get("triggered")), **result}, indent=2))
+        return 0 if result.get("triggered") else 1
+    if result.get("triggered") and not result.get("duplicate"):
+        print(f"Refresh triggered: {result.get('job')} pid={result.get('pid')}.")
+        print("The agent run must call widget_status with consume_update_requests=true.")
+    elif result.get("duplicate"):
+        print(f"Refresh already running ({result.get('job')}); coalesced.")
+    else:
+        print(f"Refresh NOT triggered: {result.get('error')}")
+        print("Check `hermes cron list` for hermes-widget-refresh and re-auth (`hermes model`).")
+        return 1
     return 0

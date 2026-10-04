@@ -86,5 +86,36 @@ data class Outcome(
             code = CODE_NO_TOKEN,
             message = "this phone is not paired — pair it in the app",
         )
+
+        /**
+         * Request-update result: a 200 that did not start a refresh is not success.
+         *
+         * The server records the tap and tries `hermes cron run hermes-widget-refresh`.
+         * When that spawn fails it still returns 200 with `trigger: {triggered: false,
+         * error: ...}` and `request: {status: failed, error: ...}`. The old path treated
+         * every 2xx as "Update requested", so a dead cron looked identical to a live one.
+         */
+        fun forRequestUpdate(result: HttpResult, success: String = "Update requested"): Outcome {
+            if (result.code !in 200..299) return from(result, success, "Request update")
+            val body = runCatching {
+                result.body?.takeIf { it.isNotBlank() }?.let { JSONObject(it) }
+            }.getOrNull() ?: return Outcome(true, "ok", success, result.code)
+            val trigger = body.optJSONObject("trigger")
+            val request = body.optJSONObject("request")
+            val triggerError = trigger?.takeIf { !it.optBoolean("triggered", true) }
+                ?.optString("error")?.takeIf { it.isNotBlank() }
+            val requestError = request?.optString("error")?.takeIf { it.isNotBlank() }
+            val requestFailed = request?.optString("status") == "failed"
+            val detail = (triggerError ?: requestError)?.take(160)
+            if (detail == null && !requestFailed) return Outcome(true, "ok", success, result.code)
+            return Outcome(
+                ok = false,
+                code = "refresh_not_triggered",
+                message = "Hermes recorded the request but the refresh did not start" +
+                    (detail?.let { ": $it" } ?: "") +
+                    " — check `hermes widget requests` and `hermes cron list`",
+                httpStatus = result.code.takeIf { it > 0 },
+            )
+        }
     }
 }

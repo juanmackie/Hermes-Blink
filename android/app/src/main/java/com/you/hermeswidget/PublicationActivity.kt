@@ -256,7 +256,7 @@ class PublicationActivity : AppCompatActivity() {
                 RequestUpdateEvent.inAppBody(instanceId()),
                 deviceToken,
             )
-            val resolved = Outcome.from(result, "Update requested", "Request update")
+            val resolved = Outcome.forRequestUpdate(result)
             val requestId = runCatching {
                 result.body?.takeIf { it.isNotBlank() }?.let { JSONObject(it).optString("requestId") }
             }.getOrNull()
