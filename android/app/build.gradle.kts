@@ -177,7 +177,7 @@ dependencies {
     // vectordrawable — and it draws every state layer and ripple itself, which is why the
     // per-control <ripple> drawables in res/drawable are now the fallback rather than the
     // only way a control can show a press state.
-    implementation("com.google.android.material:material:1.12.0")
+    implementation("com.google.android.material:material:1.14.0")
     // Kept explicitly even though Material depends on it: AppTheme is still an AppCompat
     // theme (Material3 extends it), and pinning it here documents that.
     implementation("androidx.appcompat:appcompat:1.8.0")  // AppTheme's parent chain; see themes.xml
