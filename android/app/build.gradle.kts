@@ -187,7 +187,7 @@ dependencies {
     implementation("com.caverock:androidsvg-aar:1.4")
     // User-selected distributor (ntfy, NextPush, embedded FCM, ...); no Google
     // service is required by the app itself.
-    implementation("org.unifiedpush.android:connector:3.0.9") {
+    implementation("org.unifiedpush.android:connector:3.3.5") {
         // The app already ships AndroidX Security's Tink runtime.  The connector's
         // newer plain-Java Tink artifact duplicates its protobuf classes.
         exclude(group = "com.google.crypto.tink", module = "tink")
