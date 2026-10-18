@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- SVG previews rasterise through the self-contained `resvg-py` wheel, so the preview path no
+  longer needs libcairo. CairoSVG remains an optional fallback backend;
+  `pip install "hermes-widget[preview]"` installs both. NoCairoSVG was evaluated first and
+  rejected on maintenance and dependency grounds (`docs/NOCAIROSVG_PREFLIGHT.md`).
 - Structured Pillow presentations compile metrics/progress, comparisons, charts, and timelines
   into compatible primary images and eight geometry/palette variants. Android downloads,
   verifies, retains, and selects every referenced variant with primary-image fallback.

@@ -57,7 +57,9 @@ publication at the device's registered `2x2`, `4x2`, `2x4`, `4x4`, or custom siz
 launchers may report 4×4 geometry around 300–420dp per side; the reported inventory, not the
 legacy 270dp nominal box, is authoritative. Capacity
 findings are warnings, never silent truncation. Raster previews use Pillow without requiring
-libcairo; text has a built-in Pillow fallback, while SVG rasterisation still requires CairoSVG.
+libcairo; text has a built-in Pillow fallback, while SVG rasterisation uses the self-contained
+`resvg-py` wheel (with CairoSVG as a fallback backend when the host already installs it). Install
+the optional backends with `pip install "hermes-widget[preview]"`.
 The CLI writes local PNGs:
 
 ```sh

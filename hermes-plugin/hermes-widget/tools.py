@@ -188,7 +188,7 @@ def widget_preview(args: dict[str, Any] | None = None, **_kwargs: Any) -> str:
     for item in rendered:
         if item.get("renderer") == "svg-renderer-unavailable" and last_render:
             item["note"] = (
-                "No local SVG renderer (CairoSVG/libcairo); "
+                "No local SVG renderer (resvg-py or CairoSVG); "
                 f"last device render {last_render['width']}×{last_render['height']}px"
             )
     images = []

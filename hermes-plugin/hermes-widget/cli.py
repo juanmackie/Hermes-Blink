@@ -463,7 +463,7 @@ def _preview(args: Any) -> int:
     for item in rendered:
         if item.get("renderer") == "svg-renderer-unavailable" and last_render:
             item["note"] = (
-                "No local SVG renderer (CairoSVG/libcairo); "
+                "No local SVG renderer (resvg-py or CairoSVG); "
                 f"last device render {last_render['width']}×{last_render['height']}px"
             )
     out_dir = Path(args.out) if args.out else (None if getattr(args, "json", False) else Path.cwd() / "widget-previews")

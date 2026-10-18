@@ -895,7 +895,7 @@ class _Handler(BaseHTTPRequestHandler):
             if item.get("renderer") == "svg-renderer-unavailable":
                 if last_render:
                     item["note"] = (
-                        "No local SVG renderer (CairoSVG/libcairo); "
+                        "No local SVG renderer (resvg-py or CairoSVG); "
                         f"last device render {last_render['width']}×{last_render['height']}px"
                     )
         self._json(200, {

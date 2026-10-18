@@ -599,10 +599,24 @@ class FeatureProposals(unittest.TestCase):
             "kind": "image", "title": "Chart", "summary": "Chart",
             "content": {"type": "image", "mediaType": "image/svg+xml", "data": __import__("base64").b64encode(svg).decode()},
         }
-        with patch.dict(sys.modules, {"cairosvg": None}):
+        with patch.dict(sys.modules, {"cairosvg": None, "resvg_py": None}):
             rendered = self.preview.render_publication_previews(publication, sizes=["400x400"])
         self.assertEqual(rendered[0]["renderer"], "svg-renderer-unavailable")
         self.assertIn("No local SVG renderer", rendered[0]["note"])
+
+    def test_svg_preview_renders_when_a_local_backend_is_available(self):
+        if self.preview._resvg_module() is None and self.preview._cairosvg_module() is None:
+            self.skipTest("no local SVG backend installed (Pillow-only host)")
+        svg = b'<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#6750A4"/></svg>'
+        publication = {
+            "kind": "image", "title": "Chart", "summary": "Chart",
+            "content": {"type": "image", "mediaType": "image/svg+xml", "data": __import__("base64").b64encode(svg).decode()},
+        }
+        rendered = self.preview.render_publication_previews(publication, sizes=["400x400"])[0]
+        self.assertEqual(rendered["renderer"], "pillow-composition")
+        data = __import__("base64").b64decode(rendered["data"])
+        self.assertTrue(data.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertNotIn("No local SVG renderer", rendered.get("note", ""))
 
     def test_text_preview_keeps_a_usable_path_without_cairo(self):
         with patch.dict(sys.modules, {"cairosvg": None}):

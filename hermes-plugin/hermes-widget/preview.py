@@ -136,7 +136,7 @@ def build_preview_publication(raw: Any, widget_id: str) -> dict[str, Any]:
 def _fallback_png(width: int, height: int, *, label: bytes = b"Hermes") -> bytes:
     """Make a valid deterministic PNG when an optional raster backend is absent.
 
-    CairoSVG/Pillow are preferred for fidelity.  This fallback keeps the API
+    resvg-py, CairoSVG and Pillow are preferred for fidelity.  This fallback keeps the API
     useful on a minimal host (and makes failures explicit in ``renderer``), while
     never pretending that a placeholder is an exact device render.
     """
@@ -169,6 +169,15 @@ def _fallback_png(width: int, height: int, *, label: bytes = b"Hermes") -> bytes
 
 
 @functools.lru_cache(maxsize=1)
+def _load_resvg_module() -> Any:
+    try:
+        import resvg_py  # type: ignore
+        return resvg_py
+    except Exception:
+        return None
+
+
+@functools.lru_cache(maxsize=1)
 def _load_cairosvg_module() -> Any:
     try:
         import cairosvg  # type: ignore
@@ -177,12 +186,59 @@ def _load_cairosvg_module() -> Any:
         return None
 
 
-def _cairosvg_module() -> Any:
+def _resvg_module() -> Any:
     # Respect an explicit missing-module marker used by minimal-host callers/tests,
     # while caching the normal import result for repeated renders.
+    if sys.modules.get("resvg_py", object()) is None:
+        return None
+    return _load_resvg_module()
+
+
+def _cairosvg_module() -> Any:
+    # Same sentinel convention as _resvg_module(), for hosts and tests that only
+    # have one of the two backends.
     if sys.modules.get("cairosvg", object()) is None:
         return None
     return _load_cairosvg_module()
+
+
+def _render_svg(data: bytes, output_width: int, output_height: int) -> bytes | None:
+    """Rasterise SVG bytes to PNG bytes with the first available local backend.
+
+    ``resvg-py`` is preferred: it is a self-contained wheel with no libcairo and no
+    browser subprocess, which is the point of the preview surface.  CairoSVG stays
+    available as a fallback for hosts that already install it (and for comparison
+    renders).  ``None`` means no backend is importable at all; the caller then emits
+    the explicit ``svg-renderer-unavailable`` placeholder instead of pretending it
+    rendered.  A backend that is present but raises propagates the error so the
+    existing ``fallback`` diagnostic keeps its meaning.
+    """
+    backends: list[Callable[[], bytes]] = []
+    resvg = _resvg_module()
+    if resvg is not None:
+        backends.append(
+            lambda: resvg.svg_to_bytes(
+                svg_string=data.decode("utf-8"),
+                width=output_width,
+                height=output_height,
+            )
+        )
+    cairosvg = _cairosvg_module()
+    if cairosvg is not None:
+        backends.append(
+            lambda: cairosvg.svg2png(
+                bytestring=data, output_width=output_width, output_height=output_height
+            )
+        )
+    last_error: Exception | None = None
+    for render in backends:
+        try:
+            return render()
+        except Exception as exc:  # try the next backend, then surface the first failure
+            last_error = exc
+    if last_error is not None:
+        raise last_error
+    return None
 
 
 def _fit_image(
@@ -190,26 +246,23 @@ def _fit_image(
     source_width: int | None = None, source_height: int | None = None,
     background: str = "#FEF7FF",
 ) -> tuple[bytes, str]:
-    # Pillow is sufficient for raster publications.  CairoSVG is only needed for
-    # the SVG branch; importing both together made a perfectly valid PNG fall back
-    # to the placeholder on hosts that do not have libcairo installed.
+    # Pillow is sufficient for raster publications.  resvg-py (preferred) or CairoSVG
+    # are only needed for the SVG branch; importing both together made a perfectly valid
+    # PNG fall back to the placeholder on hosts that have neither backend installed.
     try:
         from PIL import Image, ImageOps  # type: ignore
     except Exception:
         return _fallback_png(width, height, label=b"image"), "fallback"
     try:
         if media_type == "image/svg+xml":
-            cairosvg = _cairosvg_module()
-            if cairosvg is None:
-                return _fallback_png(width, height, label=b"image"), "svg-renderer-unavailable"
             svg_width = source_width if isinstance(source_width, int) and source_width > 0 else width
             svg_height = source_height if isinstance(source_height, int) and source_height > 0 else height
             scale = min(width / svg_width, height / svg_height)
             output_width = max(1, min(width, int(svg_width * scale)))
             output_height = max(1, min(height, int(svg_height * scale)))
-            source = cairosvg.svg2png(
-                bytestring=data, output_width=output_width, output_height=output_height
-            )
+            source = _render_svg(data, output_width, output_height)
+            if source is None:
+                return _fallback_png(width, height, label=b"image"), "svg-renderer-unavailable"
             image = Image.open(io.BytesIO(source)).convert("RGBA")
         else:
             image = Image.open(io.BytesIO(data))
@@ -345,7 +398,7 @@ def render_publication_previews(
         }
         if renderer == "svg-renderer-unavailable":
             item["note"] = (
-                "No local SVG renderer (CairoSVG/libcairo); the connected device remains authoritative."
+                "No local SVG renderer (resvg-py or CairoSVG); the connected device remains authoritative."
             )
         diagnostics["previewLimit"] = _PREVIEW_MAX_COUNT
         diagnostics["omittedWidgetInstances"] = max(0, len(inventory or []) - len(requested)) if sizes is None else 0

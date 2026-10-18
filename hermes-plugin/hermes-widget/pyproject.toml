@@ -5,7 +5,10 @@ requires-python = ">=3.11"
 dependencies = ["defusedxml>=0.7.1,<1", "Pillow>=12.3.0,<13"]
 
 [project.optional-dependencies]
-preview = ["CairoSVG>=2.9.1,<3"]
+# resvg-py renders SVG in-process from a self-contained wheel: no libcairo and no
+# browser. CairoSVG stays listed so hosts that already have libcairo can still use it
+# as a comparison backend; the preview path prefers resvg-py when both are installed.
+preview = ["resvg-py>=0.5,<0.6", "CairoSVG>=2.9.1,<3"]
 
 [tool.ruff]
 extend = "../../pyproject.toml"

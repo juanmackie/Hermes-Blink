@@ -26,7 +26,7 @@ jobs:
           python -m pip install
           -r hermes-plugin/hermes-widget/requirements.txt
       - name: Install optional preview backends for the full contract suite
-        run: python -m pip install "Pillow>=10.4,<13" "CairoSVG>=2.7,<3"
+        run: python -m pip install "Pillow>=10.4,<13" "resvg-py>=0.5,<0.6" "CairoSVG>=2.7,<3"
       - name: Lint Python plugin
         run: |
           python -m pip install ruff
@@ -48,14 +48,15 @@ jobs:
         run: |
           python -m pip install --quiet pyyaml
           python scripts/check-workflow-yaml.py
-  # The publication preview has two optional text backends. Exercise both explicitly;
-  # the host plugin suite also installs them so it can assert a real renderer is available.
+  # The publication preview has optional SVG backends. resvg-py is the libcairo-free
+  # default; the "pillow-only" leg installs neither SVG backend so the explicit
+  # svg-renderer-unavailable placeholder path stays covered on a clean host.
   preview-renderers:
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
-        backend: [cairosvg, pillow-only]
+        backend: [resvg-cairosvg, pillow-only]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -64,16 +65,16 @@ jobs:
           cache: pip
           cache-dependency-path: hermes-plugin/hermes-widget/requirements.txt
       - name: Install host test dependencies
-        if: matrix.backend == 'cairosvg'
+        if: matrix.backend == 'resvg-cairosvg'
         run: |
           python -m pip install -r hermes-plugin/hermes-widget/requirements.txt
-          python -m pip install "Pillow>=10.4,<13" "CairoSVG>=2.7,<3"
-      - name: Install Pillow only (no CairoSVG)
+          python -m pip install "Pillow>=10.4,<13" "resvg-py>=0.5,<0.6" "CairoSVG>=2.7,<3"
+      - name: Install Pillow only (no SVG backend)
         if: matrix.backend == 'pillow-only'
         run: python -m pip install "Pillow>=10.4,<13"
-      - name: Show which text backend is importable
+      - name: Show which preview backends are importable
         run: |
-          python -c "import importlib.util as u; print('cairosvg:', bool(u.find_spec('cairosvg')))"
+          python -c "import importlib.util as u; print('resvg_py:', bool(u.find_spec('resvg_py')), 'cairosvg:', bool(u.find_spec('cairosvg')))"
       # `-p` takes one pattern, and the dashed plugin directory is not importable as a
       # dotted module, so discovery is the only invocation that works here.
       - name: Publication preview tests (this backend)
@@ -99,7 +100,7 @@ jobs:
           python -m pip install
           -r hermes-plugin/hermes-widget/requirements.txt
       - name: Install optional preview backends for the full contract suite
-        run: python -m pip install "Pillow>=10.4,<13" "CairoSVG>=2.7,<3"
+        run: python -m pip install "Pillow>=10.4,<13" "resvg-py>=0.5,<0.6" "CairoSVG>=2.7,<3"
       - name: Python validator + plugin tests on Windows
         env:
           HERMES_WIDGET_FORCE_ENV: supported
