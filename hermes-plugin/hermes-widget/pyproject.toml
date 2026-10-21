@@ -2,7 +2,7 @@
 name = "hermes-widget"
 version = "3.5.0"
 requires-python = ">=3.11"
-dependencies = ["defusedxml>=0.7.1,<1", "Pillow>=12.3.0,<13"]
+dependencies = ["defusedxml>=0.7.1,<1", "Pillow>=13.0.0,<14"]
 
 [project.optional-dependencies]
 # resvg-py renders SVG in-process from a self-contained wheel: no libcairo and no
